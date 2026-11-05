@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-11-05T02:13:10-05:00 — Personal notes excluded from GitHub (local privacy fix)
+
+- Excluded dev_notes/ and local icon-generation prompt records from Git tracking. Remove previously tracked personal notes from the published branch while preserving every local file.
+- Removed README links to private development notes. Earlier published history removal requires the user's separate decision because it changes existing commit IDs.
+- Validation: inspected tracked paths and ignore rules only. No application build, launch or test performed.
+
+## 2026-11-05T01:59:31-05:00 — Calligraphic paper-and-pencil icon variants (local, uncommitted)
+
+- User clarified that the chosen base is original option 1, the paper-and-pencil icon. Generated three upper-left inscriptions: calligraphic Ex, calligraphic ExEditor, and LaTeX-inspired ExEditor.
+- Saved three transparent PNG previews and their exact prompts under assets/icons/paper-calligraphy. No variant selected, converted to an application icon, integrated or released.
+- Validation: visually inspected the three generated previews. Variant 2 has a rough transparent perimeter; a requested cleanup pass failed because the image-generation usage limit was reached.
+- No application build, launch or automated test performed in this icon batch. App testing remains with the user pending feedback.
+
+## 2026-11-05T01:49:38-05:00 — Icon concepts and user-led testing (local, uncommitted)
+
+- Generated three transparent ExEditor app icon concepts: document/pencil, blue text/caret, and Ex monogram. Saved original PNG concepts and exact prompts in assets/icons/options; no icon selected or integrated yet.
+- User requested to perform app testing personally and provide feedback. Further automated app testing is deferred to that feedback; the previously observed blank document surface remains unresolved.
+- Validation: visually inspected the three generated concepts. No additional app build, launch, or test was performed in this icon batch.
+
+## 2026-11-05T01:31:52-05:00 — Remote checks passed; resource hook staged locally
+
+- GitHub run 41979561408 passed formatting, strict Clippy and the noninteractive regression suite; release compilation and packaging are still running. No installer or local UI result claimed yet.
+- Include the existing Windows resource build hook in the next source batch so version metadata and the DPI manifest are actually embedded; the hook was written earlier but omitted from the initial Git staging list.
+- No application compilation or Rust test execution occurred locally.
+
 ## 2026-11-05T01:17:59-05:00 — Rust diagnostics cleanup (local changes)
 
 - Connected encoding fallback, custom line spacing, color presets, and first-line/hanging indents; removed an unused toolbar receiver and moved native helper tests after implementation items.
@@ -29,3 +54,5 @@
 - Renamed ExcellentNotes folder to ExEditor, recorded repository/stack/build choices in dev_notes, and retained real TextEdit reference screenshots.
 - Validation: source/API/documentation reads and font metadata inspection. No application build, test or launch performed yet. Initial Rust formatting started only after all feature source was written.
 - Limitations: no exact-parity claim; Windows-specific implementation, Apple services absent, binary .doc and advanced document content unsupported. See dev_notes/known-differences.md. GitHub artifacts and local visual testing remain pending.
+
+

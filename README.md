@@ -37,7 +37,7 @@ compatibility must be measured against actual TextEdit reference documents;
 the toolkit alone does not establish parity with Apple-only services or macOS
 rendering.
 
-Planning notes are in [`dev_notes/`](dev_notes/). The GitHub repository is
+Personal development notes stay local and are excluded from GitHub. The repository is
 [abelokoj/ExEditor](https://github.com/abelokoj/ExEditor).
 
 ## Installer and document fonts
@@ -51,6 +51,4 @@ text), and Inter (optional). Genuine Regular/Bold faces of Pretendard use
 runtime italic synthesis, approved by the user. Maple Mono NF and Inter include
 Regular/Italic/Bold/BoldItalic. Font OFL notices ship with the package.
 
-[Known differences and current proof status](dev_notes/known-differences.md)
-include unsupported legacy .doc and advanced import/export content. These are
-explicit limitations, not a claim of full TextEdit compatibility.
+Legacy .doc and some advanced import/export content are unsupported. Full TextEdit compatibility has not been established.

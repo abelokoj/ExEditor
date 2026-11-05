@@ -10,3 +10,7 @@ Thumbs.db
 /dev_notes/build-logs/
 /dev_notes/build-records/
 /dev_notes/ui-artifacts/
+
+/dev_notes/
+
+/assets/icons/**/PROMPTS.json
