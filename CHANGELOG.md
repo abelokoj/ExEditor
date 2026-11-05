@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05T02:20:37-05:00 — Private notes removed from published history (recording time)
+
+- Rewrote the published main branch at the user's request to remove dev_notes/ from every commit. Local personal notes remain intact and the folder remains ignored for future pushes.
+- Validation: the filtered history contains no dev_notes paths. This maintenance changes published commit IDs; older clones must use the rewritten history before pushing again. Copies previously downloaded by others and GitHub caches cannot be recalled by rewriting a branch.
+- No application build, launch or test performed; feature work remains in progress locally.
+
 ## 2026-11-05T02:13:10-05:00 — Personal notes excluded from GitHub (local privacy fix)
 
 - Excluded dev_notes/ and local icon-generation prompt records from Git tracking. Remove previously tracked personal notes from the published branch while preserving every local file.
