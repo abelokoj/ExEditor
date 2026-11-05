@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-05T01:09:40-05:00 — Workflow restoration and dependency lock (local fix)
+
+- Restored the build workflow after GitHub rejected run 41978493552 before scheduling a job; corrected accidental non-YAML content introduced in the previous batch.
+- Added the first GitHub-generated Cargo.lock to preserve the resolved dependency versions. Compiler fixes from the first run remain in source.
+- Validation: GitHub run status and downloaded first-run build records inspected. No successful app build or local UI test yet; a new GitHub run is required.
+
+
 ## 2026-11-05T01:08:21-05:00 — First GitHub diagnostics (local fixes, not yet validated)
 
 - Corrected eight GPUI/Windows API integration errors reported by GitHub run 41978002534; keep native window handles distinct from raw OS handles and adapt ruler/accessibility APIs.
