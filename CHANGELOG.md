@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05T02:39:41-05:00 — Colors panel compiler integration (local fixes)
+
+- Imported the GPUI disabled-control trait and selection index type, annotated mouse events and color-channel bit operations to resolve the seven compiler errors in GitHub run 41988334949.
+- Validation: inspected the remote diagnostics and formatted the corrected source. The initial remote run passed formatting but did not reach tests, compilation or packaging. No local application build or launch performed; the next remote result is pending.
+- Verified the local push guard rejects the former notes-bearing history and accepts the rewritten notes-free branch. Private notes remain local.
+
 ## 2026-11-05T02:34:10-05:00 — Colors panel, protected buffers and selected icon (local source batch)
 
 - Connected a shared CotEditor-style Colors panel to foreground/background controls and color-code insertion. Implemented all five modes, CSS formats, opacity, saved swatches, image sampling and a native screen sampler that runs off the app thread. Formatting alpha is blended because RichEdit stores opaque text colors; alpha-capable inserted CSS codes retain it.

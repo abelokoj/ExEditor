@@ -4,7 +4,7 @@ use crate::{
     color::{ColorFormat, ColorTarget, PickerState, Rgba, named_colors},
     dialogs::Commands,
 };
-use gpui_kit::base::{Slider as BaseSlider, SliderThumb, SliderTrack};
+use gpui_kit::base::{Disableable as _, IndexPath, Slider as BaseSlider, SliderThumb, SliderTrack};
 use gpui_kit::component::{
     Icon, Sizable as _, Size,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
@@ -496,7 +496,7 @@ impl ColorsPanel {
                 .child(canvas(move |rectangle, _, _| { bounds.set(rectangle); }, |_, _, _, _| {}).absolute().size_full())
                 .child(div().absolute().left(px(x - 9.)).top(px(y - 9.)).size(px(18.))
                     .child(symbol(CROSSHAIR, if self.color.hsv().2 > 0.45 { 0x263918 } else { PAPER }).size(px(18.))))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| {
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.wheel_focus, cx); this.wheel_dragging = true;
                     this.choose_wheel(event.position, window, cx);
                 }))
@@ -693,7 +693,7 @@ impl ColorsPanel {
                                 )
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(|this, event, window, cx| {
+                                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                         this.image_dragging = true;
                                         this.choose_image(event.position, window, cx);
                                     }),
@@ -1518,7 +1518,8 @@ fn action_color(color: Rgba) -> u32 {
     }
 }
 fn darken(color: u32, scale: f32) -> u32 {
-    let channel = |shift| ((((color >> shift) & 0xff) as f32 * scale).round() as u32).min(255);
+    let channel =
+        |shift: u32| ((((color >> shift) & 0xff_u32) as f32 * scale).round() as u32).min(255);
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 fn symbol(svg: &'static str, color: u32) -> Icon {
