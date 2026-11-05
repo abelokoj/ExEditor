@@ -21,6 +21,11 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 smol = "2"
 unicode-segmentation = "1"
+rustybuzz = "0.20.1"
+harper-core = { version = "3.0.0", default-features = false }
+spellbook = "0.4.2"
+divvun-fst = { git = "https://github.com/divvun/divvunspell", rev = "7c3400754ef3f3e39b1c725f0ea18c1acd749b0d", features = ["compression"] }
+libloading = "0.8"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 roxmltree = "0.21"
 scraper = "0.24"
@@ -67,5 +72,11 @@ strip = "debuginfo"
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
+[dev-dependencies]
+box-format = { path = "vendor/box-format", default-features = false, features = ["writer"] }
+
 [build-dependencies]
 embed-resource = "3"
+
+[patch.'https://github.com/bbqsrc/box']
+box-format = { path = "vendor/box-format" }

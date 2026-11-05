@@ -1,0 +1,163 @@
+[package]
+name = "box-format"
+description = "Support library for the Box open standard archive format."
+version = "0.4.0"
+authors = ["Brendan Molloy <brendan@bbqsrc.net>"]
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/bbqsrc/box"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Core dependencies (no_std compatible)
+box-fst.workspace = true
+byteorder.workspace = true
+fastvint.workspace = true
+hashbrown = "0.17"
+
+# Std-only dependencies
+mmap-io = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"], optional = true }
+tokio-util = { workspace = true, features = ["compat"], optional = true }
+async-walkdir = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+blake3 = { workspace = true, features = ["traits-preview", "rayon", "mmap"], optional = true }
+hex = { workspace = true, optional = true }
+pathdiff = { workspace = true, optional = true }
+unic-normal = { workspace = true, optional = true }
+unic-ucd = { workspace = true, optional = true }
+relative-path = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+lru = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+digest = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+string-interner = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
+zstd-safe = { workspace = true, optional = true }
+xz2 = { workspace = true, optional = true }
+
+[features]
+default = ["std", "xz", "zstd", "writer", "reader", "xattr"]
+
+# no_std support
+std = [
+    "alloc",
+    "box-fst/std",
+    "fastvint/std",
+    "dep:mmap-io",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:async-walkdir",
+    "dep:futures",
+    "dep:blake3",
+    "dep:hex",
+    "dep:pathdiff",
+    "dep:unic-normal",
+    "dep:unic-ucd",
+    "dep:relative-path",
+    "dep:tracing",
+    "dep:serde_json",
+    "dep:lru",
+    "dep:thiserror",
+    "dep:digest",
+    "dep:tempfile",
+    "dep:string-interner",
+]
+alloc = []
+
+# Minimal kernel build (core parsing only)
+kernel = ["alloc"]
+
+reader = ["std"]
+# The writer sizes its buffers to the memory available, which sysinfo reads.
+writer = ["reader", "dep:sysinfo"]
+
+xz = ["dep:xz2"]
+zstd = ["dep:zstd", "dep:zstd-safe"]
+xattr = ["dep:xattr"]
+
+[target.'cfg(unix)'.dependencies]
+xattr = { workspace = true, optional = true }
+
+[workspace]
+resolver = "3"
+members = ["cli", "crates/*"]
+exclude = ["kmod/rust"]
+
+[workspace.dependencies]
+crossbeam-channel = "0.5"
+# Shared dependencies
+tokio = { version = "1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
+futures = "0.3"
+async-walkdir = "2.2.0"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+byteorder = "1.5.0"
+fastvint = { git = "https://github.com/bbqsrc/fastvlq", branch = "vint", default-features = false }
+
+# Error handling
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
+
+# Logging/tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# Crypto/hashing
+blake3 = "1"
+
+# Compression
+async-compression = { version = "0.4", default-features = false, features = ["tokio"] }
+tokio-snappy = { version = "0.2.0" }
+zstd = "0.14.3"
+zstd-safe = "8.2"
+xz2 = { package = "liblzma", version = "0.4.4", default-features = false, features = ["static"] }
+
+# System
+libc = "0.2"
+sysinfo = "0.40"
+tempfile = "3"
+num_cpus = "1.17"
+xattr = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.18"
+glob = "0.3"
+humansize = { version = "2.1", features = ["impl_style"] }
+chrono = "0.4"
+wild = "2.2"
+textwrap = "0.16"
+
+# Other
+lru = "0.19"
+mmap-io = { version = "1.1", features = ["hugepages"] }
+hex = "0.4"
+pathdiff = "0.2"
+unic-normal = "0.9"
+unic-ucd = "0.9"
+relative-path = "2.0"
+cffi = { git = "https://github.com/cffi-rs/cffi", branch = "next" }
+pin-project-lite = "0.2"
+digest = "0.11"
+string-interner = "0.20"
+smallvec = "1.16"
+fuser = { version = "0.18.0", features = ["libfuse"] }
+
+# objc2 for macOS framework bindings
+objc2 = "0.6"
+objc2-foundation = "0.3"
+block2 = "0.6"
+
+# Workspace crates
+box-format = { version = "0.4.0", path = "." }
+box-fst = { version = "0.1.0", path = "crates/fst", default-features = false }
+mimalloc = "0.1.52"

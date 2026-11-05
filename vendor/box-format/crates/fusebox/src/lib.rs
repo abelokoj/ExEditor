@@ -1,0 +1,1490 @@
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use lru::LruCache as LruCacheImpl;
+
+use fastvint::ReadVintExt;
+use fuser::{
+    AccessFlags, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation,
+    INodeNo, KernelConfig, LockOwner, OpenFlags, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyXattr, Request,
+};
+
+use box_format::sync::BoxReader;
+use box_format::{BOX_EPOCH_UNIX, BoxMetadata, Record, RecordIndex, attrs};
+
+mod multi;
+pub use multi::MultiArchive;
+
+// Re-export fuser types needed by consumers (avoids version mismatches)
+pub use fuser::{Config, MountOption, mount};
+
+/// Cache key for block-level caching
+/// For regular files: (composite_index, 0)
+/// For chunked files: (composite_index, block_index)
+type CacheKey = (u128, u64);
+
+/// LRU cache with size limit for decompressed data blocks
+///
+/// For regular files, caches the entire decompressed content.
+/// For chunked files, caches individual 2MB blocks for efficient random access.
+///
+/// Uses the `lru` crate for O(1) get/put operations.
+pub struct LruCache {
+    inner: LruCacheImpl<CacheKey, Vec<u8>>,
+    current_size: usize,
+    max_size: usize,
+}
+
+impl LruCache {
+    pub fn new(max_size_mb: usize) -> Self {
+        let max_size = max_size_mb * 1024 * 1024;
+        // Estimate max entries (assume avg 64KB per entry, minimum 1024 entries)
+        let cap = NonZeroUsize::new((max_size / 65536).max(1024)).unwrap();
+        Self {
+            inner: LruCacheImpl::new(cap),
+            current_size: 0,
+            max_size,
+        }
+    }
+
+    fn get(&mut self, key: &CacheKey) -> Option<&[u8]> {
+        self.inner.get(key).map(|v| v.as_slice()) // O(1)
+    }
+
+    /// Check if key exists without updating LRU order (no mutation)
+    fn contains(&self, key: &CacheKey) -> bool {
+        self.inner.contains(key)
+    }
+
+    // [spec:box:req:fuse-mount.root.file-data]
+    fn insert(&mut self, key: CacheKey, value: Vec<u8>) {
+        let size = value.len();
+
+        // If this single item is larger than max cache, don't cache it
+        if size > self.max_size {
+            return;
+        }
+
+        // Evict oldest entries until we have room (by size, not count)
+        while self.current_size + size > self.max_size {
+            if let Some((evicted_key, evicted)) = self.inner.pop_lru() {
+                tracing::trace!(
+                    composite = evicted_key.0,
+                    block = evicted_key.1,
+                    size = evicted.len(),
+                    "cache evict"
+                );
+                self.current_size -= evicted.len();
+            } else {
+                break;
+            }
+        }
+
+        // Remove existing entry if present (put returns old value)
+        if let Some(old) = self.inner.put(key, value) {
+            self.current_size -= old.len();
+        }
+        self.current_size += size;
+    }
+
+    /// Get current cache size in bytes
+    pub fn size(&self) -> usize {
+        self.current_size
+    }
+
+    /// Get number of cached entries
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Check if cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}
+
+pub struct BoxFs {
+    archives: Arc<MultiArchive>,
+    cache: Arc<Mutex<LruCache>>,
+    pending: Arc<PendingBlocks>,
+    workers: Arc<ReadPool>,
+    stats: Arc<FsStats>,
+}
+
+/// Serving counters, cheap enough to keep always on: what a mounted archive
+/// actually cost, readable while the filesystem lives and after it stops.
+#[derive(Default, Debug)]
+pub struct FsStats {
+    pub reads: std::sync::atomic::AtomicU64,
+    pub bytes_requested: std::sync::atomic::AtomicU64,
+    pub cache_hits: std::sync::atomic::AtomicU64,
+    pub blocks_decoded: std::sync::atomic::AtomicU64,
+    pub decode_nanos: std::sync::atomic::AtomicU64,
+    /// Per-path decode cost, recorded on the miss path only, so the map's
+    /// lock never sits under a cache hit.
+    decode_by_path: Mutex<std::collections::HashMap<String, (u64, u64)>>,
+}
+
+impl FsStats {
+    pub fn summary(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        format!(
+            "reads={} requested={}KiB hits={} blocks_decoded={} decode={}ms",
+            self.reads.load(Relaxed),
+            self.bytes_requested.load(Relaxed) / 1024,
+            self.cache_hits.load(Relaxed),
+            self.blocks_decoded.load(Relaxed),
+            self.decode_nanos.load(Relaxed) / 1_000_000,
+        )
+    }
+
+    fn record_decode(&self, path: Option<String>, nanos: u64) {
+        let Some(path) = path else { return };
+        let mut map = self
+            .decode_by_path
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = map.entry(path).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += nanos;
+    }
+
+    /// The costliest paths by decode time, worst first.
+    pub fn top_paths(&self, count: usize) -> Vec<(String, u64, u64)> {
+        let map = self
+            .decode_by_path
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut rows: Vec<(String, u64, u64)> = map
+            .iter()
+            .map(|(path, (reads, nanos))| (path.clone(), *reads, *nanos))
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.2));
+        rows.truncate(count);
+        rows
+    }
+}
+
+/// Blocks being decoded right now. The first reader to miss decodes; every
+/// other reader of the same block waits here instead of duplicating the
+/// work — sixteen 128K reads land in one 2MiB block, and without this they
+/// would decode it sixteen times.
+#[derive(Default)]
+struct PendingBlocks {
+    decoding: Mutex<HashSet<CacheKey>>,
+    done: Condvar,
+}
+
+impl BoxFs {
+    pub fn new(archives: MultiArchive, cache: LruCache) -> Self {
+        let threads = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        Self {
+            archives: Arc::new(archives),
+            cache: Arc::new(Mutex::new(cache)),
+            pending: Arc::new(PendingBlocks::default()),
+            workers: Arc::new(ReadPool::new(threads)),
+            stats: Arc::new(FsStats::default()),
+        }
+    }
+
+    /// The serving counters, shared: they outlive a consumed filesystem.
+    pub fn stats(&self) -> Arc<FsStats> {
+        Arc::clone(&self.stats)
+    }
+
+    /// Add an archive to the multi-archive container.
+    pub fn add_archive(&mut self, reader: BoxReader) -> u64 {
+        Arc::get_mut(&mut self.archives)
+            .expect("archives are added before the filesystem is mounted")
+            .add_archive(reader)
+    }
+
+    /// The attributes `lookup` answers `name` under `parent` with, or `None`
+    /// where the answer must be an error rather than an entry.
+    ///
+    /// A name the archive does not hold is [`NEGATIVE_ENTRY`], not an error:
+    /// the miss is a fact about the archive and the kernel may cache it. Only
+    /// an archive contradicting itself — a record the merged index names but
+    /// whose metadata is gone — is an error.
+    fn lookup_entry(&self, parent: u64, name: &OsStr) -> Option<FileAttr> {
+        let Some(name) = name.to_str() else {
+            tracing::debug!(parent, "lookup failed: invalid name encoding");
+            return None;
+        };
+
+        // Direct FST lookup - O(1) path lookup + O(key_len) FST lookup
+        let parent_composite = ino_to_composite(parent);
+
+        match self.archives.lookup_child(parent_composite, name) {
+            Some((composite, record)) => {
+                let ino = composite_to_ino(composite);
+                tracing::trace!(parent, name, ino, "lookup");
+                let meta = self.archives.get_metadata(composite)?;
+                Some(record.fuse_file_attr(meta, composite))
+            }
+            None => {
+                tracing::trace!(parent, name, "lookup: not found");
+                Some(NEGATIVE_ENTRY)
+            }
+        }
+    }
+}
+
+/// The read workers. fuser dispatches requests on one thread, so replying
+/// from a pool is what lets concurrent reads — and the kernel's own
+/// readahead — decompress in parallel instead of serialising on dispatch.
+struct ReadPool {
+    queue: crossbeam_channel::Sender<Box<dyn FnOnce() + Send>>,
+}
+
+impl ReadPool {
+    fn new(threads: usize) -> Self {
+        let (queue, jobs) = crossbeam_channel::unbounded::<Box<dyn FnOnce() + Send>>();
+        for _ in 0..threads.max(1) {
+            let jobs = jobs.clone();
+            thread::spawn(move || {
+                for job in jobs.iter() {
+                    job();
+                }
+            });
+        }
+        Self { queue }
+    }
+
+    fn run(&self, job: impl FnOnce() + Send + 'static) {
+        let _ = self.queue.send(Box::new(job));
+    }
+}
+
+// Read-only filesystem - attributes never change, cache aggressively
+const TTL: Duration = Duration::from_secs(3600);
+const BLOCK_SIZE: u32 = 4096;
+
+/// The attributes of a *cached negative* entry reply: FUSE reads `nodeid == 0`
+/// with a nonzero entry timeout as "this name is absent, and stays absent for
+/// that long". Every other field is ignored by the kernel. An archive never
+/// gains a name, so the miss holds for as long as anything else here does.
+pub const NEGATIVE_ENTRY: FileAttr = FileAttr {
+    ino: INodeNo(0),
+    size: 0,
+    blocks: 0,
+    atime: UNIX_EPOCH,
+    mtime: UNIX_EPOCH,
+    ctime: UNIX_EPOCH,
+    crtime: UNIX_EPOCH,
+    kind: FileType::RegularFile,
+    perm: 0,
+    nlink: 0,
+    uid: 0,
+    gid: 0,
+    rdev: 0,
+    flags: 0,
+    blksize: 0,
+};
+
+fn parse_archive_time(meta: &BoxMetadata, name: &str) -> Option<SystemTime> {
+    let bytes = meta.file_attr(name)?;
+    let (minutes, len) = fastvint::decode_vi64_slice(bytes);
+    if len == 0 {
+        return None;
+    }
+    let unix_secs = (minutes * 60 + BOX_EPOCH_UNIX) as u64;
+    UNIX_EPOCH.checked_add(Duration::from_secs(unix_secs))
+}
+
+fn archive_uid(meta: &BoxMetadata) -> u32 {
+    if let Some(bytes) = meta.file_attr(attrs::UNIX_UID) {
+        let (uid, len) = fastvint::decode_vu32_slice(bytes);
+        if len > 0 {
+            return uid;
+        }
+    }
+    unsafe { libc::getuid() }
+}
+
+fn archive_gid(meta: &BoxMetadata) -> u32 {
+    if let Some(bytes) = meta.file_attr(attrs::UNIX_GID) {
+        let (gid, len) = fastvint::decode_vu32_slice(bytes);
+        if len > 0 {
+            return gid;
+        }
+    }
+    unsafe { libc::getgid() }
+}
+
+fn root_dir_attr(meta: &BoxMetadata) -> FileAttr {
+    let ctime = parse_archive_time(meta, attrs::CREATED).unwrap_or(UNIX_EPOCH);
+
+    FileAttr {
+        ino: INodeNo::ROOT,
+        size: 4096,
+        blocks: 0,
+        atime: ctime,
+        mtime: ctime,
+        ctime,
+        crtime: ctime,
+        kind: FileType::Directory,
+        perm: 0o755,
+        nlink: 2,
+        uid: archive_uid(meta),
+        gid: archive_gid(meta),
+        rdev: 0,
+        flags: 0,
+        blksize: 0,
+    }
+}
+
+trait RecordExt {
+    fn fuse_file_type(&self) -> FileType;
+    fn fuse_file_attr(&self, meta: &BoxMetadata, composite: u128) -> FileAttr;
+
+    fn perm(&self, meta: &BoxMetadata) -> u16;
+    fn uid(&self, meta: &BoxMetadata) -> u32;
+    fn gid(&self, meta: &BoxMetadata) -> u32;
+    fn ctime(&self, meta: &BoxMetadata) -> SystemTime;
+    fn mtime(&self, meta: &BoxMetadata) -> SystemTime;
+    fn atime(&self, meta: &BoxMetadata) -> SystemTime;
+    fn parse_time_attr(&self, meta: &BoxMetadata, name: &str) -> Option<SystemTime>;
+}
+
+// [spec:box:req:fuse-mount.root.read-only-and-attributes]
+impl RecordExt for box_format::Record<'_> {
+    fn fuse_file_type(&self) -> FileType {
+        use box_format::Record::*;
+
+        match self {
+            File(_) | ChunkedFile(_) => FileType::RegularFile,
+            Directory(_) => FileType::Directory,
+            Link(_) | ExternalLink(_) => FileType::Symlink,
+        }
+    }
+
+    fn fuse_file_attr(&self, meta: &BoxMetadata, composite: u128) -> FileAttr {
+        let kind = self.fuse_file_type();
+        let nlink = 1;
+        let blocks = if kind == FileType::RegularFile { 1 } else { 0 };
+
+        use box_format::Record::*;
+        let size = match self {
+            File(record) => record.decompressed_length,
+            ChunkedFile(record) => record.decompressed_length,
+            Directory(_) => 4096, // Standard directory size
+            Link(record) => {
+                // Internal link - size is the resolved path length (approximate with target name)
+                meta.record(record.target)
+                    .map(|r| r.name().len() as u64)
+                    .unwrap_or(0)
+            }
+            ExternalLink(record) => record.target.as_ref().len() as u64,
+        };
+
+        let perm = self.perm(meta);
+        let ctime = self.ctime(meta);
+        let mtime = self.mtime(meta);
+        let atime = self.atime(meta);
+
+        FileAttr {
+            ino: INodeNo(composite_to_ino(composite)),
+            size,
+            blocks,
+            atime,
+            mtime,
+            ctime,
+            crtime: ctime,
+            kind: self.fuse_file_type(),
+            perm,
+            nlink,
+            uid: self.uid(meta),
+            gid: self.gid(meta),
+            rdev: 0,
+            flags: 0,
+            blksize: 0,
+        }
+    }
+
+    fn perm(&self, meta: &BoxMetadata) -> u16 {
+        match self.attr(meta, attrs::UNIX_MODE) {
+            Some(bytes) => {
+                let (mode, len) = fastvint::decode_vu32_slice(bytes);
+                if len > 0 {
+                    (mode & 0o7777) as u16
+                } else {
+                    use box_format::Record::*;
+                    match self {
+                        File(_) | ChunkedFile(_) => 0o644,
+                        Directory(_) => 0o755,
+                        Link(_) | ExternalLink(_) => 0o777,
+                    }
+                }
+            }
+            _ => {
+                use box_format::Record::*;
+                match self {
+                    File(_) | ChunkedFile(_) => 0o644,
+                    Directory(_) => 0o755,
+                    Link(_) | ExternalLink(_) => 0o777,
+                }
+            }
+        }
+    }
+
+    fn uid(&self, meta: &BoxMetadata) -> u32 {
+        // Try record attribute
+        if let Some(bytes) = self.attr(meta, attrs::UNIX_UID) {
+            let (uid, len) = fastvint::decode_vu32_slice(bytes);
+            if len > 0 {
+                return uid;
+            }
+        }
+        // Try archive-level default
+        if let Some(bytes) = meta.file_attr(attrs::UNIX_UID) {
+            let (uid, len) = fastvint::decode_vu32_slice(bytes);
+            if len > 0 {
+                return uid;
+            }
+        }
+        // Fall back to current user
+        unsafe { libc::getuid() }
+    }
+
+    fn gid(&self, meta: &BoxMetadata) -> u32 {
+        // Try record attribute
+        if let Some(bytes) = self.attr(meta, attrs::UNIX_GID) {
+            let (gid, len) = fastvint::decode_vu32_slice(bytes);
+            if len > 0 {
+                return gid;
+            }
+        }
+        // Try archive-level default
+        if let Some(bytes) = meta.file_attr(attrs::UNIX_GID) {
+            let (gid, len) = fastvint::decode_vu32_slice(bytes);
+            if len > 0 {
+                return gid;
+            }
+        }
+        // Fall back to current group
+        unsafe { libc::getgid() }
+    }
+
+    fn ctime(&self, meta: &BoxMetadata) -> SystemTime {
+        self.parse_time_attr(meta, attrs::CREATED)
+            .unwrap_or(UNIX_EPOCH)
+    }
+
+    fn mtime(&self, meta: &BoxMetadata) -> SystemTime {
+        self.parse_time_attr(meta, attrs::MODIFIED)
+            .or_else(|| self.parse_time_attr(meta, attrs::CREATED))
+            .unwrap_or(UNIX_EPOCH)
+    }
+
+    fn atime(&self, meta: &BoxMetadata) -> SystemTime {
+        self.parse_time_attr(meta, attrs::ACCESSED)
+            .or_else(|| self.parse_time_attr(meta, attrs::MODIFIED))
+            .or_else(|| self.parse_time_attr(meta, attrs::CREATED))
+            .unwrap_or(UNIX_EPOCH)
+    }
+
+    fn parse_time_attr(&self, meta: &BoxMetadata, name: &str) -> Option<SystemTime> {
+        let bytes = self.attr(meta, name)?;
+        let mut cursor = std::io::Cursor::new(bytes);
+        let minutes = cursor.read_vi64().ok()?;
+        let unix_secs = (minutes * 60 + BOX_EPOCH_UNIX) as u64;
+        UNIX_EPOCH.checked_add(Duration::from_secs(unix_secs))
+    }
+}
+
+/// Convert inode to composite index.
+/// Returns None for inode 1 (root).
+///
+/// FUSE uses u64 inodes, so we pack the composite index using:
+/// `(archive_id << 48) | local_index` for the inode.
+// [spec:box:sem:multi-archive.root]
+fn ino_to_composite(ino: u64) -> Option<u128> {
+    if ino <= 1 {
+        None
+    } else {
+        // Unpack the 48-bit scheme used for FUSE compatibility
+        let packed = ino - 1;
+        let archive_id = (packed >> 48) as u64;
+        let local_index = packed & 0xFFFF_FFFF_FFFF;
+        Some(MultiArchive::pack_index(archive_id, local_index))
+    }
+}
+
+/// Convert composite index to inode.
+///
+/// FUSE uses u64 inodes, so we pack the composite index using:
+/// `(archive_id << 48) | local_index` + 1 for the inode.
+// [spec:box:sem:multi-archive.root]
+fn composite_to_ino(composite: u128) -> u64 {
+    let (archive_id, local_index) = MultiArchive::unpack_index(composite);
+    // Pack into u64 using 48-bit scheme for FUSE compatibility
+    // This limits archive_id to 16 bits and local_index to 48 bits
+    ((archive_id << 48) | (local_index & 0xFFFF_FFFF_FFFF)) + 1
+}
+
+// [spec:box:req:fuse-mount.root]
+impl Filesystem for BoxFs {
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        match self.lookup_entry(parent.0, name) {
+            Some(attr) => reply.entry(&TTL, &attr, Generation(0)),
+            None => reply.error(Errno::ENOENT),
+        }
+    }
+
+    // [spec:box:req:fuse-mount.root.read-only-and-attributes]
+    fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+        // FOPEN_KEEP_CACHE tells the kernel to keep file data cached across open/close.
+        // This is safe for a read-only filesystem where files never change.
+        tracing::trace!(ino = ino.0, "open");
+        reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE);
+    }
+
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
+        // Deep readahead keeps the worker pool fed on sequential reads: the
+        // kernel issues the lookahead requests concurrently, and each becomes
+        // an independent block decode.
+        let _ = config.set_max_readahead(4 * 1024 * 1024);
+        let _ = config.set_max_background(64);
+        Ok(())
+    }
+
+    // [spec:box:req:fuse-mount.root.file-data]
+    fn read(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        size: u32,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        reply: ReplyData,
+    ) {
+        let ino = ino.0;
+        let composite = match ino_to_composite(ino) {
+            Some(v) => v,
+            None => {
+                tracing::warn!(ino, "read: invalid inode (root)");
+                reply.error(Errno::ENOENT);
+                return;
+            }
+        };
+
+        // A read whose bytes are all cached answers inline — a warm 2MiB
+        // block serves sixteen kernel reads and at most the first pays a
+        // pool hop. Everything else decodes on the pool, where concurrent
+        // requests and the prefetcher parallelise.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.stats.reads.fetch_add(1, Relaxed);
+            self.stats
+                .bytes_requested
+                .fetch_add(u64::from(size), Relaxed);
+        }
+        let reply = match serve_from_cache(
+            &self.archives,
+            &self.cache,
+            &self.pending,
+            &self.workers,
+            &self.stats,
+            composite,
+            offset,
+            u64::from(size),
+            reply,
+        ) {
+            None => return,
+            Some(reply) => reply,
+        };
+
+        // A plain file record is small by construction — anything past one
+        // block is chunked — so its decode is cheaper than a pool hop, and a
+        // sequential many-small-files stream pays the hop per file. Chunked
+        // misses go to the pool, where concurrent requests and the
+        // prefetcher parallelise.
+        if matches!(self.archives.get_record(composite), Some(Record::File(_))) {
+            serve_read(
+                &self.archives,
+                &self.cache,
+                &self.pending,
+                &self.workers,
+                &self.stats,
+                ino,
+                composite,
+                offset,
+                u64::from(size),
+                reply,
+            );
+            return;
+        }
+
+        let archives = Arc::clone(&self.archives);
+        let cache = Arc::clone(&self.cache);
+        let pending = Arc::clone(&self.pending);
+        let workers = Arc::clone(&self.workers);
+        let stats = Arc::clone(&self.stats);
+        self.workers.run(move || {
+            serve_read(
+                &archives,
+                &cache,
+                &pending,
+                &workers,
+                &stats,
+                ino,
+                composite,
+                offset,
+                u64::from(size),
+                reply,
+            )
+        });
+    }
+
+    // [spec:box:req:fuse-mount.root.file-data]
+    fn release(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        // Don't evict cache on file close - let LRU naturally handle eviction.
+        // This allows repeated reads of the same file to benefit from caching.
+        tracing::trace!(ino, "release");
+        reply.ok();
+    }
+
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        let ino = ino.0;
+        tracing::trace!(ino, "getattr");
+        match ino_to_composite(ino) {
+            Some(composite) => match self.archives.get_record(composite) {
+                Some(record) => {
+                    if let Some(meta) = self.archives.get_metadata(composite) {
+                        let file_attr = record.fuse_file_attr(meta, composite);
+                        reply.attr(&TTL, &file_attr);
+                    } else {
+                        reply.error(Errno::ENOENT);
+                    }
+                }
+                None => {
+                    tracing::warn!(ino, "getattr: record not found");
+                    reply.error(Errno::ENOENT);
+                }
+            },
+            None => {
+                // Root inode
+                if let Some(meta) = self.archives.first_metadata() {
+                    reply.attr(&TTL, &root_dir_attr(meta));
+                } else {
+                    reply.error(Errno::ENOENT);
+                }
+            }
+        }
+    }
+
+    fn readdir(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
+    ) {
+        let ino = ino.0;
+        let children = match ino_to_composite(ino) {
+            Some(composite) => self.archives.children(composite),
+            None => self.archives.root_children(),
+        };
+
+        tracing::debug!(ino, offset, entries = children.len(), "readdir");
+
+        for (i, (composite, record)) in children.iter().enumerate().skip(offset as usize) {
+            let is_full = reply.add(
+                INodeNo(composite_to_ino(*composite)),
+                i as u64 + 1,
+                record.fuse_file_type(),
+                record.name(),
+            );
+            if is_full {
+                reply.ok();
+                return;
+            }
+        }
+
+        reply.ok();
+    }
+
+    fn readdirplus(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectoryPlus,
+    ) {
+        let ino = ino.0;
+        let children = match ino_to_composite(ino) {
+            Some(composite) => self.archives.children(composite),
+            None => self.archives.root_children(),
+        };
+
+        tracing::debug!(ino, offset, entries = children.len(), "readdirplus");
+
+        for (i, &(composite, record)) in children.iter().enumerate().skip(offset as usize) {
+            if let Some(meta) = self.archives.get_metadata(composite) {
+                let attr = record.fuse_file_attr(meta, composite);
+                let is_full = reply.add(
+                    INodeNo(composite_to_ino(composite)),
+                    i as u64 + 1,
+                    record.name(),
+                    &TTL,
+                    &attr,
+                    Generation(0),
+                );
+                if is_full {
+                    reply.ok();
+                    return;
+                }
+            }
+        }
+
+        reply.ok();
+    }
+
+    // [spec:box:req:fuse-mount.root.links-and-xattrs]
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+        let ino = ino.0;
+        tracing::trace!(ino, "readlink");
+        let composite = match ino_to_composite(ino) {
+            Some(v) => v,
+            None => {
+                reply.error(Errno::ENOENT);
+                return;
+            }
+        };
+
+        let record = match self.archives.get_record(composite) {
+            Some(r) => r,
+            None => {
+                tracing::warn!(ino, "readlink: record not found");
+                reply.error(Errno::ENOENT);
+                return;
+            }
+        };
+
+        match record {
+            box_format::Record::Link(link) => {
+                // Internal link - compute relative path from link location to target
+                if let Some(meta) = self.archives.get_metadata(composite) {
+                    // Get the link's own RecordIndex from composite
+                    let (_, local_idx) = MultiArchive::unpack_index(composite);
+                    let link_index = match RecordIndex::try_new(local_idx) {
+                        Some(idx) => idx,
+                        None => {
+                            reply.error(Errno::ENOENT);
+                            return;
+                        }
+                    };
+
+                    // Get both paths
+                    let link_path = meta.path_for_index(link_index);
+                    let target_path = meta.path_for_index(link.target);
+
+                    match (link_path, target_path) {
+                        (Some(link_p), Some(target_p)) => {
+                            // Compute relative path from link's parent directory to target
+                            let link_parent =
+                                link_p.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                            let target_path_buf = target_p.to_path_buf();
+                            let relative = pathdiff::diff_paths(&target_path_buf, &link_parent)
+                                .unwrap_or(target_path_buf);
+                            reply.data(relative.to_string_lossy().as_bytes());
+                        }
+                        _ => {
+                            tracing::warn!(ino, "readlink: could not resolve internal link paths");
+                            reply.error(Errno::ENOENT);
+                        }
+                    }
+                } else {
+                    tracing::warn!(ino, "readlink: archive not found");
+                    reply.error(Errno::ENOENT);
+                }
+            }
+            box_format::Record::ExternalLink(link) => {
+                reply.data(link.target.as_bytes());
+            }
+            _ => {
+                tracing::warn!(ino, "readlink: not a link");
+                reply.error(Errno::ENOENT);
+            }
+        }
+    }
+
+    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+        // Count records and estimate total size across all archives
+        let total_size = self.archives.total_size();
+        let file_count = self.archives.record_count();
+        let blocks = total_size.div_ceil(BLOCK_SIZE as u64);
+
+        tracing::debug!(blocks, file_count, total_size, "statfs");
+
+        reply.statfs(
+            blocks,     // blocks: total blocks
+            0,          // bfree: free blocks (read-only)
+            0,          // bavail: available blocks (read-only)
+            file_count, // files: total inodes
+            0,          // ffree: free inodes (read-only)
+            BLOCK_SIZE, // bsize: block size
+            255,        // namelen: max filename length
+            BLOCK_SIZE, // frsize: fragment size
+        );
+    }
+
+    // [spec:box:req:fuse-mount.root.links-and-xattrs]
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let ino = ino.0;
+        let name = match name.to_str() {
+            Some(n) => n,
+            None => {
+                reply.error(Errno::from_i32(libc::ENODATA));
+                return;
+            }
+        };
+
+        tracing::trace!(ino, name, "getxattr");
+
+        // Convert xattr name to box attribute name
+        let box_attr_name = format!("{}{}", attrs::LINUX_XATTR_PREFIX, name);
+
+        // Get the attribute value
+        let value = match ino_to_composite(ino) {
+            Some(composite) => {
+                let record = match self.archives.get_record(composite) {
+                    Some(r) => r,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                let meta = match self.archives.get_metadata(composite) {
+                    Some(m) => m,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                record.attr(meta, &box_attr_name)
+            }
+            None => {
+                // Root inode - check archive-level attributes from first archive
+                self.archives
+                    .first_metadata()
+                    .and_then(|m| m.file_attr(&box_attr_name))
+            }
+        };
+
+        match value {
+            Some(data) => {
+                if size == 0 {
+                    // Return required size
+                    reply.size(data.len() as u32);
+                } else if data.len() > size as usize {
+                    reply.error(Errno::ERANGE);
+                } else {
+                    reply.data(data);
+                }
+            }
+            None => reply.error(Errno::from_i32(libc::ENODATA)),
+        }
+    }
+
+    // [spec:box:req:fuse-mount.root.links-and-xattrs]
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let ino = ino.0;
+        tracing::trace!(ino, "listxattr");
+        // Collect all xattr names for this inode
+        let mut xattr_list = Vec::new();
+
+        let add_xattrs = |attrs_iter: &mut dyn Iterator<Item = (&str, &[u8])>,
+                          xattr_list: &mut Vec<u8>| {
+            for (key, _value) in attrs_iter {
+                if let Some(xattr_name) = key.strip_prefix(attrs::LINUX_XATTR_PREFIX) {
+                    // Add null-terminated xattr name
+                    xattr_list.extend_from_slice(xattr_name.as_bytes());
+                    xattr_list.push(0);
+                }
+            }
+        };
+
+        match ino_to_composite(ino) {
+            Some(composite) => {
+                let record = match self.archives.get_record(composite) {
+                    Some(r) => r,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                let meta = match self.archives.get_metadata(composite) {
+                    Some(m) => m,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                let mut iter = record.attrs_iter(meta);
+                add_xattrs(&mut iter, &mut xattr_list);
+            }
+            None => {
+                // Root inode - list archive-level xattrs from first archive
+                if let Some(meta) = self.archives.first_metadata() {
+                    for key in meta.attr_keys() {
+                        if let Some(xattr_name) = key.strip_prefix(attrs::LINUX_XATTR_PREFIX) {
+                            xattr_list.extend_from_slice(xattr_name.as_bytes());
+                            xattr_list.push(0);
+                        }
+                    }
+                }
+            }
+        }
+
+        if size == 0 {
+            reply.size(xattr_list.len() as u32);
+        } else if xattr_list.len() > size as usize {
+            reply.error(Errno::ERANGE);
+        } else {
+            reply.data(&xattr_list);
+        }
+    }
+
+    // [spec:box:req:fuse-mount.root.read-only-and-attributes]
+    fn access(&self, req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
+        let ino = ino.0;
+        let mask = mask.bits();
+        tracing::trace!(ino, mask, "access");
+        // F_OK (existence check) is always successful if we got here
+        if mask == libc::F_OK {
+            reply.ok();
+            return;
+        }
+
+        let (mode, file_uid, file_gid) = match ino_to_composite(ino) {
+            Some(composite) => {
+                let record = match self.archives.get_record(composite) {
+                    Some(r) => r,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                let meta = match self.archives.get_metadata(composite) {
+                    Some(m) => m,
+                    None => {
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                let mode = record.perm(meta) as u32;
+                let uid = record.uid(meta);
+                let gid = record.gid(meta);
+                (mode, uid, gid)
+            }
+            None => {
+                // Root directory
+                if let Some(meta) = self.archives.first_metadata() {
+                    let attr = root_dir_attr(meta);
+                    (attr.perm as u32, attr.uid, attr.gid)
+                } else {
+                    reply.error(Errno::ENOENT);
+                    return;
+                }
+            }
+        };
+
+        let req_uid = req.uid();
+        let req_gid = req.gid();
+
+        // Root can access anything
+        if req_uid == 0 {
+            reply.ok();
+            return;
+        }
+
+        // Determine which permission bits to check
+        let perm_bits = if req_uid == file_uid {
+            (mode >> 6) & 0o7 // Owner bits
+        } else if req_gid == file_gid {
+            (mode >> 3) & 0o7 // Group bits
+        } else {
+            mode & 0o7 // Other bits
+        };
+
+        // Check requested permissions (read-only filesystem, so write always fails)
+        let mut allowed = true;
+
+        if (mask & libc::R_OK) != 0 && (perm_bits & 0o4) == 0 {
+            allowed = false;
+        }
+        if (mask & libc::W_OK) != 0 {
+            // Read-only filesystem
+            allowed = false;
+        }
+        if (mask & libc::X_OK) != 0 && (perm_bits & 0o1) == 0 {
+            allowed = false;
+        }
+
+        if allowed {
+            reply.ok();
+        } else {
+            reply.error(Errno::EACCES);
+        }
+    }
+}
+
+/// One read request, executed on the worker pool.
+///
+/// Concurrent misses of the same block may decompress it twice; the second
+/// insert wins and both replies are correct, which costs less than holding
+/// the cache lock across a decode.
+// [spec:box:req:fuse-mount.root.file-data]
+#[allow(clippy::too_many_arguments)]
+fn serve_read(
+    archives: &Arc<MultiArchive>,
+    cache: &Arc<Mutex<LruCache>>,
+    pending: &Arc<PendingBlocks>,
+    workers: &Arc<ReadPool>,
+    stats: &Arc<FsStats>,
+    ino: u64,
+    composite: u128,
+    offset: u64,
+    size: u64,
+    reply: ReplyData,
+) {
+    let record = match archives.get_record(composite) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(ino, "read: record not found");
+            reply.error(Errno::ENOENT);
+            return;
+        }
+    };
+
+    let (_, local_idx) = MultiArchive::unpack_index(composite);
+    let local_index = match RecordIndex::try_new(local_idx) {
+        Some(idx) => idx,
+        None => {
+            tracing::warn!(ino, "read: invalid local index");
+            reply.error(Errno::ENOENT);
+            return;
+        }
+    };
+
+    match record {
+        Record::File(f) => {
+            let cache_key = (composite, 0u64);
+            {
+                let mut cache = cache.lock().unwrap();
+                if let Some(cached) = cache.get(&cache_key) {
+                    let end = (offset as usize + size as usize).min(cached.len());
+                    let start = (offset as usize).min(end);
+                    tracing::debug!(ino, offset, size, "read: cache hit (file)");
+                    reply.data(&cached[start..end]);
+                    return;
+                }
+            }
+
+            let archive = match archives.get_archive(composite) {
+                Some(a) => a,
+                None => {
+                    tracing::warn!(ino, "read: archive not found");
+                    reply.error(Errno::ENOENT);
+                    return;
+                }
+            };
+
+            let mut buf = Vec::new();
+            let started = std::time::Instant::now();
+            match archive.reader.decompress(f, &mut buf) {
+                Ok(_) => {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let nanos = started.elapsed().as_nanos() as u64;
+                    stats.blocks_decoded.fetch_add(1, Relaxed);
+                    stats.decode_nanos.fetch_add(nanos, Relaxed);
+                    stats.record_decode(
+                        archives
+                            .path_for_index(composite)
+                            .map(|p| String::from_utf8_lossy(&p).into_owned()),
+                        nanos,
+                    );
+                    tracing::debug!(
+                        ino,
+                        offset,
+                        size,
+                        decompressed_size = buf.len(),
+                        "read: cache miss, decompressed (file)"
+                    );
+                    let end = (offset as usize + size as usize).min(buf.len());
+                    let start = (offset as usize).min(end);
+                    reply.data(&buf[start..end]);
+                    cache.lock().unwrap().insert(cache_key, buf);
+                }
+                Err(e) => {
+                    tracing::error!(ino, error = %e, "read: decompression failed");
+                    reply.error(Errno::ENOENT);
+                }
+            }
+        }
+        Record::ChunkedFile(f) => {
+            let block_size = f.block_size as u64;
+            let file_size = f.decompressed_length;
+
+            let start_byte = offset.min(file_size);
+            let end_byte = (offset + size).min(file_size);
+
+            if start_byte >= end_byte {
+                reply.data(&[]);
+                return;
+            }
+
+            let first_block_idx = start_byte / block_size;
+            let last_block_idx = (end_byte.saturating_sub(1)) / block_size;
+
+            tracing::debug!(
+                ino,
+                offset,
+                size,
+                first_block = first_block_idx,
+                last_block = last_block_idx,
+                "read: chunked file"
+            );
+
+            let mut output = Vec::with_capacity((end_byte - start_byte) as usize);
+            let mut cache_hits = 0u64;
+            let mut cache_misses = 0u64;
+
+            for block_idx in first_block_idx..=last_block_idx {
+                let cache_key = (composite, block_idx);
+                let block_start_byte = block_idx * block_size;
+                let slice_start = if block_idx == first_block_idx {
+                    (start_byte - block_start_byte) as usize
+                } else {
+                    0
+                };
+                let slice_end_for = |len: usize| {
+                    if block_idx == last_block_idx {
+                        ((end_byte - block_start_byte) as usize).min(len)
+                    } else {
+                        len
+                    }
+                };
+
+                let copied = {
+                    let mut cache = ensure_block(
+                        archives,
+                        cache,
+                        pending,
+                        stats,
+                        composite,
+                        f,
+                        local_index,
+                        block_idx,
+                    );
+                    match cache.get(&cache_key) {
+                        Some(block) => {
+                            let slice_end = slice_end_for(block.len());
+                            output.extend_from_slice(&block[slice_start..slice_end]);
+                            true
+                        }
+                        None => false,
+                    }
+                };
+                if copied {
+                    cache_hits += 1;
+                    continue;
+                }
+                cache_misses += 1;
+
+                // Decoded but did not fit the cache; decode straight into
+                // the reply instead.
+                let archive = match archives.get_archive(composite) {
+                    Some(a) => a,
+                    None => {
+                        tracing::error!(ino, "read: archive not found for block decompression");
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                };
+                match archive
+                    .reader
+                    .decompress_chunked_block(f, local_index, block_idx)
+                {
+                    Ok(data) => {
+                        let slice_end = slice_end_for(data.len());
+                        output.extend_from_slice(&data[slice_start..slice_end]);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            ino,
+                            block = block_idx,
+                            error = %e,
+                            "read: block decompression failed"
+                        );
+                        reply.error(Errno::ENOENT);
+                        return;
+                    }
+                }
+            }
+
+            schedule_prefetch(
+                archives,
+                cache,
+                pending,
+                workers,
+                stats,
+                composite,
+                file_size,
+                block_size,
+                last_block_idx,
+            );
+
+            tracing::debug!(
+                ino,
+                cache_hits,
+                cache_misses,
+                output_size = output.len(),
+                "read: chunked complete"
+            );
+            reply.data(&output);
+        }
+        _ => {
+            tracing::warn!(ino, "read: not a file");
+            reply.error(Errno::ENOENT);
+        }
+    }
+}
+
+/// Make sure a block is cached, decoding it at most once across all
+/// concurrent readers, and hand back the cache lock so the caller reads the
+/// block before eviction can race it. A block the cache refused (larger
+/// than the cache itself) comes back absent, and the caller decodes into
+/// its own reply.
+fn ensure_block<'a>(
+    archives: &Arc<MultiArchive>,
+    cache: &'a Arc<Mutex<LruCache>>,
+    pending: &Arc<PendingBlocks>,
+    stats: &FsStats,
+    composite: u128,
+    f: &box_format::ChunkedFileRecord<'_>,
+    local_index: RecordIndex,
+    block_idx: u64,
+) -> std::sync::MutexGuard<'a, LruCache> {
+    let cache_key = (composite, block_idx);
+    loop {
+        {
+            let cache_guard = cache.lock().unwrap();
+            if cache_guard.contains(&cache_key) {
+                return cache_guard;
+            }
+        }
+
+        let mut decoding = pending.decoding.lock().unwrap();
+        if decoding.contains(&cache_key) {
+            // Wait for the decoder, then look in the cache again.
+            let _woken = pending.done.wait(decoding).unwrap();
+            continue;
+        }
+        decoding.insert(cache_key);
+        drop(decoding);
+
+        let started = std::time::Instant::now();
+        let data = archives.get_archive(composite).and_then(|archive| {
+            archive
+                .reader
+                .decompress_chunked_block(f, local_index, block_idx)
+                .ok()
+        });
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let nanos = started.elapsed().as_nanos() as u64;
+            stats.blocks_decoded.fetch_add(1, Relaxed);
+            stats.decode_nanos.fetch_add(nanos, Relaxed);
+            stats.record_decode(
+                archives
+                    .path_for_index(composite)
+                    .map(|p| String::from_utf8_lossy(&p).into_owned()),
+                nanos,
+            );
+        }
+
+        let mut cache_guard = cache.lock().unwrap();
+        if let Some(data) = data {
+            cache_guard.insert(cache_key, data);
+        }
+        let mut decoding = pending.decoding.lock().unwrap();
+        decoding.remove(&cache_key);
+        pending.done.notify_all();
+        drop(decoding);
+        return cache_guard;
+    }
+}
+
+/// Serve a read whose bytes are all cached, inline on the dispatch thread,
+/// keeping the sequential prefetch pipeline fed. The reply comes back on a
+/// miss so the caller can route it to the pool.
+#[allow(clippy::too_many_arguments)]
+fn serve_from_cache(
+    archives: &Arc<MultiArchive>,
+    cache: &Arc<Mutex<LruCache>>,
+    pending: &Arc<PendingBlocks>,
+    workers: &Arc<ReadPool>,
+    stats: &Arc<FsStats>,
+    composite: u128,
+    offset: u64,
+    size: u64,
+    reply: ReplyData,
+) -> Option<ReplyData> {
+    let Some(record) = archives.get_record(composite) else {
+        return Some(reply);
+    };
+    match record {
+        Record::File(_) => {
+            let mut guard = cache.lock().unwrap();
+            match guard.get(&(composite, 0u64)) {
+                Some(cached) => {
+                    let end = (offset as usize + size as usize).min(cached.len());
+                    let start = (offset as usize).min(end);
+                    reply.data(&cached[start..end]);
+                    stats
+                        .cache_hits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    None
+                }
+                None => Some(reply),
+            }
+        }
+        Record::ChunkedFile(f) => {
+            let block_size = f.block_size as u64;
+            let file_size = f.decompressed_length;
+            let start_byte = offset.min(file_size);
+            let end_byte = (offset + size).min(file_size);
+            if start_byte >= end_byte {
+                reply.data(&[]);
+                return None;
+            }
+            let first_block_idx = start_byte / block_size;
+            let last_block_idx = (end_byte.saturating_sub(1)) / block_size;
+            let mut output = Vec::with_capacity((end_byte - start_byte) as usize);
+            {
+                let mut guard = cache.lock().unwrap();
+                for block_idx in first_block_idx..=last_block_idx {
+                    let Some(block) = guard.get(&(composite, block_idx)) else {
+                        return Some(reply);
+                    };
+                    let block_start_byte = block_idx * block_size;
+                    let slice_start = if block_idx == first_block_idx {
+                        (start_byte - block_start_byte) as usize
+                    } else {
+                        0
+                    };
+                    let slice_end = if block_idx == last_block_idx {
+                        ((end_byte - block_start_byte) as usize).min(block.len())
+                    } else {
+                        block.len()
+                    };
+                    output.extend_from_slice(&block[slice_start..slice_end]);
+                }
+            }
+            reply.data(&output);
+            stats
+                .cache_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            schedule_prefetch(
+                archives,
+                cache,
+                pending,
+                workers,
+                stats,
+                composite,
+                file_size,
+                block_size,
+                last_block_idx,
+            );
+            None
+        }
+        _ => Some(reply),
+    }
+}
+
+/// Keep decoding ahead of a sequential reader: four blocks of lookahead,
+/// each an independent pool job, so consumption never waits on a cold
+/// block.
+#[allow(clippy::too_many_arguments)]
+fn schedule_prefetch(
+    archives: &Arc<MultiArchive>,
+    cache: &Arc<Mutex<LruCache>>,
+    pending: &Arc<PendingBlocks>,
+    workers: &Arc<ReadPool>,
+    stats: &Arc<FsStats>,
+    composite: u128,
+    file_size: u64,
+    block_size: u64,
+    after_block: u64,
+) {
+    let total_blocks = file_size.div_ceil(block_size);
+    for ahead in after_block + 1..(after_block + 5).min(total_blocks) {
+        if cache.lock().unwrap().contains(&(composite, ahead)) {
+            continue;
+        }
+        let archives = Arc::clone(archives);
+        let cache = Arc::clone(cache);
+        let pending = Arc::clone(pending);
+        let stats = Arc::clone(stats);
+        workers.run(move || {
+            if let Some(Record::ChunkedFile(f)) = archives.get_record(composite) {
+                let (_, local_idx) = MultiArchive::unpack_index(composite);
+                if let Some(local_index) = RecordIndex::try_new(local_idx) {
+                    drop(ensure_block(
+                        &archives,
+                        &cache,
+                        &pending,
+                        &stats,
+                        composite,
+                        f,
+                        local_index,
+                        ahead,
+                    ));
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name no archive holds is answered rather than refused, and answered
+    /// with the timeout that makes the kernel keep the miss — otherwise every
+    /// probe of an absent name round-trips into this process forever.
+    // [spec:box:req:fuse-mount.root/test]
+    #[test]
+    fn lookup_miss_caches_negative_dentry() {
+        let fs = BoxFs::new(MultiArchive::new(), LruCache::new(1));
+        let attr = fs
+            .lookup_entry(1, OsStr::new("stdio.h"))
+            .expect("a name the archive lacks is an entry, not an error");
+        assert_eq!(attr.ino, INodeNo(0), "a negative entry is nodeid 0");
+        assert!(TTL.as_secs() > 0, "a zero entry timeout caches nothing");
+    }
+}

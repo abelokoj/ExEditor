@@ -1,0 +1,25 @@
+[package]
+name = "box-fst"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+description = "A radix tree that serializes as an FST for fast path lookups"
+
+[features]
+default = ["std"]
+std = ["fastvint/std"]
+
+[dependencies]
+fastvint.workspace = true
+hashbrown = { version = "0.17", default-features = false, features = [
+    "default-hasher",
+    "inline-more",
+] }
+
+[dev-dependencies]
+criterion = "0.8"
+rand = "0.10"
+
+[[bench]]
+name = "lookup"
+harness = false

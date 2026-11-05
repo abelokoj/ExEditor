@@ -126,6 +126,16 @@ pub enum Command {
     Link,
     Image,
     CheckSpelling,
+    LanguageTools,
+    ExplainProofing(String),
+    ApplyLanguageTools(crate::proofing::ProofingOptions),
+    ProofingCorrection {
+        document: String,
+        source: std::sync::Arc<str>,
+        range: std::ops::Range<usize>,
+        original: String,
+        replacement: String,
+    },
     Correct(std::ops::Range<usize>, String),
     Complete,
     Speak,
@@ -496,6 +506,7 @@ struct DocumentTab {
     paper: u32,
     /// Markdown shown formatted (read-only); this is the text that is saved.
     markdown_source: Option<Rc<NativeEditor>>,
+    proofing: crate::language_tools::CheckState,
 }
 struct EditorWindow {
     doc: DocumentTab,
@@ -758,6 +769,7 @@ impl EditorWindow {
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
+        self.doc.proofing.invalidate();
         self.doc.look = None;
         if let DocumentContent::Plain(source) = loaded.content
             && is_markdown(path)
@@ -829,6 +841,7 @@ impl EditorWindow {
                 text = editor.text().unwrap_or(text);
             }
             self.doc.last_text = text;
+            self.doc.proofing.invalidate();
             let recolored = if self.doc.highlighter.is_some() {
                 self.highlight(&editor)
             } else {
@@ -841,6 +854,9 @@ impl EditorWindow {
         }
         let _ = editor.take_pasted();
         if let Err(error) = self.refresh_look(window) {
+            show_error(&error);
+        }
+        if let Err(error) = self.update_proofing(None, window, cx) {
             show_error(&error);
         }
         for tab in std::iter::once(&mut self.doc).chain(self.tabs.iter_mut().flatten()) {
@@ -898,6 +914,123 @@ impl EditorWindow {
             if self.doc.dirty { " — Edited" } else { "" }
         ));
         cx.notify();
+    }
+    fn update_proofing(
+        &mut self,
+        immediate: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if self.doc.markdown_source.is_some() {
+            return Ok(());
+        }
+        let text = immediate.unwrap_or(&self.doc.last_text);
+        if text.len() > crate::proofing::MAX_TEXT_BYTES {
+            if std::mem::take(&mut self.doc.proofing.manual) {
+                bail!("Language tools support documents up to 1 MiB. Check a smaller document.");
+            }
+            return Ok(());
+        }
+        let options = &self.prefs.proofing;
+        let completed = self.doc.proofing.poll(text, options);
+        let current = self.doc.proofing.current(text, options);
+        if completed && self.prefs.spellcheck {
+            let ranges: Vec<_> = self
+                .doc
+                .proofing
+                .issues
+                .iter()
+                .map(|issue| issue.range.clone())
+                .collect();
+            self.editor()?.set_proofing_marks(&ranges)?;
+        }
+        if !current
+            && !self.doc.proofing.pending()
+            && self.doc.proofing.ready()
+            && (self.doc.proofing.manual || (self.prefs.spellcheck && !self.doc.read_only))
+        {
+            self.doc
+                .proofing
+                .start(std::sync::Arc::from(text), options.clone());
+        }
+        if current && std::mem::take(&mut self.doc.proofing.manual) {
+            self.show_proofing_result(window, cx)?;
+        }
+        Ok(())
+    }
+    fn show_proofing_result(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        if let Some(error) = &self.doc.proofing.error {
+            bail!("{error}");
+        }
+        let editor = self.editor()?;
+        let caret = editor.selection().end;
+        let Some(issue) = self
+            .doc
+            .proofing
+            .issues
+            .iter()
+            .find(|issue| issue.range.start >= caret)
+            .or(self.doc.proofing.issues.first())
+        else {
+            MessageDialog::new()
+                .set_title("Spelling and Grammar")
+                .set_description("No spelling or grammar suggestions found.")
+                .show();
+            return Ok(());
+        };
+        let source = self
+            .doc
+            .proofing
+            .snapshot()
+            .context("Check the document again")?;
+        ensure!(
+            editor.text()?.as_str() == source.as_ref(),
+            "The document changed. Check it again."
+        );
+        editor.select_range(issue.range.clone())?;
+        let kind = match issue.kind {
+            crate::proofing::IssueKind::Grammar => "Grammar",
+            crate::proofing::IssueKind::Spelling => "Spelling",
+        };
+        let mut description =
+            MenuEntry::item(&format!("{kind} suggestion"), "", Command::CheckSpelling);
+        description.enabled = false;
+        let mut entries = vec![description, MenuEntry::separator()];
+        entries.extend(issue.suggestions.iter().map(|replacement| {
+            MenuEntry::item(
+                if replacement.is_empty() {
+                    "Delete"
+                } else {
+                    replacement
+                },
+                "",
+                Command::ProofingCorrection {
+                    document: self.doc.recovery_id.clone(),
+                    source: source.clone(),
+                    range: issue.range.clone(),
+                    original: issue.original.clone(),
+                    replacement: replacement.clone(),
+                },
+            )
+        }));
+        entries.push(MenuEntry::separator());
+        entries.push(MenuEntry::item(
+            "Explain Suggestion…",
+            "",
+            Command::ExplainProofing(issue.message.clone()),
+        ));
+        entries.push(MenuEntry::item(
+            "Next Suggestion",
+            "",
+            Command::CheckSpelling,
+        ));
+        entries.push(MenuEntry::item(
+            "Language Tools…",
+            "",
+            Command::LanguageTools,
+        ));
+        self.show_menu(entries, window, cx);
+        Ok(())
     }
     fn save(&mut self, as_new: bool) -> Result<bool> {
         let path = if as_new || self.doc.path.is_none() {
@@ -1816,29 +1949,53 @@ impl EditorWindow {
                 }
             }
             Command::CheckSpelling => {
+                self.show_markdown_source()?;
                 let text = self.editor()?.text()?;
-                let issues = services::check_spelling(&text)?;
-                let caret = self.editor()?.selection().end;
-                if let Some(issue) = issues
-                    .iter()
-                    .find(|i| i.range.start >= caret)
-                    .or(issues.first())
-                {
-                    self.editor()?.select_range(issue.range.clone())?;
-                    let entries = issue
-                        .suggestions
-                        .iter()
-                        .map(|s| {
-                            MenuEntry::item(s, "", Command::Correct(issue.range.clone(), s.clone()))
-                        })
-                        .collect();
-                    self.show_menu(entries, window, cx);
-                } else {
-                    MessageDialog::new()
-                        .set_title("Spelling")
-                        .set_description("No spelling errors found.")
-                        .show();
-                }
+                self.doc.proofing.manual = true;
+                self.update_proofing(Some(&text), window, cx)?;
+            }
+            Command::ExplainProofing(message) => {
+                MessageDialog::new()
+                    .set_title("Spelling and Grammar")
+                    .set_description(message)
+                    .show();
+            }
+            Command::LanguageTools => crate::language_tools::open(
+                self.prefs.proofing.clone(),
+                self.queue.clone(),
+                Palette::new(self.is_dark(window)),
+                cx,
+            ),
+            Command::ApplyLanguageTools(options) => {
+                options.validate()?;
+                self.prefs.proofing = options;
+                self.prefs.save()?;
+                self.doc.proofing.invalidate();
+                self.editor()?.set_proofing_marks(&[])?;
+            }
+            Command::ProofingCorrection {
+                document,
+                source,
+                range,
+                original,
+                replacement,
+            } => {
+                ensure!(
+                    document == self.doc.recovery_id && self.doc.markdown_source.is_none(),
+                    "Return to the checked document and check it again before applying this suggestion."
+                );
+                let editor = self.editor()?;
+                ensure!(
+                    crate::language_tools::correction_matches(
+                        &editor.text()?,
+                        &source,
+                        &range,
+                        &original
+                    ),
+                    "The document changed. Check spelling and grammar again before applying this suggestion."
+                );
+                editor.select_range(range)?;
+                editor.replace_current(&replacement)?;
             }
             Command::Correct(range, text) => {
                 self.editor()?.select_range(range)?;
@@ -1883,7 +2040,9 @@ impl EditorWindow {
                     }
                     "spelling" => {
                         self.prefs.spellcheck = !self.prefs.spellcheck;
-                        self.editor()?.set_spellcheck(self.prefs.spellcheck);
+                        self.editor()?.set_spellcheck(false);
+                        self.editor()?.set_proofing_marks(&[])?;
+                        self.doc.proofing.invalidate();
                     }
                     _ => {}
                 }
@@ -2154,7 +2313,9 @@ impl EditorWindow {
                     }
                 }
                 self.editor()?.set_auto_links(self.prefs.automatic_links);
-                self.editor()?.set_spellcheck(self.prefs.spellcheck);
+                self.editor()?.set_spellcheck(false);
+                self.editor()?.set_proofing_marks(&[])?;
+                self.doc.proofing.invalidate();
             }
             FormKind::Find => {
                 self.doc.find_text = value(0)?.into();
@@ -2302,11 +2463,16 @@ impl EditorWindow {
                 item("Go to Line…", "Ctrl+G", C::GoToLine),
             ],
             M::Spelling => vec![
-                item("Show Spelling…", "Ctrl+Shift+;", C::CheckSpelling),
+                item(
+                    "Show Spelling and Grammar…",
+                    "Ctrl+Shift+;",
+                    C::CheckSpelling,
+                ),
                 item("Check Document Now", "Ctrl+;", C::CheckSpelling),
                 sep(),
-                item("Check Spelling While Typing", "", C::Toggle("spelling"))
+                item("Check While Typing", "", C::Toggle("spelling"))
                     .checked(self.prefs.spellcheck),
+                item("Language Tools…", "", C::LanguageTools),
             ],
             M::Substitutions => vec![
                 item("Smart Quotes", "", C::Toggle("quotes")).checked(self.prefs.smart_quotes),
@@ -3022,7 +3188,7 @@ impl DocumentTab {
                 show_error(&error);
             }
             editor.set_auto_links(prefs.automatic_links);
-            editor.set_spellcheck(prefs.spellcheck);
+            editor.set_spellcheck(false);
             editor.mark_saved();
         }
         let recovery_id = format!(
@@ -3080,6 +3246,7 @@ impl DocumentTab {
             look: None,
             paper: 0xffffff,
             markdown_source: None,
+            proofing: crate::language_tools::CheckState::default(),
         }
     }
     fn restore(prefs: &Preferences, parent: isize, buffer: RestoredBuffer) -> Result<Self> {

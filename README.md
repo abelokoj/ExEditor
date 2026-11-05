@@ -7,8 +7,7 @@ Document handling stays within the application and the operating system; no
 separate office suite or document-converter installation is required.
 
 GitHub has produced Windows installer and portable builds. Full TextEdit visual
-and document compatibility remain under evaluation; interactive testing is performed
-by the user on downloaded builds.
+and document compatibility remain under evaluation; interactive testing uses downloaded GitHub builds in isolated local data folders.
 
 ## Build on GitHub, test the downloaded app here
 
@@ -17,12 +16,13 @@ The workflow runs on pushes to `main`, pull requests, and manual dispatches. The
 first build must be started only after all planned feature source code is written.
 It checks Rust formatting and diagnostics, runs noninteractive unit tests, builds
 the Windows x64 executable, and packages the application. Visual and interactive
-testing is performed by the user with that downloaded executable on the local Windows machine.
+testing runs that downloaded executable on the local Windows machine in isolated data folders.
 
 1. Open a successful **Build ExEditor** workflow run.
 2. Download **ExEditor-windows-x64-<source commit>** from its Artifacts section.
-3. Extract the entire archive into a new folder. Keep any bundled DLLs and
-   `build-info.json` alongside `ExEditor.exe`.
+3. Keep downloads under `dist/ExEditor-YYYY-M-D.N/`, matching the existing layout:
+   installer, portable ZIP, extracted portable folder and build-records folder. Keep
+   bundled DLLs, the proofing folder and `build-info.json` alongside `ExEditor.exe`.
 4. Launch `ExEditor.exe` and use test documents for the visual and behavior checks.
 5. Compare with the selected TextEdit reference, record findings, change source,
    and download the next GitHub build. Do not compile the application locally.
@@ -76,7 +76,7 @@ inserted CSS codes preserve alpha when the selected code format supports it.
 The default icon is the selected paper-and-pencil artwork with calligraphic Ex.
 All three calligraphic PNG variants are retained in assets/icons/paper-calligraphy.
 
-The latest changes still need the user's visual and interaction feedback. In particular,
+The latest changes need visual and interaction checks on downloaded GitHub builds. In particular,
 the earlier blank writing area was addressed by hosting RichEdit above GPUI; current
 interactive behavior still needs user feedback. Unsaved-buffer snapshots are atomic and flushed, but an
 abrupt crash can still lose edits made since the most recent editing checkpoint.
@@ -103,3 +103,46 @@ the source buffer's undo history, selection and unsaved changes. Print/PDF suppr
 temporary display colors. Recovery writes run in the background with one pending
 snapshot per tab; saving, discarding and closing drain earlier writes to prevent a stale
 snapshot from returning.
+
+## Markdown links and File Explorer
+
+Markdown previews keep reading normally when they contain relative paths, local-file
+links, or custom URL schemes. Unsupported destinations are displayed as inactive
+labels; their complete destinations remain in the editable Markdown source. HTTP,
+HTTPS, mail, telephone and document-anchor links retain supported hyperlink formatting.
+Strict rich-document import continues to reject unsafe links.
+
+The installer enables **Edit with ExEditor** in File Explorer. It supports Markdown,
+rich document formats, and plain/source files with arbitrary extensions, without
+changing existing default applications. On Windows 11 the command is in **Show more
+options**. RTFD bundle folders receive the same command. Rerun the installer to change
+the context-menu option; uninstalling removes ExEditor's own registrations. The optional
+**Open with** registration includes all five supported Markdown extensions.
+
+ExEditor currently requires Windows RichEdit. macOS and Linux applications and their
+file-manager integrations are not implemented; they require native editor ports.
+
+## Offline spelling, grammar and emoji
+
+**Edit > Spelling and Grammar > Language Tools** (also available in Settings) selects
+Harper English grammar and the spelling backend: Windows, Hunspell, Divvunspell or
+Voikko. The spelling language is explicit. Import a matching Hunspell `.aff`/`.dic`
+pair, a Divvun `.bhfst`/`.zhfst` dictionary, or a Voikko dictionary folder for the
+chosen engine. Imported dictionaries retain the licenses of their dictionary
+packages. Harper's curated English grammar resources are built in; disable grammar
+for non-English documents. The bundled Voikko runtime and its source/license notices
+ship with installer and portable packages. No separate office suite is required.
+
+Checks run offline in the background. Check While Typing shows temporary wavy marks;
+Show Suggestions offers corrections and explanations. A correction is applied only
+while the complete checked document and its UTF-16 range still match. Marks do not
+enter saved RTF, recovery buffers, or undo history. Language checks are bounded to
+1 MiB of text and 500 findings. Harper checks plain English; Markdown markup is not
+masked before language analysis.
+
+Emoji use an embedded, pinned Google **Noto Color Emoji** font under the SIL Open Font
+License. Whole Unicode graphemes are shaped against that font and its real color PNG
+glyphs are drawn over RichEdit, including fully selected emoji. Nothing is downloaded
+at runtime or installed into the system font directory. Ambiguous partial selections,
+mixed backgrounds and table cells retain native drawing. The original Unicode stays
+in both plain and rich documents. Interactive visual testing uses the downloaded GitHub binary in an isolated data folder.

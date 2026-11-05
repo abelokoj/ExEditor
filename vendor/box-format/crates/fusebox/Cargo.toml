@@ -1,0 +1,26 @@
+[package]
+name = "fusebox"
+version = "0.1.0"
+authors = ["Brendan Molloy <brendan@bbqsrc.net>"]
+edition = "2024"
+
+[lib]
+name = "fusebox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fusebox"
+path = "src/main.rs"
+
+[dependencies]
+box-format.workspace = true
+box-fst.workspace = true
+fastvint = { workspace = true, features = ["std"] }
+fuser.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc.workspace = true
+crossbeam-channel.workspace = true
+lru.workspace = true
+pathdiff.workspace = true

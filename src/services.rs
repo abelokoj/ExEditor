@@ -9,8 +9,7 @@ use windows::{
         Foundation::RPC_E_CHANGED_MODE,
         Globalization::{
             CORRECTIVE_ACTION_DELETE, CORRECTIVE_ACTION_GET_SUGGESTIONS, CORRECTIVE_ACTION_NONE,
-            CORRECTIVE_ACTION_REPLACE, GetUserDefaultLocaleName, ISpellChecker,
-            ISpellCheckerFactory, SpellCheckerFactory,
+            CORRECTIVE_ACTION_REPLACE, ISpellChecker, ISpellCheckerFactory, SpellCheckerFactory,
         },
         Media::Speech::{ISpVoice, SPF_ASYNC, SPF_IS_NOT_XML, SPF_PURGEBEFORESPEAK, SpVoice},
         System::Com::{
@@ -32,11 +31,11 @@ pub struct SpellingIssue {
     pub suggestions: Vec<String>,
 }
 
-/// Checks spelling with the Windows dictionary for the current user's language.
+/// Checks spelling with the Windows dictionary for the selected language.
 ///
 /// # Errors
 /// Returns an error for missing dictionaries, invalid input, or COM/provider failures.
-pub fn check_spelling(text: &str) -> Result<Vec<SpellingIssue>> {
+pub fn check_spelling_for_language(text: &str, language: &str) -> Result<Vec<SpellingIssue>> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
@@ -50,15 +49,15 @@ pub fn check_spelling(text: &str) -> Result<Vec<SpellingIssue>> {
         "document is too long for Windows spellchecking"
     );
     let _apartment = ComApartment::initialize()?;
-    let mut locale = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH includes the terminating NUL.
-    // SAFETY: locale is a writable buffer of the documented maximum length.
-    let locale_length = unsafe { GetUserDefaultLocaleName(&mut locale) };
     ensure!(
-        locale_length > 0,
-        "Windows could not determine the spelling language"
+        !language.is_empty()
+            && language.len() < 85
+            && language
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "Choose a spelling language such as en-US or fi-FI"
     );
-    let language = String::from_utf16(&locale[..locale_length as usize - 1])
-        .context("Windows returned an invalid language name")?;
+    let locale: Vec<u16> = language.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: COM is initialized on this thread and the factory has no outer object.
     let factory: ISpellCheckerFactory =
         unsafe { CoCreateInstance(&SpellCheckerFactory, None, CLSCTX_INPROC_SERVER) }
@@ -333,7 +332,7 @@ pub fn substitution(
     })
 }
 
-fn utf16_byte_offset(text: &str, offset: usize) -> Option<usize> {
+pub(crate) fn utf16_byte_offset(text: &str, offset: usize) -> Option<usize> {
     let mut units = 0;
     for (byte, ch) in text.char_indices() {
         if units == offset {

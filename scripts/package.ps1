@@ -31,10 +31,27 @@ if (-not (Test-Path -LiteralPath $applicationPath -PathType Leaf)) {
     throw 'The compiled exeditor.exe is missing.'
 }
 
+$proofingRoot = Join-Path $artifactRoot 'proofing'
+foreach ($required in @('libvoikko-1.dll', 'provenance.json', 'licenses', 'source')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $proofingRoot $required))) {
+        throw "The built proofing runtime is missing $required."
+    }
+}
+$proofingItem = Get-Item -LiteralPath $proofingRoot
+$proofingLinks = @(Get-ChildItem -LiteralPath $proofingRoot -Recurse -Force -Attributes ReparsePoint)
+if (($proofingItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $proofingLinks.Count -gt 0) {
+    throw 'The proofing runtime must contain files and directories, not links to outside paths.'
+}
+
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 Copy-Item -LiteralPath $applicationPath -Destination (Join-Path $packageRoot 'ExEditor.exe')
 Get-ChildItem -LiteralPath $releaseRoot -Filter '*.dll' -File | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $packageRoot
+}
+$bundledProofing = Join-Path $packageRoot 'proofing'
+New-Item -ItemType Directory -Path $bundledProofing -Force | Out-Null
+Get-ChildItem -LiteralPath $proofingRoot -Force | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $bundledProofing -Recurse
 }
 foreach ($documentName in @('README.md', 'LICENSE', 'CHANGELOG.md', 'Cargo.lock')) {
     $documentPath = Join-Path $projectRoot $documentName
@@ -44,7 +61,7 @@ foreach ($documentName in @('README.md', 'LICENSE', 'CHANGELOG.md', 'Cargo.lock'
 }
 
 
-foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter')) {
+foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter', 'noto-color-emoji')) {
     $licenseSource = Join-Path $projectRoot "assets\fonts\$family\OFL.txt"
     if (-not (Test-Path -LiteralPath $licenseSource -PathType Leaf)) {
         throw "The $family font license is missing."

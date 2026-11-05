@@ -1,0 +1,25 @@
+{
+  "family": "Noto Color Emoji",
+  "repository": "https://github.com/googlefonts/noto-emoji",
+  "commit": "99701e07d3d1fe1bdbcdb14964547f0fd592966f",
+  "license": "SIL Open Font License 1.1",
+  "license_file": "OFL.txt",
+  "assets": [
+    {
+      "file": "NotoColorEmoji.ttf",
+      "source_path": "2D/fonts/NotoColorEmoji.ttf",
+      "source_url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/99701e07d3d1fe1bdbcdb14964547f0fd592966f/2D/fonts/NotoColorEmoji.ttf",
+      "git_blob_sha1": "e605743d05f261634f0b3f68a439d9b557d8f335",
+      "sha256": "15671215ab769fdc7162a045d56fd7d7e477c51b04e6b3c761d914d8fdd6cc44",
+      "size_bytes": 10730124
+    },
+    {
+      "file": "OFL.txt",
+      "source_path": "2D/fonts/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/99701e07d3d1fe1bdbcdb14964547f0fd592966f/2D/fonts/LICENSE",
+      "git_blob_sha1": "d952d62c065f3f35fb83a173496e90b21525aef3",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+      "size_bytes": 4301
+    }
+  ]
+}

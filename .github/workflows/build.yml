@@ -58,6 +58,28 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Prepare the native proofing toolchain
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            autoconf
+            automake
+            libtool
+            make
+            pkgconf
+            autoconf-archive
+            python
+            git
+            curl
+
+      - name: Build the native proofing runtime
+        run: |
+          ./scripts/build-proofing-deps.ps1 -Msys2Root '${{ steps.msys2.outputs.msys2-location }}' -Destination artifacts/proofing
+
       - name: Check formatting
         run: |
           cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log
@@ -70,6 +92,10 @@ jobs:
 
       - name: Run noninteractive Rust tests
         run: |
+          $runtime = Join-Path $PWD 'artifacts/proofing'
+          $testRuntime = Join-Path $PWD 'target/debug/deps/proofing'
+          New-Item -ItemType Directory -Path $testRuntime -Force | Out-Null
+          Copy-Item -Path (Join-Path $runtime '*.dll') -Destination $testRuntime
           cargo test --locked --all-targets 2>&1 | Tee-Object -FilePath logs/tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -92,6 +118,11 @@ jobs:
           $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
           & $compiler "/DAppVersion=$version" "/DAppSource=$((Resolve-Path artifacts/ExEditor).Path)" scripts/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check installer shell integration
+        timeout-minutes: 10
+        run: |
+          ./scripts/test-shell-integration.ps1 -InstallerPath artifacts/installers/ExEditor-Setup-x64.exe -LogDirectory logs
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

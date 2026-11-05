@@ -156,7 +156,7 @@ pub fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>> {
     let mut page = String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
     html::push_html(&mut page, events);
     page.push_str("</body></html>");
-    let mut document = read_html(page.as_bytes(), directory)?;
+    let mut document = parse_html(page.as_bytes(), directory, HtmlLinks::Preview)?;
     // Read as a document: the app's text font and a little room between blocks.
     let mut paragraphs: Vec<&mut Paragraph> = Vec::new();
     for block in &mut document.blocks {
@@ -258,12 +258,18 @@ fn push_text(paragraph: &mut Paragraph, text: &str, style: &Style) {
     });
 }
 fn safe_link(link: &str) -> Result<String> {
+    let allowed = link.starts_with('#')
+        || link.split_once(':').is_some_and(|(scheme, rest)| {
+            ((scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
+                && rest.starts_with("//"))
+                || scheme.eq_ignore_ascii_case("mailto")
+                || scheme.eq_ignore_ascii_case("tel")
+        });
     ensure!(
-        link.starts_with("https://")
-            || link.starts_with("http://")
-            || link.starts_with("mailto:")
-            || link.starts_with("tel:")
-            || link.starts_with('#'),
+        allowed
+            && !link
+                .chars()
+                .any(|character| character.is_control() || character == '"'),
         "The document contains a link with an unsupported or unsafe URL scheme."
     );
     Ok(link.into())
@@ -1981,7 +1987,25 @@ fn html_style(element: ElementRef<'_>, base: &Style, paragraph: &mut Paragraph) 
     }
     style
 }
+#[derive(Clone, Copy)]
+enum HtmlLinks {
+    Strict,
+    Preview,
+}
+impl HtmlLinks {
+    fn read(self, link: &str) -> Result<Option<String>> {
+        match safe_link(link) {
+            Ok(link) => Ok(Some(link)),
+            // Preview retains the source; an inactive label must not reject the document.
+            Err(_) if matches!(self, Self::Preview) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
 fn read_html(bytes: &[u8], directory: &Path) -> Result<Document> {
+    parse_html(bytes, directory, HtmlLinks::Strict)
+}
+fn parse_html(bytes: &[u8], directory: &Path, links: HtmlLinks) -> Result<Document> {
     let (text, encoding, errors) = encoding_rs::Encoding::for_bom(bytes)
         .map(|(encoding, skip)| {
             let (text, _, errors) = encoding.decode(&bytes[skip..]);
@@ -2009,6 +2033,7 @@ fn read_html(bytes: &[u8], directory: &Path) -> Result<Document> {
         directory,
         &mut document.blocks,
         List::None,
+        links,
     )?;
     if document.blocks.is_empty() {
         document.blocks.push(Block::Paragraph(Paragraph::default()));
@@ -2024,6 +2049,7 @@ fn html_blocks(
     directory: &Path,
     blocks: &mut Vec<Block>,
     list: List,
+    links: HtmlLinks,
 ) -> Result<()> {
     ensure!(
         element.ancestors().count() <= MAX_HTML_DEPTH,
@@ -2057,7 +2083,7 @@ fn html_blocks(
                 }) =>
                 {
                     flush(&mut pending, blocks);
-                    html_blocks(child, style, directory, blocks, list)?;
+                    html_blocks(child, style, directory, blocks, list, links)?;
                 }
                 "p" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" => {
                     flush(&mut pending, blocks);
@@ -2067,14 +2093,14 @@ fn html_blocks(
                         ..Paragraph::default()
                     };
                     let style = html_style(child, style, &mut paragraph);
-                    html_inline(child, &style, directory, &mut paragraph)?;
+                    html_inline(child, &style, directory, &mut paragraph, links)?;
                     blocks.push(Block::Paragraph(paragraph));
                 }
                 "div" | "section" | "article" | "main" | "blockquote" => {
                     flush(&mut pending, blocks);
                     let mut paragraph = Paragraph::default();
                     let style = html_style(child, style, &mut paragraph);
-                    html_blocks(child, &style, directory, blocks, list)?;
+                    html_blocks(child, &style, directory, blocks, list, links)?;
                 }
                 "ul" | "ol" => {
                     flush(&mut pending, blocks);
@@ -2088,6 +2114,7 @@ fn html_blocks(
                         } else {
                             List::Number
                         },
+                        links,
                     )?;
                 }
                 "table" => {
@@ -2111,7 +2138,14 @@ fn html_blocks(
                             if cell.value().name() == "th" {
                                 cell_style.bold = true;
                             }
-                            html_blocks(cell, &cell_style, directory, &mut content, List::None)?;
+                            html_blocks(
+                                cell,
+                                &cell_style,
+                                directory,
+                                &mut content,
+                                List::None,
+                                links,
+                            )?;
                             let mut paragraphs = Vec::new();
                             for block in content {
                                 match block {
@@ -2129,7 +2163,7 @@ fn html_blocks(
                 }
                 _ => {
                     let style = html_style(child, style, &mut pending);
-                    html_inline(child, &style, directory, &mut pending)?;
+                    html_inline(child, &style, directory, &mut pending, links)?;
                 }
             }
         } else if let Some(text) = node.value().as_text() {
@@ -2167,6 +2201,7 @@ fn html_inline(
     style: &Style,
     directory: &Path,
     paragraph: &mut Paragraph,
+    links: HtmlLinks,
 ) -> Result<()> {
     ensure!(
         element.ancestors().count() <= MAX_HTML_DEPTH,
@@ -2180,9 +2215,9 @@ fn html_inline(
                 "br" => push_text(paragraph, "\n", &style),
                 "a" => {
                     if let Some(link) = child.value().attr("href") {
-                        style.link = Some(safe_link(link)?);
+                        style.link = links.read(link)?;
                     }
-                    html_inline(child, &style, directory, paragraph)?;
+                    html_inline(child, &style, directory, paragraph, links)?;
                 }
                 "img" => {
                     let source = child
@@ -2256,7 +2291,7 @@ fn html_inline(
                 "ul" | "ol" | "table" => bail!(
                     "A nested HTML list or table cannot be imported into an inline paragraph without changing its structure."
                 ),
-                _ => html_inline(child, &style, directory, paragraph)?,
+                _ => html_inline(child, &style, directory, paragraph, links)?,
             }
         } else if let Some(text) = node.value().as_text() {
             push_text(paragraph, &text.text, style);
@@ -2712,6 +2747,66 @@ fn write_odt(document: &Document) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn markdown_preview_keeps_relative_and_unsupported_link_labels() {
+        let source = "# Linked document\n\n[Relative](notes/next.md) and [Parent](../README.md).\n\n[Local](file:///C:/notes/example.md) and [Custom](obsidian://open?vault=notes).\n\n<a href=\"javascript:alert(1)\">Raw HTML label</a> and [Script](javascript:alert%281%29).\n\n[Web](HTTPS://example.com/page) and [Anchor](#linked-document).\n\nAfter the links, **bold text** and emoji 😀 remain.";
+        let rtf = markdown_to_rtf(source, Path::new(".")).expect("links do not abort preview");
+        let document = read_rtf(&rtf).expect("valid preview RTF");
+        let runs: Vec<_> = document
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                Block::Paragraph(paragraph) => paragraph.runs.iter().collect::<Vec<_>>(),
+                Block::Table(_) => Vec::new(),
+            })
+            .collect();
+        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+        for label in [
+            "Relative",
+            "Parent",
+            "Local",
+            "Custom",
+            "Raw HTML label",
+            "Script",
+            "After the links",
+            "😀",
+        ] {
+            assert!(text.contains(label), "missing {label}");
+        }
+        let links: Vec<_> = runs
+            .iter()
+            .filter_map(|run| run.style.link.as_deref())
+            .collect();
+        assert_eq!(links, ["HTTPS://example.com/page", "#linked-document"]);
+        assert!(
+            runs.iter()
+                .any(|run| run.style.bold && run.text.contains("bold text"))
+        );
+    }
+    #[test]
+    fn unsupported_links_remain_rejected_by_strict_document_import() {
+        for link in [
+            "javascript:alert(1)",
+            "file:///C:/app.exe",
+            "shell:AppsFolder",
+            "data:text/html,test",
+            "notes/file.md",
+            "https://example.com/\nnext",
+            "https://example.com/\"quoted",
+        ] {
+            assert!(safe_link(link).is_err(), "unsafe link {link:?}");
+        }
+        for link in [
+            "https://example.com",
+            "HTTP://example.com",
+            "MAILTO:user@example.com",
+            "tel:+123",
+            "#section",
+        ] {
+            assert_eq!(safe_link(link).expect("allowed link"), link);
+        }
+        assert!(read_html(b"<a href=\"javascript:alert(1)\">label</a>", Path::new(".")).is_err());
+    }
     #[test]
     fn markdown_renders_nested_lists_tables_and_tasks() {
         let source = "# Title

@@ -331,11 +331,25 @@ impl Settings {
                                     .gap(px(10.))
                                     .child(self.checkbox(
                                         "default-spelling",
-                                        "Check spelling as you type",
+                                        "Check spelling and grammar",
                                         self.draft.spellcheck,
                                         |p, value| p.spellcheck = value,
                                         cx,
                                     ))
+                                    .child(
+                                        self.button(
+                                            "language-tools-settings",
+                                            "Language Tools…",
+                                            cx,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, _| {
+                                                this.commands
+                                                    .borrow_mut()
+                                                    .push_back(Command::LanguageTools);
+                                            }),
+                                        ),
+                                    )
                                     .child(self.checkbox(
                                         "default-ruler",
                                         "Show ruler",

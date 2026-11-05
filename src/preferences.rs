@@ -29,6 +29,7 @@ pub struct Preferences {
     pub wrap_to_page: bool,
     pub show_ruler: bool,
     pub spellcheck: bool,
+    pub proofing: crate::proofing::ProofingOptions,
     pub smart_quotes: bool,
     pub smart_dashes: bool,
     pub automatic_links: bool,
@@ -58,6 +59,7 @@ impl Default for Preferences {
             wrap_to_page: false,
             show_ruler: true,
             spellcheck: true,
+            proofing: crate::proofing::ProofingOptions::default(),
             smart_quotes: true,
             smart_dashes: true,
             automatic_links: true,
@@ -125,6 +127,7 @@ impl Preferences {
     }
 
     fn validate(&self) -> Result<()> {
+        self.proofing.validate()?;
         crate::names::validate_prefix(&self.untitled_prefix)?;
         ensure!(
             !self.rich_font.trim().is_empty() && self.rich_font.len() <= 256,

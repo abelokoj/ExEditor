@@ -14,7 +14,7 @@ use std::{
 };
 use windows::{
     Win32::UI::Controls::RichEdit::{
-        ITextDocument, tomApplyNow, tomApplyTmp, tomAutoColor, tomUndefined,
+        ITextDocument, tomApplyNow, tomApplyTmp, tomAutoColor, tomUndefined, tomWave,
     },
     core::{IUnknown, Interface},
 };
@@ -382,6 +382,7 @@ pub struct NativeEditor {
     /// Light color standing in for automatic text on a dark document.
     text_override: Cell<Option<u32>>,
     syntax_active: Cell<bool>,
+    proofing_active: Cell<bool>,
     _ui_thread: PhantomData<Rc<()>>,
 }
 impl NativeEditor {
@@ -489,6 +490,7 @@ impl NativeEditor {
             read_only: Cell::new(false),
             text_override: Cell::new(None),
             syntax_active: Cell::new(false),
+            proofing_active: Cell::new(false),
             _ui_thread: PhantomData,
         };
         editor.send(EM_EXLIMITTEXT, 0, 64 * 1024 * 1024);
@@ -503,7 +505,7 @@ impl NativeEditor {
             EMOJI_TYPOGRAPHY,
             EMOJI_TYPOGRAPHY as isize,
         );
-        editor.set_spellcheck(true);
+        editor.set_spellcheck(false);
         editor.set_wrap(true);
         editor.set_margins(8, 8);
         editor.set_background(0xffffff);
@@ -1284,6 +1286,55 @@ impl NativeEditor {
             unsafe {
                 font.Reset(tomApplyTmp)?;
                 font.SetForeColor(foreground)?;
+                font.Reset(tomApplyNow)?;
+            }
+        }
+        Ok(())
+    }
+    /// Display-only marks never enter saved RTF or the user's undo history.
+    pub fn set_proofing_marks(&self, ranges: &[Range<usize>]) -> Result<()> {
+        if ranges.is_empty() && !self.proofing_active.get() {
+            return Ok(());
+        }
+        let length = i32::try_from(self.text_length())?;
+        for range in ranges {
+            ensure!(
+                range.start <= range.end && range.end <= length as usize,
+                "A language-tool finding is outside the document"
+            );
+        }
+        let _quiet = QuietEdit::new(self)?;
+        let document = self.tom_document()?;
+        if self.proofing_active.get() {
+            Self::restore_underlines(&document, 0, length)?;
+        }
+        for range in ranges.iter().filter(|range| !range.is_empty()) {
+            // SAFETY: validated UTF-16 bounds in this UI-thread document.
+            unsafe {
+                let font = document
+                    .Range(range.start as i32, range.end as i32)?
+                    .GetFont()?;
+                font.Reset(tomApplyTmp)?;
+                font.SetUnderline(tomWave.0)?;
+                font.Reset(tomApplyNow)?;
+            }
+        }
+        self.proofing_active.set(!ranges.is_empty());
+        Ok(())
+    }
+    fn restore_underlines(document: &ITextDocument, start: i32, end: i32) -> Result<()> {
+        // SAFETY: the live range reads canonical formatting, excluding temporary marks.
+        let font = unsafe { document.Range(start, end)?.GetFont()? };
+        let original = unsafe { font.GetUnderline()? };
+        if original == tomUndefined.0 && end - start > 1 {
+            let middle = start + (end - start) / 2;
+            Self::restore_underlines(document, start, middle)?;
+            Self::restore_underlines(document, middle, end)?;
+        } else if original != tomUndefined.0 {
+            // SAFETY: only the temporary underline changes; canonical styles stay intact.
+            unsafe {
+                font.Reset(tomApplyTmp)?;
+                font.SetUnderline(original)?;
                 font.Reset(tomApplyNow)?;
             }
         }
@@ -2490,6 +2541,44 @@ mod tests {
             .set_text_override(None)
             .expect("remove display override");
         assert_eq!(editor.rtf().expect("restored RTF"), before);
+    }
+    #[test]
+    fn language_marks_preserve_rich_styles_selection_and_undo() {
+        let test = hidden_editor();
+        let editor = &test.editor;
+        editor
+            .set_rtf(br"{\rtf1\ansi\ul styled\ul0\par bad word}")
+            .expect("rich source");
+        editor.mark_saved();
+        editor.select_range(0..3).expect("selection");
+        let original = editor.rtf().expect("canonical RTF");
+        editor
+            .set_proofing_marks(&[7..10])
+            .expect("temporary marks");
+        assert_eq!(editor.selection(), 0..3);
+        assert!(!editor.is_modified());
+        assert_eq!(editor.rtf().expect("marked RTF"), original);
+        editor.select_range(7..10).expect("marked run");
+        assert!(
+            !editor.formatting().underline,
+            "display marks are not document styling"
+        );
+        editor
+            .adapt_automatic_text()
+            .expect("display colors coexist");
+        editor.set_proofing_marks(&[]).expect("clear marks");
+        assert_eq!(editor.rtf().expect("unmarked RTF"), original);
+        editor.select_range(0..1).expect("styled run");
+        assert!(
+            editor.formatting().underline,
+            "the user's own underline survives"
+        );
+        let end = editor.text_length();
+        editor.select_range(end..end).expect("caret");
+        editor.replace_current("!").expect("edit");
+        editor.set_proofing_marks(&[7..10]).expect("new marks");
+        editor.execute(EditCommand::Undo).expect("one undo");
+        assert_eq!(editor.text().expect("undone text"), "styled\nbad word");
     }
     #[test]
     fn preview_leaves_source_undo_selection_and_unsaved_edits_intact() {

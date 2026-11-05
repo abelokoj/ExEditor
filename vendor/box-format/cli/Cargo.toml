@@ -1,0 +1,50 @@
+[package]
+name = "box-cli"
+description = "Box open standard archiver binary."
+version = "0.4.0"
+authors = ["Brendan Molloy <brendan@bbqsrc.net>"]
+edition = "2024"
+license = "EUPL-1.2"
+repository = "https://github.com/bbqsrc/box"
+
+[[bin]]
+name = "box"
+path = "src/main.rs"
+
+[dependencies]
+mimalloc = { workspace = true, optional = true }
+box-format.workspace = true
+fastvint = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+async-walkdir.workspace = true
+futures.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+glob.workspace = true
+humansize.workspace = true
+byteorder.workspace = true
+chrono.workspace = true
+blake3 = { workspace = true, features = ["digest"] }
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wild.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+textwrap.workspace = true
+num_cpus.workspace = true
+
+[features]
+default = ["mimalloc"]
+# The bundled allocator. Off where the platform's malloc already is
+# mimalloc — a musl distribution linking it twice gets duplicate mi_*
+# symbols at static link.
+mimalloc = ["dep:mimalloc"]
+selfextract = []
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+xattr.workspace = true

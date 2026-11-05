@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-05T18:08:58-05:00 — Markdown opening, Explorer integration, Noto emoji and offline language tools (local/uncommitted source)
+
+- Markdown previews preserve unsupported, relative, local and custom-scheme link labels instead of rejecting the whole document. Source destinations remain intact; inactive links cannot launch unsafe schemes. Strict rich-document conversion still rejects unsafe links; permitted schemes now compare without case sensitivity and reject controls/quotes.
+- Added per-user Edit with ExEditor Explorer verbs for files and RTFD bundle folders, enabled by default in the installer without changing default applications. Fixed named Open With values and added all Markdown extensions. Windows 11 uses Show more options; macOS/Linux native apps and file-manager integration remain unimplemented.
+- Embedded pinned Google Noto Color Emoji with verified OFL/provenance. Whole-grapheme shaping draws the font's actual color bitmap glyphs, including full selections, with bounded caches and stable font/DPI/zoom geometry. Ambiguous partial selections, table cells and mixed backgrounds retain native drawing.
+- Integrated offline Harper English grammar, Hunspell-compatible Spellbook dictionaries, pinned Divvunspell finite-state dictionaries and the packaged VFST-only Voikko shared runtime. Language Tools selects language/backend/local dictionary. Checks run off the interface thread with a 1 MiB text/500-finding bound; suggestions verify the complete checked document before applying Unicode-safe corrections. Temporary wavy marks preserve saved RTF, original styles and undo history.
+- Vendored the exact box-format source with its original licenses and a manifest-only compression-wrapper alias to resolve Harper/Divvun's conflicting native LZMA dependencies. The lockfile resolves successfully. Native Voikko and proofing source/license notices are built and packaged on GitHub; no separately installed office suite is used.
+- Added regression source for link fallback/safety, real Noto color glyphs and sequences, selected glyphs, rich-text marks, stale background checks, Harper grammar, Hunspell affixes/encoding, a real Divvun fixture and the actual packaged Voikko ABI/version. Added GitHub-only installer install/task/uninstall/default-preservation checks.
+- Validation so far: local source formatting, whitespace checks, PowerShell static parsing and dependency resolution only. No local app compilation or unit-test execution. GitHub build/runtime results are pending. The user now authorizes running/testing downloaded GitHub binaries locally in isolated test data; all downloads belong under dist/ using its dated layout. Personal dev_notes remain ignored and unpublished.
+
 ## 2026-11-05T16:58:10-05:00 — GitHub installer validation (recording time)
 
 - GitHub run [42115720539](https://github.com/abelokoj/ExEditor/actions/runs/42115720539) validated committed application source f40961777f2f97d97e24c9d6f9f75af030aea8ba: formatting and strict Clippy passed, all 97 regression tests passed, and the release executable, portable package and installer were built and uploaded successfully.
