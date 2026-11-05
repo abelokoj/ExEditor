@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05T16:46:07-05:00 — Atomic rich line-edit undo (local/uncommitted)
+
+- Kept rich fragment imports inside the caller-owned undo collection; nested stream collections had prematurely ended grouping, so one Undo only reversed the last fragment. Normal standalone rich insertions retain their own collection.
+- Extended the native regression to check the original bold style after Undo and the full moved text after one Redo.
+- Validation: GitHub formatting and strict Clippy passed; 96 of 97 tests passed, exposing this undo failure. This correction has local formatting/whitespace checks only; its GitHub rerun is pending. No local compilation or interactive testing.
+
 ## 2026-11-05T16:38:12-05:00 — Command palette diagnostic corrections (local/uncommitted)
 
 - Simplified the palette command variant and conditional invocation after GitHub strict Clippy reported enum_variant_names and collapsible_if. No shortcut behavior changed.

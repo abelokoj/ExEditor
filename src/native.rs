@@ -985,7 +985,7 @@ impl NativeEditor {
             for piece in pieces {
                 match piece {
                     crate::document::DocumentContent::Plain(text) => self.replace_current(&text)?,
-                    crate::document::DocumentContent::Rich(rtf) => self.stream_rtf(&rtf, true)?,
+                    crate::document::DocumentContent::Rich(rtf) => self.read_rtf(&rtf, true)?,
                 }
                 let end = self.selection().end;
                 self.select_range(end..end)?;
@@ -1002,7 +1002,7 @@ impl NativeEditor {
             let unchanged = original_length - (edit.range.end - edit.range.start);
             let current_end = edit.range.start + self.text_length().saturating_sub(unchanged);
             self.select_range(edit.range.start..current_end)?;
-            self.stream_rtf(&original, true)
+            self.read_rtf(&original, true)
                 .context("Restoring the document after the line edit failed")?;
             self.select_range(previous_selection)?;
             if !previous_modified {
@@ -1738,6 +1738,15 @@ impl NativeEditor {
         Ok(EditCollection(document))
     }
     fn stream_rtf(&self, bytes: &[u8], selection: bool) -> Result<()> {
+        let _edit = if selection {
+            Some(self.begin_collection()?)
+        } else {
+            None
+        };
+        self.read_rtf(bytes, selection)
+    }
+    // A caller-owned undo collection must span every fragment without nested end calls.
+    fn read_rtf(&self, bytes: &[u8], selection: bool) -> Result<()> {
         ensure!(
             !selection || !self.read_only.get(),
             "the document is locked"
@@ -1746,11 +1755,6 @@ impl NativeEditor {
             bytes.len() <= MAX_DOCUMENT_BYTES,
             "the rich-text content is too large"
         );
-        let _edit = if selection {
-            Some(self.begin_collection()?)
-        } else {
-            None
-        };
         let mut input = InputStream { bytes, cursor: 0 };
         let mut stream = EditStream {
             cookie: (&mut input as *mut InputStream<'_>) as usize,
@@ -2526,6 +2530,10 @@ mod tests {
         assert!(editor.formatting().bold, "moved run keeps its style");
         editor.execute(EditCommand::Undo).expect("one undo");
         assert_eq!(editor.text().expect("restored"), before);
+        editor.select_range(0..1).expect("original run");
+        assert!(editor.formatting().bold, "undo restores the original style");
+        editor.execute(EditCommand::Redo).expect("one redo");
+        assert_eq!(editor.text().expect("redone"), "beta\nalpha");
     }
     #[test]
     fn print_temporary_color_mask_is_restored_on_early_exit() {
