@@ -22,7 +22,7 @@ use windows::{
             Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
             Gdi::HDC,
         },
-        UI::Controls::RichEdit::ITextDocument,
+        UI::Controls::RichEdit::{ITextDocument, tomConstants},
     },
     core::{IUnknown, Interface, w},
 };
@@ -39,7 +39,7 @@ const EM_GETOLEINTERFACE: u32 = WM_USER + 60;
 const EM_GETTEXTRANGE: u32 = WM_USER + 75;
 const WM_GETTEXTLENGTH: u32 = 0x000E;
 /// tom.h: tomStart | tomClientCoord with TA_BASELINE | TA_LEFT.
-const POINT_FLAGS: i32 = 32 | 256 | 24;
+const POINT_FLAGS: tomConstants = tomConstants(32 | 256 | 24);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
