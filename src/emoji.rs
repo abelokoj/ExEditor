@@ -258,7 +258,7 @@ fn rasterize(face: &rustybuzz::Face<'_>, text: &str) -> Option<RasterRun> {
 /// PNG has straight RGBA; Direct2D's BGRA bitmaps require premultiplied channels.
 fn premultiply_rgba(pixels: &mut [u8]) {
     let channel = |value: u8, alpha: u8| ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8;
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let [r, g, b, a] = [pixel[0], pixel[1], pixel[2], pixel[3]];
         pixel.copy_from_slice(&[channel(b, a), channel(g, a), channel(r, a), a]);
     }
@@ -1117,7 +1117,7 @@ mod tests {
             (glyph.width * glyph.height * 4) as usize
         );
         let mut colors = std::collections::HashSet::new();
-        for pixel in glyph.pixels.chunks_exact(4) {
+        for pixel in glyph.pixels.as_chunks::<4>().0 {
             assert!(pixel[..3].iter().all(|channel| *channel <= pixel[3]));
             if pixel[3] == 255 {
                 colors.insert([pixel[0], pixel[1], pixel[2]]);

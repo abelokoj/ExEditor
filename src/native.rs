@@ -2553,7 +2553,7 @@ mod tests {
         editor.select_range(0..3).expect("selection");
         let original = editor.rtf().expect("canonical RTF");
         editor
-            .set_proofing_marks(&[7..10])
+            .set_proofing_marks(std::slice::from_ref(&(7..10)))
             .expect("temporary marks");
         assert_eq!(editor.selection(), 0..3);
         assert!(!editor.is_modified());
@@ -2576,7 +2576,9 @@ mod tests {
         let end = editor.text_length();
         editor.select_range(end..end).expect("caret");
         editor.replace_current("!").expect("edit");
-        editor.set_proofing_marks(&[7..10]).expect("new marks");
+        editor
+            .set_proofing_marks(std::slice::from_ref(&(7..10)))
+            .expect("new marks");
         editor.execute(EditCommand::Undo).expect("one undo");
         assert_eq!(editor.text().expect("undone text"), "styled\nbad word");
     }

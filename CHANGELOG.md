@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05T18:52:13-05:00 — Strict lint corrections and earlier build logs (local/uncommitted)
+
+- GitHub type-checked the app and identified only strict lint errors in fixed-size pixel loops and single-range test slices. Used typed four-byte chunks and an explicit one-range slice without changing behavior.
+- Publish build records before the large Cargo cache save, reducing diagnostic retrieval delays. Parley is the user's chosen future cross-platform foundation; that migration is explicitly deferred until after testing this current build.
+- Validation: local formatting/whitespace only for this correction. Native Voikko packaging and app type checking succeeded on GitHub; regression tests, installer and local downloaded-binary testing remain pending. No local compilation.
+
 ## 2026-11-05T18:40:21-05:00 — Language-tool API and test-import corrections (local/uncommitted)
 
 - GitHub accepted the Divvun memory-map alignment and reached ExEditor source. Imported the toolkit Selectable trait, used Divvun's inherent default constructor, and kept the test module's imports explicit to avoid GPUI attribute-macro recursion.

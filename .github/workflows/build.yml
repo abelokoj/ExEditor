@@ -157,17 +157,6 @@ jobs:
           retention-days: 14
           compression-level: 6
 
-      - name: Save dependency compilation cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-${{ github.run_id }}
-
       - name: Upload build records
         if: always()
         uses: actions/upload-artifact@v4
@@ -178,4 +167,15 @@ jobs:
             Cargo.lock
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Save dependency compilation cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-${{ github.run_id }}
 
