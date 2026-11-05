@@ -22,7 +22,8 @@ OutputBaseFilename=ExEditor-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\ExEditor.exe
+SetupIconFile=..\assets\ExEditor.ico
+UninstallDisplayIcon={app}\ExEditor.exe,0
 CloseApplications=yes
 RestartApplications=no
 [Tasks]
@@ -31,9 +32,10 @@ Name: "openwith"; Description: "Add ExEditor to the Open with menu (keep current
 [Files]
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
-Name: "{group}\ExEditor"; Filename: "{app}\ExEditor.exe"
-Name: "{autodesktop}\ExEditor"; Filename: "{app}\ExEditor.exe"; Tasks: desktopicon
+Name: "{group}\ExEditor"; Filename: "{app}\ExEditor.exe"; IconFilename: "{app}\ExEditor.exe"; IconIndex: 0
+Name: "{autodesktop}\ExEditor"; Filename: "{app}\ExEditor.exe"; IconFilename: "{app}\ExEditor.exe"; IconIndex: 0; Tasks: desktopicon
 [Registry]
+Root: HKCU; Subkey: "Software\Classes\ExEditor.Document\DefaultIcon"; ValueType: string; ValueData: """{app}\ExEditor.exe"",0"; Tasks: openwith
 Root: HKCU; Subkey: "Software\Classes\ExEditor.Document"; ValueType: string; ValueData: "ExEditor document"; Flags: uninsdeletekey; Tasks: openwith
 Root: HKCU; Subkey: "Software\Classes\ExEditor.Document\shell\open\command"; ValueType: string; ValueData: """{app}\ExEditor.exe"" ""%1"""; Tasks: openwith
 Root: HKCU; Subkey: "Software\Classes\.txt\OpenWithProgids"; ValueType: none; ValueName: "ExEditor.Document"; Flags: uninsdeletevalue; Tasks: openwith

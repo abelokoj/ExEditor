@@ -1,5 +1,7 @@
 //! Document windows and commands shared by menus, toolbar, and native shortcuts.
 use crate::{
+    color::{ColorTarget, Rgba},
+    color_picker,
     dialogs::{self, Commands, Field, FormKind, MenuEntry},
     document::{
         self, DocumentContent, DocumentFormat, FileFingerprint, LineEnding, RecoveryDocument,
@@ -8,6 +10,7 @@ use crate::{
     native::{Alignment, Case, EditCommand, FormatState, ListKind, NativeEditor, PageSettings},
     preferences::{Appearance, Preferences},
     services::{self, Speech},
+    session::{self, BufferLease, RestoredBuffer},
     ui::{self, Palette},
 };
 use anyhow::{Context as _, Result, bail, ensure};
@@ -44,7 +47,6 @@ pub enum MenuKind {
     Sizes,
     Weights,
     Spacing,
-    Colors,
     Versions,
 }
 #[derive(Clone, Debug)]
@@ -89,6 +91,8 @@ pub enum Command {
     Foreground,
     CustomSpacing,
     Background,
+    InsertColorCode,
+    ApplyColor(ColorTarget, Rgba, String),
     Table,
     Link,
     Image,
@@ -140,48 +144,73 @@ pub fn open_document(path: Option<PathBuf>, cx: &mut App) {
     }
 }
 
-pub fn offer_recovery(cx: &mut App) {
-    match document::recover_documents() {
-        Ok(recoveries) => {
-            for recovery in recoveries {
-                if !confirm(
-                    "Recover unsaved document?",
-                    &format!("Restore the unsaved changes from {}?", recovery.saved_at),
-                ) {
-                    continue;
-                }
-                let options = WindowOptions {
-                    window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
-                    titlebar: None,
-                    ..Default::default()
-                };
-                let result = gpui_kit::open_window(options, cx, move |window, cx| {
-                    cx.new(|cx| {
-                        let mut view = EditorWindow::new(None, window, cx);
-                        if let Err(error) = view
-                            .editor()
-                            .and_then(|e| e.set_plain_text_mode(recovery.format.is_plain()))
-                            .and_then(|()| view.load_content(&recovery.content))
-                        {
-                            show_error(&error);
+/// Restores protected buffers automatically, even when startup also opens files.
+pub fn restore_session(cx: &mut App) -> bool {
+    let restored = match session::restore_buffers() {
+        Ok(restored) => restored,
+        Err(error) => {
+            show_error(&error);
+            return false;
+        }
+    };
+    if !restored.warnings.is_empty() {
+        show_error(&anyhow::anyhow!(restored.warnings.join("\n\n")));
+    }
+    if restored.buffers.is_empty() {
+        return false;
+    }
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
+        window_min_size: Some(size(px(590.), px(300.))),
+        titlebar: None,
+        app_owns_titlebar_drag: true,
+        app_id: Some("ExEditor".into()),
+        window_decorations: Some(WindowDecorations::Client),
+        ..Default::default()
+    };
+    match gpui_kit::open_window(options, cx, move |window, cx| {
+        cx.new(|cx| {
+            let mut view = EditorWindow::new(None, window, cx);
+            let parent = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw())
+            {
+                Ok(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
+                _ => None,
+            };
+            let mut count = 0;
+            for buffer in restored.buffers {
+                let result = parent
+                    .context("The recovery window could not create its text editor")
+                    .and_then(|parent| DocumentTab::restore(&view.prefs, parent, buffer));
+                match result {
+                    Ok(tab) => {
+                        if count == 0 {
+                            view.doc = tab;
                         } else {
-                            view.doc.path = recovery.original_path;
-                            view.doc.format = recovery.format;
-                            view.doc.encoding = recovery.encoding;
-                            view.doc.line_ending = recovery.line_ending;
-                            view.doc.recovery_id = recovery.id;
-                            view.doc.dirty = true;
-                            view.doc.rich = !view.doc.format.is_plain();
+                            if let Some(editor) = &tab.native {
+                                editor.set_visible(false);
+                            }
+                            view.tabs.push(Some(tab));
                         }
-                        view
-                    })
-                });
-                if let Err(error) = result {
-                    show_error(&error);
+                        count += 1;
+                    }
+                    Err(error) => show_error(
+                        &error.context("The unsaved snapshot is still protected on disk"),
+                    ),
                 }
             }
+            view.show_tabs = count > 1;
+            if let Some(editor) = &view.doc.native {
+                editor.set_visible(true);
+                editor.focus();
+            }
+            view
+        })
+    }) {
+        Ok(_) => true,
+        Err(error) => {
+            show_error(&error);
+            false
         }
-        Err(error) => show_error(&error),
     }
 }
 
@@ -201,6 +230,11 @@ struct DocumentTab {
     formatting: FormatState,
     page: PageSettings,
     recovery_id: String,
+    buffer_lease: Option<BufferLease>,
+    buffered: bool,
+    retain_buffer: bool,
+    buffer_error_reported: bool,
+    restored_buffer: bool,
     last_recovery: Instant,
     last_text: String,
     find_text: String,
@@ -307,9 +341,11 @@ impl EditorWindow {
     fn load_content(&self, content: &DocumentContent) -> Result<()> {
         let editor = self.editor()?;
         match content {
-            DocumentContent::Plain(text) => editor.set_text(text),
-            DocumentContent::Rich(bytes) => editor.set_rtf(bytes),
+            DocumentContent::Plain(text) => editor.set_text(text)?,
+            DocumentContent::Rich(bytes) => editor.set_rtf(bytes)?,
         }
+        editor.mark_modified();
+        Ok(())
     }
     fn read_file(&mut self, path: &Path) -> Result<()> {
         let format = DocumentFormat::from_path(path)?;
@@ -335,6 +371,9 @@ impl EditorWindow {
         self.doc.fingerprint = Some(loaded.fingerprint);
         self.doc.dirty = false;
         self.editor()?.mark_saved();
+        document::remove_recovery(&self.doc.recovery_id)?;
+        self.doc.buffered = false;
+        self.doc.restored_buffer = false;
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
@@ -376,6 +415,9 @@ impl EditorWindow {
             };
             self.command(command, window, cx);
         }
+        let Some(editor) = self.doc.native.clone() else {
+            return;
+        };
         self.doc.dirty = editor.is_modified() || self.doc.dirty;
         self.doc.formatting = editor.formatting();
         if let Ok(text) = editor.text()
@@ -399,14 +441,22 @@ impl EditorWindow {
             }
             self.doc.last_text = editor.text().unwrap_or(text);
         }
-        if self.doc.dirty
-            && self.doc.last_recovery.elapsed()
-                >= Duration::from_secs(self.prefs.autosave_seconds.max(5))
+        let needs_buffer = editor.is_modified()
+            || (!self.doc.buffered && (self.doc.dirty || self.doc.path.is_none()))
+            || (self.doc.dirty
+                && self.doc.last_recovery.elapsed()
+                    >= Duration::from_secs(self.prefs.autosave_seconds.max(5)));
+        if needs_buffer
+            && (!self.doc.buffer_error_reported
+                || self.doc.last_recovery.elapsed() >= Duration::from_secs(5))
         {
-            if let Err(error) = self.recover() {
-                show_error(&error);
+            if let Err(error) = self.doc.persist_buffer() {
+                if !self.doc.buffer_error_reported {
+                    show_error(&error);
+                }
+                self.doc.buffer_error_reported = true;
+                self.doc.last_recovery = Instant::now();
             }
-            self.doc.last_recovery = Instant::now();
         }
         if self.doc.last_external_check.elapsed() > Duration::from_secs(3) {
             if let (Some(path), Some(old)) = (&self.doc.path, &self.doc.fingerprint)
@@ -433,17 +483,6 @@ impl EditorWindow {
         ));
         cx.notify();
     }
-    fn recover(&self) -> Result<()> {
-        document::write_recovery(&RecoveryDocument {
-            id: self.doc.recovery_id.clone(),
-            original_path: self.doc.path.clone(),
-            format: self.doc.format,
-            content: self.content()?,
-            encoding: self.doc.encoding,
-            line_ending: self.doc.line_ending,
-            saved_at: chrono::Local::now().to_rfc3339(),
-        })
-    }
     fn save(&mut self, as_new: bool) -> Result<bool> {
         let path = if as_new || self.doc.path.is_none() {
             let chosen = FileDialog::new()
@@ -469,12 +508,20 @@ impl EditorWindow {
                 .clone()
                 .context("A saved document must have a path")?
         };
+        let changed_on_disk = match (&self.doc.fingerprint, document::fingerprint(&path)) {
+            (Some(old), Ok(now)) => old != &now,
+            _ => false,
+        };
         if !as_new
-            && let (Some(old), Ok(now)) = (&self.doc.fingerprint, document::fingerprint(&path))
-            && old != &now
+            && path.try_exists()?
+            && (self.doc.restored_buffer || changed_on_disk)
             && !confirm(
-                "Replace changed document?",
-                "This file has changed outside ExEditor. Replace it with your current document?",
+                "Replace saved document?",
+                if self.doc.restored_buffer {
+                    "This recovered buffer may differ from the file currently on disk. Replace the saved file with your recovered changes? Choose Save As to keep both."
+                } else {
+                    "This file has changed outside ExEditor. Replace it with your current document?"
+                },
             )
         {
             return Ok(false);
@@ -509,75 +556,57 @@ impl EditorWindow {
         self.doc.dirty = false;
         self.editor()?.mark_saved();
         document::remove_recovery(&self.doc.recovery_id)?;
+        self.doc.buffered = false;
+        self.doc.restored_buffer = false;
         self.prefs.add_recent(path);
         self.prefs.save()?;
         Ok(true)
     }
-    fn confirm_current(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
-        if self.doc.native.as_ref().is_some_and(|e| e.is_modified()) {
-            self.doc.dirty = true;
-        }
+    fn confirm_current(&mut self) -> Result<bool> {
+        self.doc.dirty |= self.editor()?.is_modified();
         if !self.doc.dirty {
-            let _ = document::remove_recovery(&self.doc.recovery_id);
-            return true;
+            document::remove_recovery(&self.doc.recovery_id)?;
+            self.doc.retain_buffer = false;
+            return Ok(true);
         }
         let result = MessageDialog::new()
             .set_title(format!("Save changes to ‘{}’?", self.name()))
-            .set_description("Your changes will be lost if you don't save them.")
+            .set_description("Closing this tab discards its unsaved buffer unless you save it. Closing the window keeps all buffers for the next startup.")
             .set_buttons(MessageButtons::YesNoCancelCustom(
-                "Save".into(),
-                "Don't Save".into(),
-                "Cancel".into(),
-            ))
-            .show();
-        match result {
-            MessageDialogResult::Yes => match self.save(false) {
-                Ok(saved) => saved,
-                Err(error) => {
-                    show_error(&error);
-                    false
-                }
-            },
+                "Save".into(), "Discard".into(), "Cancel".into(),
+            )).show();
+        let saved = match result {
+            MessageDialogResult::Yes => self.save(false)?,
+            MessageDialogResult::Custom(ref label) if label == "Save" => self.save(false)?,
             MessageDialogResult::No => {
-                let _ = document::remove_recovery(&self.doc.recovery_id);
+                document::remove_recovery(&self.doc.recovery_id)?;
                 true
             }
-            MessageDialogResult::Custom(label) if label == "Save" => match self.save(false) {
-                Ok(saved) => saved,
-                Err(error) => {
-                    show_error(&error);
-                    false
-                }
-            },
-            MessageDialogResult::Custom(label) if label == "Don't Save" => {
-                let _ = document::remove_recovery(&self.doc.recovery_id);
+            MessageDialogResult::Custom(ref label) if label == "Discard" => {
+                document::remove_recovery(&self.doc.recovery_id)?;
                 true
             }
             _ => false,
+        };
+        if saved {
+            self.doc.retain_buffer = false;
         }
+        Ok(saved)
     }
-    fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let original = self.active_tab;
-        if !self.confirm_current(window, cx) {
-            return false;
-        }
-        for index in 0..self.tabs.len() {
-            if index == original {
-                continue;
+    fn confirm_close(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        let result = self.doc.persist_buffer().and_then(|()| {
+            for tab in self.tabs.iter_mut().flatten() {
+                tab.persist_buffer()?;
             }
-            if let Err(error) = self.switch_tab(index) {
-                show_error(&error);
-                return false;
-            }
-            if !self.confirm_current(window, cx) {
-                return false;
+            Ok(())
+        });
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                show_error(&error.context("ExEditor must keep this window open because its unsaved buffer could not be protected. Save the affected document or free disk space, then try closing again."));
+                false
             }
         }
-        if let Err(error) = self.switch_tab(original) {
-            show_error(&error);
-            return false;
-        }
-        true
     }
     fn switch_tab(&mut self, index: usize) -> Result<()> {
         ensure!(
@@ -587,9 +616,7 @@ impl EditorWindow {
         if index == self.active_tab {
             return Ok(());
         }
-        if self.doc.dirty {
-            self.recover()?;
-        }
+        self.doc.persist_buffer()?;
         let next = self.tabs[index]
             .take()
             .context("The document tab is unavailable")?;
@@ -621,8 +648,8 @@ impl EditorWindow {
         self.show_tabs = true;
         self.switch_tab(self.tabs.len() - 1)
     }
-    fn close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
-        if !self.confirm_current(window, cx) {
+    fn close_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
+        if !self.confirm_current()? {
             return Ok(());
         }
         if self.tabs.len() == 1 {
@@ -997,23 +1024,51 @@ impl EditorWindow {
                 window,
                 cx,
             ),
-            Command::Foreground => self.show_form(
-                FormKind::Foreground,
-                "Text Color",
-                vec![Field::text(
-                    "Hex color",
-                    format!("#{:06X}", self.doc.formatting.foreground),
-                )],
-                window,
+            Command::Foreground => color_picker::open(
+                Rgba::from_rgb(self.editor()?.formatting().foreground),
+                ColorTarget::Foreground,
+                self.queue.clone(),
                 cx,
             ),
-            Command::Background => self.show_form(
-                FormKind::Background,
-                "Text Background Color",
-                vec![Field::text("Hex color", "#FFFF00")],
-                window,
+            Command::Background => color_picker::open(
+                Rgba::from_rgb(self.editor()?.formatting().background),
+                ColorTarget::Background,
+                self.queue.clone(),
                 cx,
             ),
+            Command::InsertColorCode => {
+                let selected = self.editor()?.selected_text()?;
+                color_picker::open_with_code(
+                    Rgba::from_rgb(self.editor()?.formatting().foreground),
+                    ColorTarget::InsertCode,
+                    self.queue.clone(),
+                    Some(selected),
+                    cx,
+                );
+            }
+            Command::ApplyColor(target, color, code) => {
+                let editor = self.editor()?;
+                match target {
+                    ColorTarget::Foreground => {
+                        ensure!(
+                            self.doc.rich,
+                            "Text colors require a rich-text document. Use Format > Make Rich Text, or Insert Color Code for plain text."
+                        );
+                        editor.execute(EditCommand::Foreground(
+                            color.composite(editor.formatting().background),
+                        ))?;
+                    }
+                    ColorTarget::Background => {
+                        ensure!(
+                            self.doc.rich,
+                            "Text background colors require a rich-text document."
+                        );
+                        editor.execute(EditCommand::Background(color.composite(0xffffff)))?;
+                    }
+                    ColorTarget::InsertCode => editor.replace_current(&code)?,
+                }
+                self.doc.persist_buffer()?;
+            }
             Command::Table => self.show_form(
                 FormKind::Table,
                 "Table",
@@ -1210,21 +1265,6 @@ impl EditorWindow {
                         editor.execute(cmd)?;
                     }
                 }
-            }
-            FormKind::Foreground | FormKind::Background => {
-                let hex = value(0)?.trim().trim_start_matches('#');
-                ensure!(
-                    hex.len() == 6,
-                    "Enter a color as six hexadecimal digits, for example #000000"
-                );
-                let color =
-                    u32::from_str_radix(hex, 16).context("Enter a valid hexadecimal color")?;
-                self.editor()?
-                    .execute(if matches!(kind, FormKind::Foreground) {
-                        EditCommand::Foreground(color)
-                    } else {
-                        EditCommand::Background(color)
-                    })?;
             }
             FormKind::Table => {
                 let rows = value(0)?.parse::<u16>()?;
@@ -1525,6 +1565,7 @@ impl EditorWindow {
                 sep(),
                 item("Show Colors…", "", C::Foreground),
                 item("Text Background Color…", "", C::Background),
+                item("Insert Color Code…", "", C::InsertColorCode),
             ],
             M::Alignment => [
                 ("Left", Alignment::Left),
@@ -1636,14 +1677,6 @@ impl EditorWindow {
                 })
                 .chain([item("Custom…", "", C::CustomSpacing)])
                 .collect(),
-            M::Colors => vec![
-                item("Show Colors…", "", C::Foreground),
-                sep(),
-                e("Black", "", EditCommand::Foreground(0)),
-                e("Red", "", EditCommand::Foreground(0xcc0000)),
-                e("Blue", "", EditCommand::Foreground(0x0057b8)),
-                e("Green", "", EditCommand::Foreground(0x207227)),
-            ],
         };
         Ok(entries)
     }
@@ -1671,106 +1704,107 @@ impl EditorWindow {
         } else {
             12.
         };
-        let mut controls = vec![
-            Self::toolbar_control(
-                "paragraph-style",
-                "¶⌄".into(),
-                28.,
-                false,
-                Command::Menu(MenuKind::Lists),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "font-family",
-                font,
-                130.,
-                false,
-                Command::Menu(MenuKind::Fonts),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "font-face",
-                if self.doc.formatting.bold {
-                    "Bold"
-                } else if self.doc.formatting.italic {
-                    "Italic"
-                } else {
-                    "Regular"
-                }
-                .into(),
-                78.,
-                false,
-                Command::Menu(MenuKind::Weights),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "font-size",
-                format!("{size:.0} ⌄"),
-                43.,
-                false,
-                Command::Menu(MenuKind::Sizes),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            ui::control("text-color", "", 24., false, c)
-                .child(
-                    div()
-                        .size(px(12.))
-                        .rounded(px(2.))
-                        .bg(rgb(self.doc.formatting.foreground)),
+        let mut controls =
+            vec![
+                Self::toolbar_control(
+                    "paragraph-style",
+                    "¶⌄".into(),
+                    28.,
+                    false,
+                    Command::Menu(MenuKind::Lists),
+                    c,
+                    cx,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.command(Command::Menu(MenuKind::Colors), window, cx)
-                }))
                 .into_any_element(),
-            Self::toolbar_control(
-                "text-background",
-                "A̲".into(),
-                24.,
-                false,
-                Command::Background,
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "bold",
-                "B".into(),
-                22.,
-                self.doc.formatting.bold,
-                Command::Edit(EditCommand::Bold),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "italic",
-                "I".into(),
-                22.,
-                self.doc.formatting.italic,
-                Command::Edit(EditCommand::Italic),
-                c,
-                cx,
-            )
-            .into_any_element(),
-            Self::toolbar_control(
-                "underline",
-                "U̲".into(),
-                22.,
-                self.doc.formatting.underline,
-                Command::Edit(EditCommand::Underline),
-                c,
-                cx,
-            )
-            .into_any_element(),
-        ];
+                Self::toolbar_control(
+                    "font-family",
+                    font,
+                    130.,
+                    false,
+                    Command::Menu(MenuKind::Fonts),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                Self::toolbar_control(
+                    "font-face",
+                    if self.doc.formatting.bold {
+                        "Bold"
+                    } else if self.doc.formatting.italic {
+                        "Italic"
+                    } else {
+                        "Regular"
+                    }
+                    .into(),
+                    78.,
+                    false,
+                    Command::Menu(MenuKind::Weights),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                Self::toolbar_control(
+                    "font-size",
+                    format!("{size:.0} ⌄"),
+                    43.,
+                    false,
+                    Command::Menu(MenuKind::Sizes),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                ui::control("text-color", "", 24., false, c)
+                    .child(
+                        div()
+                            .size(px(12.))
+                            .rounded(px(2.))
+                            .bg(rgb(self.doc.formatting.foreground)),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.command(Command::Foreground, window, cx)
+                    }))
+                    .into_any_element(),
+                Self::toolbar_control(
+                    "text-background",
+                    "A̲".into(),
+                    24.,
+                    false,
+                    Command::Background,
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                Self::toolbar_control(
+                    "bold",
+                    "B".into(),
+                    22.,
+                    self.doc.formatting.bold,
+                    Command::Edit(EditCommand::Bold),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                Self::toolbar_control(
+                    "italic",
+                    "I".into(),
+                    22.,
+                    self.doc.formatting.italic,
+                    Command::Edit(EditCommand::Italic),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+                Self::toolbar_control(
+                    "underline",
+                    "U̲".into(),
+                    22.,
+                    self.doc.formatting.underline,
+                    Command::Edit(EditCommand::Underline),
+                    c,
+                    cx,
+                )
+                .into_any_element(),
+            ];
         for (id, data, alignment) in [
             ("left", ui::ALIGN_LEFT, Alignment::Left),
             ("center", ui::ALIGN_CENTER, Alignment::Center),
@@ -2073,6 +2107,21 @@ impl DocumentTab {
             editor.set_spellcheck(prefs.spellcheck);
             editor.mark_saved();
         }
+        let recovery_id = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let buffer_lease = match session::lease_buffer(&recovery_id) {
+            Ok(lease) => lease,
+            Err(error) => {
+                show_error(&error);
+                None
+            }
+        };
         Self {
             native,
             path: None,
@@ -2092,14 +2141,12 @@ impl DocumentTab {
             zoom: 100,
             formatting: FormatState::default(),
             page: PageSettings::default(),
-            recovery_id: format!(
-                "{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
+            recovery_id,
+            buffer_lease,
+            buffered: false,
+            retain_buffer: true,
+            buffer_error_reported: false,
+            restored_buffer: false,
             last_recovery: Instant::now(),
             last_external_check: Instant::now(),
             last_text: String::new(),
@@ -2108,6 +2155,75 @@ impl DocumentTab {
             find_case: false,
             find_whole: false,
         }
+    }
+    fn restore(prefs: &Preferences, parent: isize, buffer: RestoredBuffer) -> Result<Self> {
+        let mut tab = Self::new(prefs, parent);
+        let editor = tab
+            .native
+            .as_ref()
+            .context("The native text editor could not be created")?;
+        editor.set_plain_text_mode(buffer.document.format.is_plain())?;
+        match &buffer.document.content {
+            DocumentContent::Plain(text) => editor.set_text(text)?,
+            DocumentContent::Rich(bytes) => editor.set_rtf(bytes)?,
+        }
+        tab.last_text = editor.text()?;
+        tab.formatting = editor.formatting();
+        editor.acknowledge_buffered_changes();
+        tab.path = buffer.document.original_path;
+        tab.fingerprint = tab
+            .path
+            .as_deref()
+            .and_then(|path| document::fingerprint(path).ok());
+        tab.format = buffer.document.format;
+        tab.encoding = buffer.document.encoding;
+        tab.line_ending = buffer.document.line_ending;
+        tab.rich = !tab.format.is_plain();
+        tab.recovery_id = buffer.document.id;
+        tab.buffer_lease = Some(buffer.lease);
+        tab.dirty = true;
+        tab.restored_buffer = true;
+        tab.buffered = true;
+        Ok(tab)
+    }
+    fn persist_buffer(&mut self) -> Result<()> {
+        if !self.retain_buffer {
+            return Ok(());
+        }
+        let editor = self
+            .native
+            .as_ref()
+            .context("The native editor cannot protect this buffer")?;
+        self.dirty |= editor.is_modified();
+        if !self.dirty && self.path.is_some() {
+            return Ok(());
+        }
+        if self.buffer_lease.is_none() {
+            self.buffer_lease = session::lease_buffer(&self.recovery_id)?;
+        }
+        ensure!(
+            self.buffer_lease.is_some(),
+            "Another ExEditor instance owns this unsaved buffer; save a copy before closing."
+        );
+        let content = if self.rich {
+            DocumentContent::Rich(editor.rtf()?)
+        } else {
+            DocumentContent::Plain(editor.text()?)
+        };
+        document::write_recovery(&RecoveryDocument {
+            id: self.recovery_id.clone(),
+            original_path: self.path.clone(),
+            format: self.format,
+            content,
+            encoding: self.encoding,
+            line_ending: self.line_ending,
+            saved_at: chrono::Local::now().to_rfc3339(),
+        })?;
+        editor.acknowledge_buffered_changes();
+        self.buffered = true;
+        self.buffer_error_reported = false;
+        self.last_recovery = Instant::now();
+        Ok(())
     }
     fn name(&self) -> String {
         self.path

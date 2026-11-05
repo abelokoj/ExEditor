@@ -241,6 +241,7 @@ pub struct FormatState {
     pub strikethrough: bool,
     /// Ordinary RGB value, 0xRRGGBB, rather than native COLORREF byte order.
     pub foreground: u32,
+    pub background: u32,
     pub alignment: Alignment,
 }
 #[derive(Clone, Debug)]
@@ -475,6 +476,10 @@ impl NativeEditor {
     pub fn mark_saved(&self) {
         self.send(EM_SETMODIFY, 0, 0);
     }
+    /// Clears the native change flag after a durable snapshot, keeping document dirty state separate.
+    pub fn acknowledge_buffered_changes(&self) {
+        self.send(EM_SETMODIFY, 0, 0);
+    }
     pub fn mark_modified(&self) {
         self.send(EM_SETMODIFY, 1, 0);
     }
@@ -689,6 +694,11 @@ impl NativeEditor {
             underline: format.mask & CFM_UNDERLINE != 0 && format.effects & CFM_UNDERLINE != 0,
             strikethrough: format.mask & CFM_STRIKEOUT != 0 && format.effects & CFM_STRIKEOUT != 0,
             foreground: color_ref(format.foreground),
+            background: if format.mask & CFM_BACKCOLOR != 0 && format.effects & 0x0400_0000 == 0 {
+                color_ref(format.background)
+            } else {
+                0xffffff
+            },
             alignment: match paragraph.alignment {
                 2 => Alignment::Right,
                 3 => Alignment::Center,
@@ -1232,6 +1242,7 @@ impl NativeEditor {
             ) != 0,
             "Windows could not apply the character formatting"
         );
+        self.mark_modified();
         Ok(())
     }
     fn apply_para(&self, format: ParaFormat) -> Result<()> {
@@ -1239,6 +1250,7 @@ impl NativeEditor {
             self.send(EM_SETPARAFORMAT, 0, (&format as *const ParaFormat) as isize) != 0,
             "Windows could not apply the paragraph formatting"
         );
+        self.mark_modified();
         Ok(())
     }
     fn toggle_effect(&self, mask: u32, effect: u32) -> Result<()> {

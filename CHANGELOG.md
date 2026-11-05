@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-05T02:34:10-05:00 — Colors panel, protected buffers and selected icon (local source batch)
+
+- Connected a shared CotEditor-style Colors panel to foreground/background controls and color-code insertion. Implemented all five modes, CSS formats, opacity, saved swatches, image sampling and a native screen sampler that runs off the app thread. Formatting alpha is blended because RichEdit stores opaque text colors; alpha-capable inserted CSS codes retain it.
+- Automatically restore protected unsaved buffers as tabs at every startup. Snapshot edits at editing checkpoints and flush all unsaved tabs before window close or quit without Save prompts; preserve damaged snapshots, enforce exclusive ownership between running instances, and block closing if backup writing fails. Explicit tab Discard removes its buffer. Recovered files require confirmation before overwriting an existing saved file.
+- Selected calligraphic Ex paper-and-pencil variant 1 as the default executable, taskbar, installer and shortcut icon; retained all three PNG variants. Added the previously omitted Windows resource build hook.
+- Kept personal dev_notes files local and installed a local pre-push guard rejecting branches that contain them anywhere in history. The published history was already rewritten under the user's explicit approval.
+- Validation performed locally: source formatting, dependency resolution only (no compilation), icon frame/alpha inspection, tracked-path and history inspection; all 52 local note files were hash-checked unchanged. Regression-test source was written; the GitHub build/check result is pending.
+- No app launch or interactive/visual testing performed. User owns app testing. Full TextEdit parity is not established, and the previously observed blank native document surface remains unverified. An abrupt crash can lose edits since the last editing checkpoint; disk failures are reported instead of silently dropping buffers.
+
 ## 2026-11-05T02:20:37-05:00 — Private notes removed from published history (recording time)
 
 - Rewrote the published main branch at the user's request to remove dev_notes/ from every commit. Local personal notes remain intact and the folder remains ignored for future pushes.

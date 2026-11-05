@@ -570,7 +570,7 @@ pub struct RecoveryDocument {
     pub saved_at: String,
 }
 
-fn recovery_path(id: &str) -> Result<PathBuf> {
+pub(crate) fn validate_recovery_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
             && id.len() <= 128
@@ -579,47 +579,123 @@ fn recovery_path(id: &str) -> Result<PathBuf> {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
         "Invalid recovery-document identifier"
     );
+    Ok(())
+}
+
+pub(crate) fn recovery_dir() -> Result<PathBuf> {
     let folder = data_dir()?.join("recovery");
-    fs::create_dir_all(&folder)?;
-    Ok(folder.join(format!("{id}.json")))
+    fs::create_dir_all(&folder).context("Creating the unsaved-buffer folder")?;
+    Ok(folder)
+}
+
+fn recovery_path(id: &str) -> Result<PathBuf> {
+    validate_recovery_id(id)?;
+    Ok(recovery_dir()?.join(format!("{id}.json")))
+}
+
+struct LimitedWriter<W> {
+    inner: W,
+    remaining: u64,
+}
+
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(std::io::Error::other(
+                "The unsaved buffer exceeds the 512 MiB recovery limit",
+            ));
+        }
+        let written = self.inner.write(bytes)?;
+        self.remaining -= written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 pub fn write_recovery(document: &RecoveryDocument) -> Result<()> {
-    let bytes = serde_json::to_vec(document)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_DOCUMENT_BYTES,
-        "The recovery document exceeds the safety limit."
-    );
-    atomic_write(&recovery_path(&document.id)?, &bytes)
+    let path = recovery_path(&document.id)?;
+    let parent = path
+        .parent()
+        .context("The recovery snapshot has no parent folder")?;
+    let permissions = path
+        .try_exists()?
+        .then(|| fs::metadata(&path).map(|metadata| metadata.permissions()))
+        .transpose()?;
+    if let Some(permissions) = &permissions {
+        ensure!(
+            !permissions.readonly(),
+            "The unsaved-buffer snapshot is read-only; its previous contents were preserved."
+        );
+    }
+    let mut temporary = NamedTempFile::new_in(parent)
+        .context("Creating a safe replacement for the unsaved-buffer snapshot")?;
+    {
+        // Stream into a bounded temporary file rather than allocating a second document-sized JSON buffer.
+        let mut writer = std::io::BufWriter::new(LimitedWriter {
+            inner: temporary.as_file_mut(),
+            remaining: MAX_DOCUMENT_BYTES,
+        });
+        serde_json::to_writer(&mut writer, document)
+            .context("Writing the unsaved buffer; its previous snapshot was preserved")?;
+        writer
+            .flush()
+            .context("Flushing the unsaved-buffer snapshot")?;
+    }
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("Saving the unsaved-buffer snapshot to disk")?;
+    if let Some(permissions) = permissions {
+        temporary.as_file().set_permissions(permissions)?;
+    }
+    temporary.persist(&path).map_err(|error| error.error)
+        .context("Replacing the unsaved-buffer snapshot; its previous contents were preserved if replacement failed")?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
-pub fn recover_documents() -> Result<Vec<RecoveryDocument>> {
-    let folder = data_dir()?.join("recovery");
-    if !folder.try_exists()? {
-        return Ok(Vec::new());
+/// Reads one bounded buffer snapshot without changing or removing its bytes.
+pub fn read_recovery(path: &Path) -> Result<RecoveryDocument> {
+    ensure!(
+        path.extension() == Some(OsStr::new("json")),
+        "The unsaved buffer does not have a recovery snapshot file name."
+    );
+    let id = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .context("The unsaved buffer has an invalid file name")?;
+    validate_recovery_id(id)?;
+    ensure!(
+        fs::symlink_metadata(path)?.file_type().is_file(),
+        "The unsaved buffer is not a regular file; it has been preserved."
+    );
+    let document: RecoveryDocument =
+        serde_json::from_slice(&read_document(path)?).with_context(|| {
+            format!(
+                "Reading unsaved buffer {}; it has been preserved for manual recovery",
+                path.display()
+            )
+        })?;
+    validate_recovery_id(&document.id)?;
+    ensure!(
+        document.id == id,
+        "The recovery file identifier does not match its file name."
+    );
+    match &document.content {
+        DocumentContent::Plain(text) => ensure!(
+            !text.contains('\0'),
+            "The unsaved text buffer contains NUL characters; its snapshot has been preserved."
+        ),
+        DocumentContent::Rich(bytes) => validate_rtf(bytes)
+            .context("The unsaved rich-text buffer is invalid; its snapshot has been preserved")?,
     }
-    let mut documents = Vec::new();
-    for entry in fs::read_dir(folder)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() || entry.path().extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        let document: RecoveryDocument = serde_json::from_slice(&read_document(&entry.path())?)
-            .with_context(|| {
-                format!(
-                    "Reading recovery file {}; it has been preserved for manual recovery",
-                    entry.path().display()
-                )
-            })?;
-        let expected = recovery_path(&document.id)?;
-        ensure!(
-            entry.path() == expected,
-            "The recovery file identifier does not match its file name."
-        );
-        documents.push(document);
-    }
-    documents.sort_by(|left, right| left.saved_at.cmp(&right.saved_at));
-    Ok(documents)
+    chrono::DateTime::parse_from_rfc3339(&document.saved_at)
+        .context("The unsaved buffer has an invalid timestamp; its snapshot has been preserved")?;
+    Ok(document)
 }
 
 pub fn remove_recovery(id: &str) -> Result<()> {
@@ -940,5 +1016,18 @@ mod tests {
         for id in ["", "../document", "..\\document", "a/b", "a:b"] {
             assert!(recovery_path(id).is_err(), "identifier {id:?}");
         }
+    }
+    #[test]
+    fn recovery_serialization_stops_at_its_size_bound() {
+        let mut writer = LimitedWriter {
+            inner: Vec::new(),
+            remaining: 4,
+        };
+        writer
+            .write_all(b"1234")
+            .expect("writing within the snapshot limit");
+        assert!(writer.write_all(b"5").is_err());
+        assert_eq!(writer.inner, b"1234");
+        assert_eq!(writer.remaining, 0);
     }
 }

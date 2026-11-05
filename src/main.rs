@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod color;
+mod color_picker;
 mod dialogs;
 mod document;
 mod fonts;
@@ -8,6 +10,7 @@ mod formats;
 mod native;
 mod preferences;
 mod services;
+mod session;
 mod settings;
 mod ui;
 
@@ -26,9 +29,11 @@ fn main() {
                 .skip(1)
                 .map(std::path::PathBuf::from)
                 .collect();
+            let restored = app::restore_session(cx);
             if paths.is_empty() {
-                app::open_document(None, cx);
-                app::offer_recovery(cx);
+                if !restored {
+                    app::open_document(None, cx);
+                }
             } else {
                 for path in paths {
                     app::open_document(Some(path), cx);

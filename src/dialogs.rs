@@ -15,8 +15,6 @@ pub type Commands = Rc<RefCell<VecDeque<Command>>>;
 #[derive(Clone, Debug)]
 pub enum FormKind {
     Font,
-    Foreground,
-    Background,
     Table,
     Link,
     Spacing,
@@ -413,10 +411,6 @@ impl FormView {
             FormKind::Table => values
                 .iter()
                 .all(|s| s.parse::<u16>().is_ok_and(|n| n > 0 && n <= 100)),
-            FormKind::Foreground | FormKind::Background => values.first().is_some_and(|s| {
-                let hex = s.trim().trim_start_matches('#');
-                hex.len() == 6 && u32::from_str_radix(hex, 16).is_ok()
-            }),
             _ => true,
         };
         if !valid {

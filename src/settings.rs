@@ -68,7 +68,7 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette, cx: &
                 cx,
             ),
             recovery: input(
-                "Recovery interval in seconds",
+                "Additional recovery checkpoint interval in seconds",
                 &preferences.autosave_seconds.to_string(),
                 window,
                 cx,
@@ -367,11 +367,11 @@ impl Settings {
             .child(div().flex().flex_col().gap(px(9.))
                 .child(self.heading("Document Recovery"))
                 .child(div().flex().items_center().gap(px(10.))
-                    .child("Save a recovery copy every")
+                    .child("Additional checkpoint every")
                     .child(div().w(px(64.)).child(Input::new(&self.recovery).with_size(Size::Small)))
                     .child("seconds"))
                 .child(div().text_size(px(11.)).text_color(rgb(c.muted))
-                    .child("Recovery copies protect unsaved changes. They do not overwrite your files.")))
+                    .child("Unsaved buffers are protected as you edit and restored automatically at startup. This interval adds periodic checkpoints; it never changes your saved files.")))
             .child(div().flex().flex_col().gap(px(10.))
                 .child(self.heading("Appearance"))
                 .child(div().flex().gap(px(22.)).children(appearances.into_iter().enumerate().map(|(index, (appearance, label))| {
