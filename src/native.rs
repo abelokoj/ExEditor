@@ -13,13 +13,14 @@ use std::{
     sync::OnceLock,
 };
 use windows_sys::Win32::{
-    Foundation::{GlobalFree, HWND, RECT},
+    Foundation::{GlobalFree, HWND, POINT, RECT},
     Graphics::Gdi::{
-        DeleteDC, GetDeviceCaps, HDC, LOGPIXELSX, LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX,
-        PHYSICALOFFSETY, PHYSICALWIDTH, SetViewportOrgEx,
+        ClientToScreen, DeleteDC, GetDeviceCaps, GetStockObject, HDC, LOGPIXELSX, LOGPIXELSY,
+        PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH, SetViewportOrgEx,
+        WHITE_BRUSH,
     },
     Storage::Xps::{AbortDoc, DOCINFOW, EndDoc, EndPage, StartDocW, StartPage},
-    System::LibraryLoader::LoadLibraryW,
+    System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
     UI::{
         Controls::{
             Dialogs::{
@@ -32,12 +33,16 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT},
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, CreateWindowExW, DestroyMenu, DestroyWindow,
-            ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, ES_WANTRETURN, GetCursorPos, GetParent,
-            MF_GRAYED, MF_SEPARATOR, MF_STRING, MoveWindow, SB_HORZ, SW_HIDE, SW_SHOW,
-            SendMessageW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_CHAR,
-            WM_CLEAR, WM_CONTEXTMENU, WM_COPY, WM_CUT, WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_UNDO,
-            WM_USER, WS_CHILD, WS_CLIPSIBLINGS, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+            AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+            DestroyWindow, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, ES_WANTRETURN, GW_CHILD,
+            GW_OWNER, GetCursorPos, GetWindow, IsIconic, IsWindowVisible, MF_GRAYED, MF_SEPARATOR,
+            MF_STRING, MoveWindow, PostMessageW, RegisterClassW, SB_HORZ, SW_HIDE, SWP_HIDEWINDOW,
+            SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
+            SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WA_ACTIVE,
+            WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLEAR, WM_CONTEXTMENU, WM_COPY, WM_CUT,
+            WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_SETFOCUS, WM_SIZE, WM_UNDO, WM_USER,
+            WM_WINDOWPOSCHANGED, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_HSCROLL,
+            WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
@@ -89,6 +94,8 @@ const PFM_NUMBERINGTAB: u32 = 0x4000;
 const PFM_NUMBERINGSTART: u32 = 0x8000;
 const MAX_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 const SUBCLASS_ID: usize = 0x4558_4544;
+/// Posted to a document host so focus moves into the editor after activation settles.
+const FOCUS_EDITOR: u32 = WM_APP + 1;
 
 #[repr(C, packed(4))]
 #[derive(Clone, Copy, Default)]
@@ -265,17 +272,70 @@ impl Default for PageSettings {
         }
     }
 }
-#[derive(Default)]
 struct NativeState {
     shortcuts: RefCell<VecDeque<String>>,
     alive: Cell<bool>,
+    /// GPUI window that owns the document host.
+    owner: HWND,
+    /// Borderless owned popup that contains the RichEdit control.
+    host: HWND,
+    /// Editor rectangle in the owner's client pixels.
+    bounds: Cell<Option<(i32, i32, i32, i32)>>,
+    visible: Cell<bool>,
+    focus_on_show: Cell<bool>,
+}
+impl NativeState {
+    /// Moves the host over the editor rectangle and shows it when the owner is on screen.
+    fn place(&self) {
+        let host = self.host;
+        let Some((x, y, width, height)) = self.bounds.get() else {
+            return;
+        };
+        if !self.alive.get() || host.is_null() {
+            return;
+        }
+        let mut origin = POINT { x, y };
+        // SAFETY: owner and host are live windows on this UI thread; origin is writable.
+        unsafe {
+            if ClientToScreen(self.owner, &mut origin) == 0 {
+                return;
+            }
+            let shown =
+                self.visible.get() && IsWindowVisible(self.owner) != 0 && IsIconic(self.owner) == 0;
+            let was_shown = IsWindowVisible(host) != 0;
+            // Owned popups do not follow an owner that is hidden without minimizing.
+            let flags = SWP_NOACTIVATE
+                | SWP_NOZORDER
+                | SWP_NOOWNERZORDER
+                | if shown {
+                    SWP_SHOWWINDOW
+                } else {
+                    SWP_HIDEWINDOW
+                };
+            SetWindowPos(
+                host,
+                ptr::null_mut(),
+                origin.x,
+                origin.y,
+                width,
+                height,
+                flags,
+            );
+            if shown && !was_shown && self.focus_on_show.replace(false) {
+                PostMessageW(host, FOCUS_EDITOR, 0, 0);
+            }
+        }
+    }
 }
 
-/// Owns a RichEdit child window; its thread-affinity marker forbids Send/Sync.
+/// Owns a RichEdit control inside an owned popup above its GPUI window.
+///
+/// GPUI renders through a topmost DirectComposition target with no GDI
+/// redirection surface, so a child HWND would be hidden beneath it.
+/// The thread-affinity marker forbids Send/Sync.
 pub struct NativeEditor {
     hwnd: HWND,
     state: Box<NativeState>,
-    bounds: Cell<Option<(i32, i32, i32, i32)>>,
     read_only: Cell<bool>,
     _ui_thread: PhantomData<Rc<()>>,
 }
@@ -288,8 +348,32 @@ impl NativeEditor {
             unsafe { !LoadLibraryW(wide("Msftedit.dll").as_ptr()).is_null() }
         });
         ensure!(loaded, "Windows RichEdit could not be loaded");
-        let class = wide("RICHEDIT50W");
+        let owner = parent as HWND;
+        let host_class = host_class()?;
         let empty = wide("");
+        // SAFETY: registered class, live GPUI owner, and valid terminated strings.
+        let host = unsafe {
+            CreateWindowExW(
+                0,
+                host_class.as_ptr(),
+                empty.as_ptr(),
+                WS_POPUP | WS_CLIPCHILDREN,
+                0,
+                0,
+                1,
+                1,
+                owner,
+                ptr::null_mut(),
+                GetModuleHandleW(ptr::null()),
+                ptr::null(),
+            )
+        };
+        ensure!(
+            !host.is_null(),
+            "creating document host: {}",
+            std::io::Error::last_os_error()
+        );
+        let class = wide("RICHEDIT50W");
         let style = WS_CHILD
             | WS_VISIBLE
             | WS_TABSTOP
@@ -297,7 +381,7 @@ impl NativeEditor {
             | WS_HSCROLL
             | WS_CLIPSIBLINGS
             | (ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | ES_NOHIDESEL) as u32;
-        // SAFETY: registered class, live GPUI parent, and valid terminated strings.
+        // SAFETY: registered class, live host parent, and valid terminated strings.
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
@@ -308,39 +392,47 @@ impl NativeEditor {
                 0,
                 1,
                 1,
-                parent as HWND,
+                host,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null(),
             )
         };
-        ensure!(
-            !hwnd.is_null(),
-            "creating document editor: {}",
-            std::io::Error::last_os_error()
-        );
-        let state = Box::<NativeState>::default();
-        state.alive.set(true);
-        // SAFETY: boxed state stays stable until subclass removal in Drop.
-        let installed = unsafe {
-            SetWindowSubclass(
-                hwnd,
-                Some(editor_subclass),
-                SUBCLASS_ID,
-                (&*state as *const NativeState) as usize,
-            )
-        };
-        if installed == 0 {
-            // SAFETY: this newly created HWND has not escaped.
+        if hwnd.is_null() {
+            let error = std::io::Error::last_os_error();
+            // SAFETY: this newly created host has not escaped.
             unsafe {
-                DestroyWindow(hwnd);
+                DestroyWindow(host);
+            }
+            bail!("creating document editor: {error}");
+        }
+        let state = Box::new(NativeState {
+            shortcuts: RefCell::default(),
+            alive: Cell::new(true),
+            owner,
+            host,
+            bounds: Cell::new(None),
+            visible: Cell::new(true),
+            focus_on_show: Cell::new(false),
+        });
+        let data = (&*state as *const NativeState) as usize;
+        // SAFETY: boxed state stays stable until both subclasses are removed in Drop;
+        // its address doubles as a unique owner-subclass id per editor.
+        let installed = unsafe {
+            SetWindowSubclass(hwnd, Some(editor_subclass), SUBCLASS_ID, data) != 0
+                && SetWindowSubclass(owner, Some(owner_subclass), data, data) != 0
+        };
+        if !installed {
+            // SAFETY: the new windows have not escaped; removing an absent subclass is a no-op.
+            unsafe {
+                RemoveWindowSubclass(owner, Some(owner_subclass), data);
+                DestroyWindow(host);
             }
             bail!("document keyboard integration could not be installed");
         }
         let editor = Self {
             hwnd,
             state,
-            bounds: Cell::new(None),
             read_only: Cell::new(false),
             _ui_thread: PhantomData,
         };
@@ -356,29 +448,39 @@ impl NativeEditor {
         editor.mark_saved();
         Ok(editor)
     }
+    /// Places the editor over a rectangle given in the owner's client pixels.
     pub fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) {
         let next = (x, y, width.max(0), height.max(0));
-        if self.state.alive.get() && self.bounds.get() != Some(next) {
-            // SAFETY: live owned HWND and nonnegative dimensions.
-            unsafe {
-                MoveWindow(self.hwnd, next.0, next.1, next.2, next.3, 1);
-            }
-            self.bounds.set(Some(next));
+        if self.state.alive.get() && self.state.bounds.get() != Some(next) {
+            self.state.bounds.set(Some(next));
+            self.state.place();
         }
     }
     pub fn set_visible(&self, visible: bool) {
-        if self.state.alive.get() {
-            // SAFETY: the HWND is owned on this UI thread.
+        self.state.visible.set(visible);
+        if !self.state.alive.get() {
+            return;
+        }
+        if visible {
+            self.state.place();
+        } else {
+            // SAFETY: the host is owned on this UI thread.
             unsafe {
-                ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+                ShowWindow(self.state.host, SW_HIDE);
             }
         }
     }
     pub fn focus(&self) {
-        if self.state.alive.get() {
-            // SAFETY: owned live HWND on its creating thread.
-            unsafe {
+        if !self.state.alive.get() {
+            return;
+        }
+        // SAFETY: owned live HWNDs on their creating thread.
+        unsafe {
+            if IsWindowVisible(self.state.host) != 0 {
                 SetFocus(self.hwnd);
+            } else {
+                // A hidden host cannot take activation; focus once it first appears.
+                self.state.focus_on_show.set(true);
             }
         }
     }
@@ -984,8 +1086,7 @@ impl NativeEditor {
             editor: self.hwnd,
             dialog: PRINTDLGW {
                 lStructSize: size_of::<PRINTDLGW>() as u32,
-                // SAFETY: the live child window belongs to its live GPUI parent.
-                hwndOwner: unsafe { GetParent(self.hwnd) },
+                hwndOwner: self.state.owner,
                 Flags: PD_RETURNDC | PD_USEDEVMODECOPIESANDCOLLATE,
                 nFromPage: 1,
                 nToPage: 1,
@@ -1353,15 +1454,116 @@ impl NativeEditor {
 }
 impl Drop for NativeEditor {
     fn drop(&mut self) {
-        if self.state.alive.get() {
-            // SAFETY: remove the subclass before its boxed state drops; alive
-            // is cleared by WM_NCDESTROY if the parent destroyed its child first.
-            unsafe {
+        let data = (&*self.state as *const NativeState) as usize;
+        // SAFETY: remove both subclasses before their boxed state drops. The owner
+        // hook removes itself on WM_NCDESTROY, so removing it again is a no-op.
+        // alive is cleared by WM_NCDESTROY if the owner destroyed the host first.
+        unsafe {
+            RemoveWindowSubclass(self.state.owner, Some(owner_subclass), data);
+            if self.state.alive.get() {
                 RemoveWindowSubclass(self.hwnd, Some(editor_subclass), SUBCLASS_ID);
-                DestroyWindow(self.hwnd);
+                DestroyWindow(self.state.host);
             }
         }
     }
+}
+/// Registers the document host window class once per process.
+fn host_class() -> Result<Vec<u16>> {
+    static REGISTERED: OnceLock<bool> = OnceLock::new();
+    let name = wide("ExEditorDocumentHost");
+    let registered = *REGISTERED.get_or_init(|| {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(host_proc),
+            // SAFETY: a null name returns this executable's module handle.
+            hInstance: unsafe { GetModuleHandleW(ptr::null()) },
+            // SAFETY: stock objects are process-lifetime and need no release.
+            hbrBackground: unsafe { GetStockObject(WHITE_BRUSH) },
+            lpszClassName: name.as_ptr(),
+            ..WNDCLASSW::default()
+        };
+        // SAFETY: the class structure and its terminated name outlive the call.
+        unsafe { RegisterClassW(&class) != 0 }
+    });
+    ensure!(
+        registered,
+        "the document host window class could not be registered"
+    );
+    Ok(name)
+}
+/// Sizes and focuses the RichEdit child, and mirrors activation to the GPUI owner.
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    // SAFETY: every call below targets this live host, its child, or its owner on this thread.
+    unsafe {
+        match message {
+            WM_SIZE => {
+                let child = GetWindow(hwnd, GW_CHILD);
+                if !child.is_null() {
+                    let width = (lparam & 0xffff) as i32;
+                    let height = ((lparam >> 16) & 0xffff) as i32;
+                    MoveWindow(child, 0, 0, width, height, 1);
+                }
+                0
+            }
+            WM_SETFOCUS | FOCUS_EDITOR => {
+                let child = GetWindow(hwnd, GW_CHILD);
+                if !child.is_null() {
+                    SetFocus(child);
+                }
+                0
+            }
+            WM_ACTIVATE => {
+                let owner = GetWindow(hwnd, GW_OWNER);
+                let other = lparam as HWND;
+                // Activation moving between owner and host is internal; anything else
+                // is the app gaining or losing focus, which GPUI must still observe.
+                if !owner.is_null() && other != owner {
+                    let state = if (wparam & 0xffff) as u32 == WA_INACTIVE {
+                        WA_INACTIVE as usize
+                    } else {
+                        // The minimized flag stops DefWindowProc from moving keyboard
+                        // focus to the owner; GPUI reads only the low word.
+                        WA_ACTIVE as usize | (1 << 16)
+                    };
+                    SendMessageW(owner, WM_ACTIVATE, state, other as isize);
+                }
+                DefWindowProcW(hwnd, message, wparam, lparam)
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        }
+    }
+}
+/// Keeps the document host over its editor rectangle and the owner visibly active.
+unsafe extern "system" fn owner_subclass(
+    hwnd: HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    id: usize,
+    data: usize,
+) -> isize {
+    // SAFETY: data is the boxed state that Drop keeps alive until this hook is removed.
+    let state = unsafe { &*(data as *const NativeState) };
+    match message {
+        // The owner losing activation to its own document host is not a real deactivation.
+        WM_ACTIVATE if (wparam & 0xffff) as u32 == WA_INACTIVE && lparam as HWND == state.host => {
+            return 0;
+        }
+        WM_WINDOWPOSCHANGED => state.place(),
+        WM_NCDESTROY => {
+            // SAFETY: remove this callback from its own window during destruction.
+            unsafe {
+                RemoveWindowSubclass(hwnd, Some(owner_subclass), id);
+            }
+        }
+        _ => {}
+    }
+    // SAFETY: unhandled messages continue through GPUI's window procedure.
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 struct InputStream<'a> {
     bytes: &'a [u8],
@@ -1800,6 +2002,52 @@ fn printer_mode(page: &PageSettings) -> Result<windows_sys::Win32::Graphics::Gdi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    #[test]
+    fn document_host_tracks_owner_client_rectangle() {
+        let class = wide("STATIC");
+        let empty = wide("");
+        // SAFETY: system class and terminated strings; the window is destroyed below.
+        let owner = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                empty.as_ptr(),
+                WS_POPUP,
+                100,
+                100,
+                400,
+                300,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        };
+        assert!(!owner.is_null(), "test owner window was not created");
+        let editor = NativeEditor::new(owner as isize).expect("editor hosts inside its owner");
+        editor.set_bounds(10, 20, 200, 100);
+        let mut host = RECT::default();
+        let mut child = RECT::default();
+        // SAFETY: live windows on this thread with writable rectangles.
+        unsafe {
+            GetWindowRect(editor.state.host, &mut host);
+            GetWindowRect(editor.hwnd, &mut child);
+        }
+        assert_eq!(
+            (host.left, host.top, host.right, host.bottom),
+            (110, 120, 310, 220)
+        );
+        assert_eq!(
+            (child.left, child.top, child.right, child.bottom),
+            (110, 120, 310, 220)
+        );
+        drop(editor);
+        // SAFETY: the owner was created above and has not been destroyed.
+        unsafe {
+            DestroyWindow(owner);
+        }
+    }
     #[test]
     fn rich_edit_abi_matches_microsoft_pack_four_layout() {
         assert_eq!(size_of::<CharFormat>(), 116);

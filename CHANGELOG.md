@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-05 — Typing restored: document editor hosted above GPUI (local fix)
+
+- Fixed the blank, untypeable document area. GPUI draws through a topmost DirectComposition target with no GDI redirection surface (`WS_EX_NOREDIRECTIONBITMAP`), so the RichEdit child window was invisible and unreachable. RichEdit now lives in a borderless popup owned by the GPUI window, placed over the editor rectangle in screen coordinates and moved with the window; it hides with a hidden or minimized owner.
+- Activation passing between the window and its document host no longer marks the GPUI window inactive, so smart quotes/dashes and active-window chrome keep working while typing. Activation from other apps is still forwarded. The first document focuses itself when it appears.
+- Added a regression test for host placement and child sizing.
+- Colors panel color codes now follow CotEditor's WFColorCode 4.0.2 (the package CotEditor pins) instead of general CSS parsing:
+  - Output: `rgb(r,g,b)` and `hsl(h,s%,l%)` without spaces. HSL/HWB values are whole numbers (gray keeps hue 0). Alpha has at most two decimals, so 50% reads `0.5`, not `0.502`.
+  - Parsing follows CotEditor's grammar. Function names must be lowercase. Legacy `rgb()` takes 0–255 integers only, and legacy `hsl()` requires `%`. `hwb()` has no comma form and there is no `hwba()`. Out-of-range values, signs, exponents, units, `transparent`, bare hex without `#`, and other color spaces are rejected instead of clamped.
+  - Keywords ignore alpha when matching a name. Hex case follows the code field's current text.
+  - Short hex still falls back to exact long hex where CotEditor would leave the field unchanged.
+- Validation: formatting checked with the pinned 1.99.1 rustfmt. Windows API names checked against windows-sys 0.61.2 and GPUI's window code (gpui-pre-windows 0.3.11), and color conversions checked against csscolorparser 0.9.0. No local compilation or app testing performed; the GitHub build is pending.
+
 ## 2026-11-05T02:47:31-05:00 — Windows resource linking and color-field Enter behavior (local fixes)
 
 - Removed ExEditor's duplicate process-manifest resource: GPUI already embeds the Windows asInvoker, common-controls and PerMonitorV2 settings. Retained the selected application icon and version resources; removed the now-unused manifest template.

@@ -384,16 +384,18 @@ impl ColorsPanel {
         });
     }
     fn sync_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Like CotEditor, keywords ignore alpha and fall back to hex when no name matches.
         if self.saved.format == ColorFormat::Keyword
-            && (self.color.a != 255
-                || !named_colors()
-                    .iter()
-                    .any(|(_, rgb)| *rgb == self.color.rgb()))
+            && !named_colors()
+                .iter()
+                .any(|(_, rgb)| *rgb == self.color.rgb())
         {
             self.saved.format = ColorFormat::Hex;
         }
         self.code_dirty = false;
         let text = self.saved.format.format(self.color, self.uppercase);
+        // Hex case follows the field's current text, so lowercase CSS output resets it.
+        self.uppercase = text.bytes().any(|byte| byte.is_ascii_uppercase());
         self.code
             .update(cx, |state, cx| state.set_value(text, window, cx));
         let index = ColorFormat::ALL

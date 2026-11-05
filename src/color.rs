@@ -74,42 +74,9 @@ impl Rgba {
             value.len() <= 4096 && !value.contains('\0'),
             "The color code is too long or contains a NUL character."
         );
-        let parsed: Color = value.parse().context(
-            "Enter a valid CSS color, such as #80bf40, rgb(128, 191, 64), or rebeccapurple",
-        )?;
-        let [r, g, b, a] = parsed.clamp().to_rgba8();
-        let color = Self { r, g, b, a };
-        let lower = value.to_ascii_lowercase();
-        let bare = lower.strip_prefix('#').unwrap_or(&lower);
-        let hex = bare.bytes().all(|byte| byte.is_ascii_hexdigit());
-        let format = if hex {
-            match bare.len() {
-                3 => ColorFormat::ShortHex,
-                4 => ColorFormat::ShortHexAlpha,
-                6 => ColorFormat::Hex,
-                8 => ColorFormat::HexAlpha,
-                _ => ColorFormat::Hex,
-            }
-        } else if lower == "transparent" || named_colors().iter().any(|(name, _)| *name == lower) {
-            ColorFormat::Keyword
-        } else if lower.starts_with("rgba(") || (lower.starts_with("rgb(") && lower.contains('/')) {
-            ColorFormat::Rgba
-        } else if lower.starts_with("rgb(") {
-            ColorFormat::Rgb
-        } else if lower.starts_with("hsla(") || (lower.starts_with("hsl(") && lower.contains('/')) {
-            ColorFormat::Hsla
-        } else if lower.starts_with("hsl(") {
-            ColorFormat::Hsl
-        } else if lower.starts_with("hwba(") || (lower.starts_with("hwb(") && lower.contains('/')) {
-            ColorFormat::Hwba
-        } else if lower.starts_with("hwb(") {
-            ColorFormat::Hwb
-        } else if color.a == 255 {
-            ColorFormat::Hex
-        } else {
-            ColorFormat::HexAlpha
-        };
-        Ok((color, format))
+        parse_code(value).context(
+            "Enter a valid color code, such as #80bf40, rgb(128,191,64), hsl(90,50%,50%), or rebeccapurple",
+        )
     }
     fn css(self) -> Color {
         Color::from_rgba8(self.r, self.g, self.b, self.a)
@@ -160,8 +127,11 @@ impl ColorFormat {
             Self::Keyword => "CSS Keyword",
         }
     }
+    /// Writes CotEditor's spelling: no spaces after commas, whole-number HSL/HWB,
+    /// and at most two alpha decimals. Uppercase applies to hex letters only.
     pub fn format(self, color: Rgba, uppercase: bool) -> String {
-        let alpha = decimal(f32::from(color.a) / 255., 3);
+        let alpha = decimal(f32::from(color.a) / 255., 2);
+        let whole = |value: f32| value.round() as i32;
         match self {
             Self::Hex => color.hex(false, uppercase),
             Self::HexAlpha => color.hex(true, uppercase),
@@ -187,42 +157,211 @@ impl ColorFormat {
                     color.hex(with_alpha, uppercase)
                 }
             }
-            Self::Rgb => format!("rgb({}, {}, {})", color.r, color.g, color.b),
-            Self::Rgba => format!("rgba({}, {}, {}, {alpha})", color.r, color.g, color.b),
+            Self::Rgb => format!("rgb({},{},{})", color.r, color.g, color.b),
+            Self::Rgba => format!("rgba({},{},{},{alpha})", color.r, color.g, color.b),
             Self::Hsl | Self::Hsla => {
+                // Gray already reports hue 0, as CotEditor writes it.
                 let [h, s, l, _] = color.css().to_hsla();
-                let (h, s, l) = (decimal(h, 3), decimal(s * 100., 3), decimal(l * 100., 3));
+                let (h, s, l) = (whole(h), whole(s * 100.), whole(l * 100.));
                 if self == Self::Hsla {
-                    format!("hsla({h}, {s}%, {l}%, {alpha})")
+                    format!("hsla({h},{s}%,{l}%,{alpha})")
                 } else {
-                    format!("hsl({h}, {s}%, {l}%)")
+                    format!("hsl({h},{s}%,{l}%)")
                 }
             }
             Self::Hwb | Self::Hwba => {
                 let [h, w, b, _] = color.css().to_hwba();
-                let (h, w, b) = (decimal(h, 3), decimal(w * 100., 3), decimal(b * 100., 3));
+                let (h, w, b) = (whole(h), whole(w * 100.), whole(b * 100.));
                 if self == Self::Hwba {
                     format!("hwb({h} {w}% {b}% / {alpha})")
                 } else {
                     format!("hwb({h} {w}% {b}%)")
                 }
             }
-            Self::Keyword => {
-                if color.a == 0 {
-                    "transparent".into()
-                } else if color.a == 255 {
-                    named_colors()
-                        .iter()
-                        .find(|(_, value)| *value == color.rgb())
-                        .map_or_else(
-                            || color.hex(false, uppercase),
-                            |(name, _)| (*name).to_owned(),
-                        )
-                } else {
-                    color.hex(true, uppercase)
-                }
-            }
+            // Keywords ignore alpha, as in CotEditor.
+            Self::Keyword => named_colors()
+                .iter()
+                .find(|(_, value)| *value == color.rgb())
+                .map_or_else(
+                    || color.hex(color.a != 255, uppercase),
+                    |(name, _)| (*name).to_owned(),
+                ),
         }
+    }
+}
+
+/// Parses the color-code grammar of CotEditor's WFColorCode package: `#` hex,
+/// keywords, legacy comma and modern space syntaxes. Function names are
+/// lowercase; out-of-range values, units, signs and exponents are rejected.
+fn parse_code(value: &str) -> Option<(Rgba, ColorFormat)> {
+    if let Some(digits) = value.strip_prefix('#') {
+        return parse_hex(digits);
+    }
+    if value.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        let name = value.to_ascii_lowercase();
+        let (_, rgb) = named_colors()
+            .iter()
+            .find(|(keyword, _)| *keyword == name)?;
+        return Some((Rgba::from_rgb(*rgb), ColorFormat::Keyword));
+    }
+    let (function, arguments) = value.strip_suffix(')')?.split_once('(')?;
+    let (syntax, [x, y, z], alpha) = split_arguments(arguments)?;
+    let legacy = syntax == Syntax::Legacy;
+    let format = match (function, syntax, alpha.is_some()) {
+        ("rgb", _, false) => ColorFormat::Rgb,
+        ("rgb", Syntax::Modern, true) | ("rgba", ..) => ColorFormat::Rgba,
+        ("hsl", _, false) => ColorFormat::Hsl,
+        ("hsl", Syntax::Modern, true) | ("hsla", ..) => ColorFormat::Hsla,
+        ("hwb", Syntax::Modern, false) => ColorFormat::Hwb,
+        ("hwb", Syntax::Modern, true) => ColorFormat::Hwba,
+        _ => return None,
+    };
+    let opacity = match alpha {
+        Some(text) => alpha_fraction(text)?,
+        None => 1.,
+    };
+    let hue = |text: &str| {
+        let degrees = if legacy { integer(text) } else { number(text) };
+        degrees.filter(|degrees| *degrees <= 360.)
+    };
+    let color = match format {
+        ColorFormat::Rgb | ColorFormat::Rgba => {
+            let channel = |text: &str| {
+                if legacy {
+                    integer(text)
+                        .filter(|value| *value <= 255.)
+                        .map(|value| value / 255.)
+                } else {
+                    rgb_fraction(text)
+                }
+            };
+            Color::new(channel(x)?, channel(y)?, channel(z)?, opacity)
+        }
+        ColorFormat::Hsl | ColorFormat::Hsla => {
+            // Legacy hsl() requires the percent sign; the modern form makes it optional.
+            let level = |text: &str| {
+                (!legacy || text.ends_with('%'))
+                    .then(|| percent(text))
+                    .flatten()
+            };
+            Color::from_hsla(hue(x)?, level(y)?, level(z)?, opacity)
+        }
+        _ => Color::from_hwba(hue(x)?, percent(y)?, percent(z)?, opacity),
+    };
+    let [r, g, b, a] = color.to_rgba8();
+    Some((Rgba { r, g, b, a }, format))
+}
+fn parse_hex(digits: &str) -> Option<(Rgba, ColorFormat)> {
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    // Every byte is an ASCII hex digit, so these slices fall on char boundaries.
+    let short = |index: usize| {
+        u8::from_str_radix(&digits[index..=index], 16)
+            .ok()
+            .map(|nibble| nibble * 17)
+    };
+    let long = |index: usize| u8::from_str_radix(&digits[index * 2..index * 2 + 2], 16).ok();
+    let parsed = match digits.len() {
+        3 => (
+            Rgba {
+                r: short(0)?,
+                g: short(1)?,
+                b: short(2)?,
+                a: 255,
+            },
+            ColorFormat::ShortHex,
+        ),
+        4 => (
+            Rgba {
+                r: short(0)?,
+                g: short(1)?,
+                b: short(2)?,
+                a: short(3)?,
+            },
+            ColorFormat::ShortHexAlpha,
+        ),
+        6 => (
+            Rgba {
+                r: long(0)?,
+                g: long(1)?,
+                b: long(2)?,
+                a: 255,
+            },
+            ColorFormat::Hex,
+        ),
+        8 => (
+            Rgba {
+                r: long(0)?,
+                g: long(1)?,
+                b: long(2)?,
+                a: long(3)?,
+            },
+            ColorFormat::HexAlpha,
+        ),
+        _ => return None,
+    };
+    Some(parsed)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Syntax {
+    /// `f(a, b, c[, alpha])`
+    Legacy,
+    /// `f(a b c[ / alpha])`
+    Modern,
+}
+fn split_arguments(arguments: &str) -> Option<(Syntax, [&str; 3], Option<&str>)> {
+    if arguments.contains(',') {
+        let parts: Vec<&str> = arguments.split(',').map(str::trim).collect();
+        return match parts[..] {
+            [x, y, z] => Some((Syntax::Legacy, [x, y, z], None)),
+            [x, y, z, alpha] => Some((Syntax::Legacy, [x, y, z], Some(alpha))),
+            _ => None,
+        };
+    }
+    let (channels, alpha) = match arguments.split_once('/') {
+        Some((channels, alpha)) => (channels, Some(alpha.trim())),
+        None => (arguments, None),
+    };
+    let parts: Vec<&str> = channels.split_whitespace().collect();
+    match parts[..] {
+        [x, y, z] => Some((Syntax::Modern, [x, y, z], alpha)),
+        _ => None,
+    }
+}
+/// An unsigned decimal made only of digits and dots, like CotEditor's `[0-9.]+`.
+fn number(text: &str) -> Option<f32> {
+    let plain = !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.');
+    plain.then(|| text.parse().ok()).flatten()
+}
+/// One to three digits, as legacy rgb() channels and hsl() hues require.
+fn integer(text: &str) -> Option<f32> {
+    let digits = (1..=3).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_digit());
+    digits.then(|| text.parse().ok()).flatten()
+}
+/// `0`–`100`, with or without `%`, as a fraction.
+fn percent(text: &str) -> Option<f32> {
+    number(text.strip_suffix('%').unwrap_or(text))
+        .filter(|value| *value <= 100.)
+        .map(|value| value / 100.)
+}
+/// `0`–`255`, or `0%`–`100%`, as a fraction.
+fn rgb_fraction(text: &str) -> Option<f32> {
+    match text.strip_suffix('%') {
+        Some(_) => percent(text),
+        None => number(text)
+            .filter(|value| *value <= 255.)
+            .map(|value| value / 255.),
+    }
+}
+/// `0`–`1`, or `0%`–`100%`.
+fn alpha_fraction(text: &str) -> Option<f32> {
+    match text.strip_suffix('%') {
+        Some(_) => percent(text),
+        None => number(text).filter(|value| *value <= 1.),
     }
 }
 fn decimal(value: f32, places: usize) -> String {
@@ -801,7 +940,18 @@ mod tests {
                 Rgba::from_rgb(0x663399),
                 ColorFormat::Keyword,
             ),
-            ("transparent", Rgba::default(), ColorFormat::Keyword),
+            ("Red", Rgba::from_rgb(0xff0000), ColorFormat::Keyword),
+            ("rgba(1,2,3)", Rgba::from_rgb(0x010203), ColorFormat::Rgba),
+            (
+                "hsl(90 50 50 / 0.5)",
+                Rgba {
+                    r: 128,
+                    g: 191,
+                    b: 64,
+                    a: 128,
+                },
+                ColorFormat::Hsla,
+            ),
         ] {
             assert_eq!(
                 Rgba::parse(source).expect(source),
@@ -816,7 +966,7 @@ mod tests {
             r: 128,
             g: 191,
             b: 64,
-            a: 127,
+            a: 128,
         };
         for format in ColorFormat::ALL {
             let code = format.format(color, false);
@@ -857,6 +1007,43 @@ mod tests {
         assert_eq!(
             ColorFormat::Keyword.format(Rgba::from_rgb(0x123456), false),
             "#123456"
+        );
+    }
+    #[test]
+    fn formats_match_coteditor_spelling() {
+        let color = Rgba {
+            r: 128,
+            g: 191,
+            b: 64,
+            a: 128,
+        };
+        for (format, expected) in [
+            (ColorFormat::Rgb, "rgb(128,191,64)"),
+            (ColorFormat::Rgba, "rgba(128,191,64,0.5)"),
+            (ColorFormat::Hsl, "hsl(90,50%,50%)"),
+            (ColorFormat::Hsla, "hsla(90,50%,50%,0.5)"),
+            (ColorFormat::Hwb, "hwb(90 25% 25%)"),
+            (ColorFormat::Hwba, "hwb(90 25% 25% / 0.5)"),
+        ] {
+            assert_eq!(format.format(color, true), expected, "format {format:?}");
+        }
+        assert_eq!(
+            ColorFormat::Hsl.format(Rgba::from_rgb(0x808080), false),
+            "hsl(0,0%,50%)"
+        );
+        assert_eq!(
+            ColorFormat::Keyword.format(
+                Rgba {
+                    a: 128,
+                    ..Rgba::from_rgb(0xff0000)
+                },
+                false
+            ),
+            "red"
+        );
+        assert_eq!(
+            ColorFormat::Rgba.format(Rgba::from_rgb(0xff0000), false),
+            "rgba(255,0,0,1)"
         );
     }
     #[test]
@@ -901,7 +1088,29 @@ mod tests {
     }
     #[test]
     fn parser_rejects_invalid_and_oversized_untrusted_input() {
-        for source in ["", "#12", "rgb(nope)", "not-a-css-color", "red\0"] {
+        for source in [
+            "",
+            "#12",
+            "rgb(nope)",
+            "not-a-css-color",
+            "red\0",
+            // CotEditor's grammar is stricter than CSS.
+            "transparent",
+            "80bf40",
+            "RGB(1,2,3)",
+            "rgb(256,0,0)",
+            "rgb(10%,0,0)",
+            "rgb(1,2,3,0.5)",
+            "rgb(-1 0 0)",
+            "rgb(1e2 0 0)",
+            "rgb(1 2 3 / 1.5)",
+            "hsl(120,100,50)",
+            "hsl(400 50% 50%)",
+            "hsl(120deg 50% 50%)",
+            "hwb(90,25%,25%)",
+            "hwba(90 25% 25%)",
+            "lab(50 0 0)",
+        ] {
             assert!(Rgba::parse(source).is_err(), "source {source:?}");
         }
         assert!(Rgba::parse(&"a".repeat(4097)).is_err());
