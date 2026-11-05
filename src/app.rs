@@ -14,7 +14,6 @@ use crate::{
     ui::{self, Palette, px},
 };
 use anyhow::{Context as _, Result, bail, ensure};
-use gpui_kit::component::InteractiveElementExt as _;
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
