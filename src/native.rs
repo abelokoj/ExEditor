@@ -1716,7 +1716,7 @@ impl NativeEditor {
         self.select_range(original_range.start..original_range.start + transformed_length)
     }
     fn tom_document(&self) -> Result<ITextDocument> {
-        let mut ole = ptr::null_mut();
+        let mut ole: *mut std::ffi::c_void = ptr::null_mut();
         ensure!(
             self.send(
                 WM_USER + 60,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T16:34:31-05:00 — Native editor build correction (local/uncommitted)
+
+- Gave the RichEdit COM out-pointer its explicit native type after GitHub reported E0282.
+- Validation: the preceding GitHub run passed formatting but stopped at compilation; tests and packaging did not run. Local source formatting/whitespace checks only; no local build or application launch.
+
 ## 2026-11-05T16:25:16-05:00 — Document safety, stable emoji, editing shortcuts and numbered names (local source batch)
 
 - Kept loaded and acknowledged external-file versions separate so declining Reload cannot silently authorize overwriting another application's changes.
