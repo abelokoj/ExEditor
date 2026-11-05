@@ -6,3 +6,7 @@
 .DS_Store
 Thumbs.db
 /dev_notes/reference-source/
+
+/dev_notes/build-logs/
+/dev_notes/build-records/
+/dev_notes/ui-artifacts/

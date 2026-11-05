@@ -248,14 +248,14 @@ impl EditorWindow {
         if !cx.has_global::<OpenEditors>() {
             cx.set_global(OpenEditors::default());
         }
-        let registration = (window.window_handle(), cx.entity().downgrade());
+        let registration = (Window::window_handle(window), cx.entity().downgrade());
         cx.global_mut::<OpenEditors>().0.push(registration);
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| this.confirm_close(window, cx))
                 .unwrap_or(true)
         });
-        let handle = window.window_handle();
+        let handle = Window::window_handle(window);
         this._poll = cx.spawn(async move |this, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(100)).await;
@@ -597,7 +597,10 @@ impl EditorWindow {
         Ok(())
     }
     fn new_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
-        let hwnd = match HasWindowHandle::window_handle(window)?.as_raw() {
+        let hwnd = match HasWindowHandle::window_handle(window)
+            .map_err(|error| anyhow::anyhow!("Native window handle: {error:?}"))?
+            .as_raw()
+        {
             RawWindowHandle::Win32(handle) => handle.hwnd.get(),
             _ => bail!("A Windows document window is required"),
         };
@@ -1918,7 +1921,7 @@ impl Render for EditorWindow {
             .bg(rgb(c.paper))
             .text_color(rgb(c.ink))
             .font_family(crate::fonts::RICH_FONT)
-            .on_drop::<ExternalPaths>(cx.listener(|this, paths, window, cx| {
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 for path in &paths.0 {
                     this.command(Command::OpenPath(path.clone()), window, cx);
                 }

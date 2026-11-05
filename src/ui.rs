@@ -140,6 +140,8 @@ pub fn ruler(
                             let _ = shaped.paint(
                                 point(x + px(2.), origin.y + px(12.)),
                                 px(12.),
+                                TextAlign::Left,
+                                None,
                                 window,
                                 cx,
                             );

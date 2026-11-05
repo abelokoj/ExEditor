@@ -11,7 +11,7 @@ mod services;
 mod settings;
 mod ui;
 
-use gpui_kit::{AppContext as _, QuitMode};
+use gpui_kit::QuitMode;
 
 fn main() {
     gpui_kit::application()

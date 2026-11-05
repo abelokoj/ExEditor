@@ -197,7 +197,7 @@ impl Render for MenuView {
                 let Some(command) = entry.command.clone() else {
                     return div()
                         .id(("menu-separator", index))
-                        .role(Role::Separator)
+                        .role(Role::Splitter)
                         .h(px(9.))
                         .px(px(7.))
                         .flex()
