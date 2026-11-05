@@ -89,6 +89,13 @@ jobs:
         run: |
           ./scripts/build-proofing-deps.ps1 -Msys2Root '${{ steps.msys2.outputs.msys2-location }}' -Destination artifacts/proofing
 
+      - name: Save the completed native proofing package
+        if: steps.proofing-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: artifacts/proofing
+          key: windows-proofing-v1-${{ hashFiles('scripts/build-proofing-deps.ps1', 'assets/licenses/proofing/**', 'vendor/box-format/**', 'Cargo.lock') }}
+
       - name: Check formatting
         run: |
           cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log

@@ -674,7 +674,10 @@ impl Divvun {
         let archive = divvun_fst::archive::open(source.path()).map_err(|error| {
             anyhow::anyhow!("The Divvun dictionary could not be opened: {error}")
         })?;
-        let mut config = archive.bundled_config().cloned().unwrap_or_default();
+        let mut config = archive
+            .bundled_config()
+            .cloned()
+            .unwrap_or_else(divvun_fst::speller::SpellerConfig::default);
         config.search_budget = Some(
             config
                 .search_budget

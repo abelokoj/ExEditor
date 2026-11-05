@@ -6,6 +6,7 @@ use crate::{
     services::utf16_byte_offset,
     ui::{self, Palette, px},
 };
+use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     Sizable as _, Size,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
@@ -297,7 +298,9 @@ impl Render for LanguageTools {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{CheckState, PendingCheck, correction_matches};
+    use crate::proofing::ProofingOptions;
+    use std::sync::{Arc, mpsc};
     #[test]
     fn background_results_are_discarded_after_text_or_options_change() {
         for changed_options in [false, true] {

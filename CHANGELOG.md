@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T18:40:21-05:00 — Language-tool API and test-import corrections (local/uncommitted)
+
+- GitHub accepted the Divvun memory-map alignment and reached ExEditor source. Imported the toolkit Selectable trait, used Divvun's inherent default constructor, and kept the test module's imports explicit to avoid GPUI attribute-macro recursion.
+- Save the successfully built native package before application diagnostics so a later Rust error does not discard that cache. Local validation remains source formatting/whitespace only; GitHub tests and installer still pending. No local compilation or app launch.
+
 ## 2026-11-05T18:27:01-05:00 — Divvun archive dependency alignment (local/uncommitted correction)
 
 - GitHub completed Voikko and dependency checks until Divvun rejected incompatible mmap-io Segment types (0.9.x versus 1.x). Aligned the vendored archive manifest with Divvun's 0.9.11 interface; retained the existing compression compatibility alias and documented both manifest-only changes.
