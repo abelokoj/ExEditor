@@ -1,0 +1,153 @@
+{
+  "pretendard_commit": "7aeb0698819be2b4097dae8ec8fe6a795e5cf3ae",
+  "maple_release": "v7.9",
+  "maple_commit": "4d847729cbfc5b5d8cbae5795fd2348c70112648",
+  "maple_archive_sha256": "59098b87c895d871635d37680e88000ae2b2b25b55428195b228ec589e35fb89",
+  "fonts": [
+    {
+      "file": "pretendard-std/PretendardStd-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/abelokoj/pretendard/7aeb0698819be2b4097dae8ec8fe6a795e5cf3ae/packages/pretendard-std/dist/public/static/alternative/PretendardStd-Regular.ttf",
+      "sha256": "1ad55c52b41152d9a24b4da0dded8fdbbe5875a4ac5259e012a67af5f0d73bfc",
+      "family": "Pretendard Std",
+      "style": "Regular",
+      "postscript": "PretendardStd-Regular",
+      "weight": 400,
+      "italic_angle": 0.0,
+      "size": 453060
+    },
+    {
+      "file": "pretendard-std/PretendardStd-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/abelokoj/pretendard/7aeb0698819be2b4097dae8ec8fe6a795e5cf3ae/packages/pretendard-std/dist/public/static/alternative/PretendardStd-Bold.ttf",
+      "sha256": "d19618a699fa0ebb3e32a0b6a520813a999094ae7aba938e8a0add8df6954b75",
+      "family": "Pretendard Std",
+      "style": "Bold",
+      "postscript": "PretendardStd-Bold",
+      "weight": 700,
+      "italic_angle": 0.0,
+      "size": 452200
+    },
+    {
+      "file": "maple-mono-nf/MapleMono-NF-Regular.ttf",
+      "source": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-NF.zip",
+      "sha256": "dbf160ce96358056a47777e95a50af208b438312787cf20917ce2321066de8e5",
+      "family": "Maple Mono NF",
+      "style": "Regular",
+      "postscript": "MapleMono-NF-Regular",
+      "weight": 400,
+      "italic_angle": 0.0,
+      "size": 2384652
+    },
+    {
+      "file": "maple-mono-nf/MapleMono-NF-Italic.ttf",
+      "source": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-NF.zip",
+      "sha256": "f20012da3a738ff070292aae453b5f7b47de3992451a581cd4ba6f7fed7b9785",
+      "family": "Maple Mono NF",
+      "style": "Italic",
+      "postscript": "MapleMono-NF-Italic",
+      "weight": 400,
+      "italic_angle": -10.0,
+      "size": 2414036
+    },
+    {
+      "file": "maple-mono-nf/MapleMono-NF-Bold.ttf",
+      "source": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-NF.zip",
+      "sha256": "cf6fb13160424257ea764a5deb1d55116c9ab5c347cb69c6be2576b44dc3d544",
+      "family": "Maple Mono NF",
+      "style": "Bold",
+      "postscript": "MapleMono-NF-Bold",
+      "weight": 700,
+      "italic_angle": 0.0,
+      "size": 2386736
+    },
+    {
+      "file": "maple-mono-nf/MapleMono-NF-BoldItalic.ttf",
+      "source": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-NF.zip",
+      "sha256": "97a40e0a25c8adb2c9e29d755a127b7fae989debf40e9f62ca3e393b1de2d429",
+      "family": "Maple Mono NF",
+      "style": "Bold Italic",
+      "postscript": "MapleMono-NF-BoldItalic",
+      "weight": 700,
+      "italic_angle": -10.0,
+      "size": 2416508
+    },
+    {
+      "file": "inter/Inter-Regular.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "archive_path": "extras/ttf/Inter-Regular.ttf",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "family": "Inter",
+      "style": "Regular",
+      "postscript": "Inter-Regular",
+      "weight": 400,
+      "italic_angle": 0.0,
+      "size": 411640
+    },
+    {
+      "file": "inter/Inter-Italic.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "archive_path": "extras/ttf/Inter-Italic.ttf",
+      "sha256": "bbc051dd204b5019a1aa0bc0ae2aa8a05ab13e7a3f979fa357631dc7feb6833a",
+      "family": "Inter",
+      "style": "Italic",
+      "postscript": "Inter-Italic",
+      "weight": 400,
+      "italic_angle": -9.399993896484375,
+      "size": 417388
+    },
+    {
+      "file": "inter/Inter-Bold.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "archive_path": "extras/ttf/Inter-Bold.ttf",
+      "sha256": "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f",
+      "family": "Inter",
+      "style": "Bold",
+      "postscript": "Inter-Bold",
+      "weight": 700,
+      "italic_angle": 0.0,
+      "size": 420428
+    },
+    {
+      "file": "inter/Inter-BoldItalic.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "archive_path": "extras/ttf/Inter-BoldItalic.ttf",
+      "sha256": "948405a16cdc62701da5f4005ed068ca5f4d27061d98f7974ccfc37831d9581d",
+      "family": "Inter",
+      "style": "Bold Italic",
+      "postscript": "Inter-BoldItalic",
+      "weight": 700,
+      "italic_angle": -9.399993896484375,
+      "size": 425296
+    },
+    {
+      "file": "inter/Inter-Bold.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "sha256": "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f",
+      "family": "Inter",
+      "size": 420428
+    },
+    {
+      "file": "inter/Inter-BoldItalic.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "sha256": "948405a16cdc62701da5f4005ed068ca5f4d27061d98f7974ccfc37831d9581d",
+      "family": "Inter",
+      "size": 425296
+    },
+    {
+      "file": "inter/Inter-Italic.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "sha256": "bbc051dd204b5019a1aa0bc0ae2aa8a05ab13e7a3f979fa357631dc7feb6833a",
+      "family": "Inter",
+      "size": 417388
+    },
+    {
+      "file": "inter/Inter-Regular.ttf",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "family": "Inter",
+      "size": 411640
+    }
+  ],
+  "inter_release": "v4.1",
+  "inter_commit": "e3a3d4c57d5ecc01453a575621882a384c1995a3",
+  "inter_archive_sha256": "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e"
+}

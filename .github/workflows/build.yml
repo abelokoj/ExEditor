@@ -1,0 +1,123 @@
+name: Build ExEditor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exeditor-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          New-Item -ItemType Directory -Path logs -Force | Out-Null
+          $toolchain = [regex]::Match((Get-Content rust-toolchain.toml -Raw), 'channel\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $toolchain) { throw 'The Rust toolchain is not pinned.' }
+          rustup toolchain install $toolchain --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version | Tee-Object -FilePath logs/toolchain.log
+          cargo --version | Tee-Object -FilePath logs/toolchain.log -Append
+
+      - name: Cache Cargo downloads and compilation
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Resolve the first lockfile on GitHub
+        run: |
+          if (-not (Test-Path -LiteralPath Cargo.lock)) {
+            cargo generate-lockfile 2>&1 | Tee-Object -FilePath logs/lockfile.log
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check Rust diagnostics
+        run: |
+          cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath logs/clippy.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run noninteractive Rust tests
+        run: |
+          cargo test --locked --all-targets 2>&1 | Tee-Object -FilePath logs/tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build the application
+        run: |
+          cargo build --locked --release --bin exeditor 2>&1 | Tee-Object -FilePath logs/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package the downloadable application
+        run: |
+          ./scripts/package.ps1 -ReleaseDirectory target/release -Destination artifacts/ExEditor -Commit '${{ github.sha }}'
+
+      - name: Build the per-user installer
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          & $compiler "/DAppVersion=$version" "/DAppSource=$((Resolve-Path artifacts/ExEditor).Path)" scripts/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExEditor-installer-windows-x64-${{ github.sha }}
+          path: artifacts/installers/ExEditor-Setup-x64.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload ExEditor
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExEditor-windows-x64-${{ github.sha }}
+          path: artifacts/ExEditor/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+
+      - name: Upload build records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExEditor-build-records-${{ github.sha }}
+          path: |
+            logs/
+            Cargo.lock
+          if-no-files-found: warn
+          retention-days: 14
+

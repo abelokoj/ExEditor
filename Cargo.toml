@@ -1,0 +1,55 @@
+[package]
+name = "exeditor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "A TextEdit-style native document editor built with Rust and GPUI Kit"
+repository = "https://github.com/abelokoj/ExEditor"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+gpui-kit = "0.9.0"
+raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+encoding_rs = "0.8"
+tempfile = "3"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+smol = "2"
+unicode-segmentation = "1"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+scraper = "0.24"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Media_Speech", "Win32_System_Com"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_System_Memory",
+    "Win32_System_DataExchange",
+    "Win32_System_Com",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_Xps",
+    "Win32_UI_Shell",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[build-dependencies]
+embed-resource = "3"
