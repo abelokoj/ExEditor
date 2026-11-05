@@ -15,9 +15,9 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{GlobalFree, HWND, POINT, RECT},
     Graphics::Gdi::{
-        ClientToScreen, DeleteDC, GetDeviceCaps, GetStockObject, HDC, LOGPIXELSX, LOGPIXELSY,
-        PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH, SetViewportOrgEx,
-        WHITE_BRUSH,
+        ClientToScreen, DeleteDC, GetDeviceCaps, GetStockObject, HDC, InvalidateRect, LOGPIXELSX,
+        LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH,
+        SetViewportOrgEx, WHITE_BRUSH,
     },
     Storage::Xps::{AbortDoc, DOCINFOW, EndDoc, EndPage, StartDocW, StartPage},
     System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
@@ -40,9 +40,10 @@ use windows_sys::Win32::{
             SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
             SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WA_ACTIVE,
             WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLEAR, WM_CONTEXTMENU, WM_COPY, WM_CUT,
-            WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_SETFOCUS, WM_SIZE, WM_UNDO, WM_USER,
-            WM_WINDOWPOSCHANGED, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_HSCROLL,
-            WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+            WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
+            WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SIZE, WM_UNDO, WM_USER, WM_WINDOWPOSCHANGED,
+            WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_HSCROLL, WS_POPUP,
+            WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
@@ -71,6 +72,9 @@ const EM_GETTEXTEX: u32 = WM_USER + 94;
 const EM_GETTEXTLENGTHEX: u32 = WM_USER + 95;
 const EM_FINDTEXTEXW: u32 = WM_USER + 124;
 const EM_SETEDITSTYLE: u32 = WM_USER + 204;
+const EM_SETTYPOGRAPHYOPTIONS: u32 = WM_USER + 202;
+/// TO_DEFAULTCOLOREMOJI | TO_DISPLAYFONTCOLOR: emoji take the emoji font's glyphs.
+const EMOJI_TYPOGRAPHY: usize = 0x1000 | 0x2000;
 const EM_SETZOOM: u32 = WM_USER + 225;
 const SCF_SELECTION: usize = 1;
 const SCF_ALL: usize = 4;
@@ -307,6 +311,10 @@ struct NativeState {
     plain: Cell<bool>,
     /// Set by a paste so rich text pasted into a dark document can be adapted.
     pasted: Cell<bool>,
+    /// Document background, behind the color emoji drawn over RichEdit's glyphs.
+    paper: Cell<u32>,
+    /// Whether the last paint drew emoji, and the selection it skipped them for.
+    emoji: Cell<Option<crate::emoji::CharRange>>,
 }
 impl NativeState {
     /// Moves the host over the editor rectangle and shows it when the owner is on screen.
@@ -442,6 +450,8 @@ impl NativeEditor {
             focus_on_show: Cell::new(false),
             plain: Cell::new(false),
             pasted: Cell::new(false),
+            paper: Cell::new(0xffffff),
+            emoji: Cell::new(None),
         });
         let data = (&*state as *const NativeState) as usize;
         // SAFETY: boxed state stays stable until both subclasses are removed in Drop;
@@ -470,6 +480,13 @@ impl NativeEditor {
         editor.send(EM_SETEVENTMASK, 0, ENM_CHANGE);
         editor.send(EM_SETUNDOLIMIT, 1_000, 0);
         editor.send(EM_AUTOURLDETECT, 1, 0);
+        // Windows' windowed RichEdit draws through GDI, so emoji stay monochrome, but this
+        // binds them to Segoe UI Emoji and lets a RichEdit with color support use it.
+        editor.send(
+            EM_SETTYPOGRAPHYOPTIONS,
+            EMOJI_TYPOGRAPHY,
+            EMOJI_TYPOGRAPHY as isize,
+        );
         editor.set_spellcheck(true);
         editor.set_wrap(true);
         editor.set_margins(8, 8);
@@ -1234,6 +1251,7 @@ impl NativeEditor {
         self.send(EM_SETMARGINS, 3, (left | (right << 16)) as isize);
     }
     pub fn set_background(&self, color: u32) {
+        self.state.paper.set(color);
         self.send(EM_SETBKGNDCOLOR, 0, color_ref(color) as isize);
     }
     pub fn set_spellcheck(&self, enabled: bool) {
@@ -1943,6 +1961,33 @@ unsafe extern "system" fn editor_subclass(
         // SAFETY: the original procedure handles the paste on this live window.
         let result = unsafe { DefSubclassProc(hwnd, message, wparam, 0) };
         state.pasted.set(true);
+        return result;
+    } else if message == WM_PAINT && data != 0 {
+        // SAFETY: the original procedure paints and validates first; state is owned
+        // until subclass removal.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        let state = unsafe { &*(data as *const NativeState) };
+        let drew = crate::emoji::paint(hwnd, state.paper.get());
+        state.emoji.set(drew.then(|| crate::emoji::selection(hwnd)));
+        return result;
+    } else if matches!(
+        message,
+        WM_KEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE
+    ) && data != 0
+    {
+        // RichEdit redraws a selection change itself; repaint so emoji leaving or
+        // entering the selection get the right picture.
+        // SAFETY: as above.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        let state = unsafe { &*(data as *const NativeState) };
+        if let Some(painted) = state.emoji.get()
+            && crate::emoji::selection(hwnd) != painted
+        {
+            // SAFETY: invalidates this live window.
+            unsafe {
+                InvalidateRect(hwnd, ptr::null(), 0);
+            }
+        }
         return result;
     } else if message == WM_CONTEXTMENU {
         // SAFETY: the helper uses only synchronous calls on this live window.

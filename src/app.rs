@@ -425,6 +425,8 @@ struct EditorWindow {
     was_active: bool,
     /// Code theme shown while browsing the Code Theme menu; `None` shows the saved one.
     preview_theme: Option<String>,
+    /// Horizontal scroll of the document tab strip.
+    tab_scroll: ScrollHandle,
     _poll: Task<()>,
 }
 
@@ -449,6 +451,7 @@ impl EditorWindow {
             speech: Speech::default(),
             was_active: false,
             preview_theme: None,
+            tab_scroll: ScrollHandle::new(),
             _poll: Task::ready(()),
         };
         if let Some(path) = path
@@ -646,6 +649,12 @@ impl EditorWindow {
         self.editor()?
             .set_plain_text_mode(loaded.format.is_plain())?;
         self.load_content(&loaded.content)?;
+        if loaded.format.is_plain() {
+            // Plain files have no fonts of their own; without this they keep the rich default.
+            let editor = self.editor()?;
+            editor.execute(EditCommand::Font(self.prefs.plain_font.clone()))?;
+            editor.execute(EditCommand::FontSize(self.prefs.plain_size))?;
+        }
         self.doc.rich = !loaded.format.is_plain();
         self.doc.path = Some(loaded.path.clone());
         self.doc.format = loaded.format;
@@ -926,6 +935,7 @@ impl EditorWindow {
             index < self.tabs.len(),
             "That document tab is no longer open"
         );
+        self.tab_scroll.scroll_to_item(index);
         if index == self.active_tab {
             return Ok(());
         }
@@ -2521,17 +2531,28 @@ impl Render for EditorWindow {
                     .bg(rgb(c.toolbar))
                     .border_b_1()
                     .border_color(rgb(c.border))
-                    .children(self.tabs.iter().enumerate().map(|(index, tab)| {
-                        let name = tab
-                            .as_ref()
-                            .map(DocumentTab::name)
-                            .unwrap_or_else(|| self.name());
-                        ui::control(("tab", index), name, 160., index == current, c).on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.command(Command::SwitchTab(index), window, cx)
-                            }),
-                        )
-                    }))
+                    .child(
+                        // Tabs keep their width and scroll sideways (wheel or trackpad)
+                        // once they no longer fit; "+" stays in reach at the end.
+                        div()
+                            .id("document-tab-strip")
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_x_scroll()
+                            .track_scroll(&self.tab_scroll)
+                            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                                let name = tab
+                                    .as_ref()
+                                    .map(DocumentTab::name)
+                                    .unwrap_or_else(|| self.name());
+                                ui::control(("tab", index), name, 160., index == current, c)
+                                    .flex_shrink_0()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.command(Command::SwitchTab(index), window, cx)
+                                    }))
+                            })),
+                    )
                     .child(
                         ui::control("new-tab", "+", 28., false, c).on_click(cx.listener(
                             |this, _, window, cx| this.command(Command::NewTab, window, cx),
@@ -2700,6 +2721,10 @@ impl DocumentTab {
         match &buffer.document.content {
             DocumentContent::Plain(text) => editor.set_text(text)?,
             DocumentContent::Rich(bytes) => editor.set_rtf(bytes)?,
+        }
+        if buffer.document.format.is_plain() {
+            editor.execute(EditCommand::Font(prefs.plain_font.clone()))?;
+            editor.execute(EditCommand::FontSize(prefs.plain_size))?;
         }
         tab.last_text = editor.text()?;
         tab.formatting = editor.formatting();

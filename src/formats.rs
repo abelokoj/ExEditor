@@ -156,7 +156,26 @@ pub fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>> {
     let mut page = String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
     html::push_html(&mut page, events);
     page.push_str("</body></html>");
-    write_rtf(&read_html(page.as_bytes(), directory)?)
+    let mut document = read_html(page.as_bytes(), directory)?;
+    // Read as a document: the app's text font and a little room between blocks.
+    let mut paragraphs: Vec<&mut Paragraph> = Vec::new();
+    for block in &mut document.blocks {
+        match block {
+            Block::Paragraph(paragraph) => paragraphs.push(paragraph),
+            Block::Table(rows) => paragraphs.extend(rows.iter_mut().flatten().flatten()),
+        }
+    }
+    for paragraph in paragraphs {
+        if paragraph.list == List::None {
+            paragraph.after = 120;
+        }
+        for run in &mut paragraph.runs {
+            if run.style.font == Style::default().font {
+                run.style.font = crate::fonts::RICH_FONT.into();
+            }
+        }
+    }
+    write_rtf(&document)
 }
 
 pub fn export(rtf: &[u8], format: DocumentFormat) -> Result<Vec<u8>> {
@@ -954,7 +973,10 @@ fn write_rtf_paragraph(
         List::Bullet => output.push_str("{\\*\\pn\\pnlvlblt\\pnf0{\\pntxtb\\u8226?}}"),
         List::Number => output.push_str("{\\*\\pn\\pnlvlbody\\pndec\\pnstart1{\\pntxta.}}"),
     }
-    output.push(' ');
+    // A space ends a control word; after the list group's closing brace it would be text.
+    if paragraph.list == List::None {
+        output.push(' ');
+    }
     for run in &paragraph.runs {
         let style = &run.style;
         let font = fonts
@@ -2007,8 +2029,19 @@ fn html_blocks(
         element.ancestors().count() <= MAX_HTML_DEPTH,
         "The HTML document is nested too deeply to import safely."
     );
+    // Nested lists step in; the outermost list keeps the left margin.
+    let depth = std::iter::once(element)
+        .chain(element.ancestors().filter_map(ElementRef::wrap))
+        .filter(|ancestor| matches!(ancestor.value().name(), "ul" | "ol"))
+        .count();
+    let left = if list == List::None {
+        0
+    } else {
+        360 * (depth.max(1) as i32 - 1)
+    };
     let mut pending = Paragraph {
         list,
+        left,
         ..Paragraph::default()
     };
     for node in element.children() {
@@ -2023,17 +2056,14 @@ fn html_blocks(
                     )
                 }) =>
                 {
-                    if !pending.runs.is_empty() {
-                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
-                    }
+                    flush(&mut pending, blocks);
                     html_blocks(child, style, directory, blocks, list)?;
                 }
                 "p" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" => {
-                    if !pending.runs.is_empty() {
-                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
-                    }
+                    flush(&mut pending, blocks);
                     let mut paragraph = Paragraph {
                         list,
+                        left,
                         ..Paragraph::default()
                     };
                     let style = html_style(child, style, &mut paragraph);
@@ -2041,17 +2071,13 @@ fn html_blocks(
                     blocks.push(Block::Paragraph(paragraph));
                 }
                 "div" | "section" | "article" | "main" | "blockquote" => {
-                    if !pending.runs.is_empty() {
-                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
-                    }
+                    flush(&mut pending, blocks);
                     let mut paragraph = Paragraph::default();
                     let style = html_style(child, style, &mut paragraph);
                     html_blocks(child, &style, directory, blocks, list)?;
                 }
                 "ul" | "ol" => {
-                    if !pending.runs.is_empty() {
-                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
-                    }
+                    flush(&mut pending, blocks);
                     html_blocks(
                         child,
                         style,
@@ -2065,9 +2091,7 @@ fn html_blocks(
                     )?;
                 }
                 "table" => {
-                    if !pending.runs.is_empty() {
-                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
-                    }
+                    flush(&mut pending, blocks);
                     let mut rows = Vec::new();
                     let row_selector = scraper::Selector::parse("tr").expect("constant selector");
                     for row in child.select(&row_selector) {
@@ -2115,10 +2139,28 @@ fn html_blocks(
             }
         }
     }
-    if !pending.runs.is_empty() {
-        blocks.push(Block::Paragraph(pending));
-    }
+    flush(&mut pending, blocks);
     Ok(())
+}
+/// Ends the paragraph collected so far, keeping its list placement for the text after it.
+/// Whitespace before a nested block is source formatting, not a blank line.
+fn flush(pending: &mut Paragraph, blocks: &mut Vec<Block>) {
+    if let Some(last) = pending.runs.last_mut()
+        && last.picture.is_none()
+    {
+        last.text.truncate(last.text.trim_end().len());
+    }
+    pending
+        .runs
+        .retain(|run| run.picture.is_some() || !run.text.is_empty());
+    if !pending.runs.is_empty() {
+        let next = Paragraph {
+            list: pending.list,
+            left: pending.left,
+            ..Paragraph::default()
+        };
+        blocks.push(Block::Paragraph(std::mem::replace(pending, next)));
+    }
 }
 fn html_inline(
     element: ElementRef<'_>,
@@ -2693,6 +2735,19 @@ Some **bold** and `code`.
             assert!(rtf.contains(expected), "{expected} missing");
         }
         assert!(rtf.contains(r"\b"), "bold run");
+        assert!(rtf.contains(r"\li360"), "nested item is indented");
+        assert!(
+            !rtf.contains(r"舦?}} "),
+            "no stray space starts a list item"
+        );
+        assert!(
+            !rtf.contains(r"outer\line"),
+            "no blank line before the nested list"
+        );
+        assert!(
+            rtf.contains(crate::fonts::RICH_FONT),
+            "body uses the rich font"
+        );
     }
     fn fixture() -> Document {
         let mut paragraph = Paragraph {

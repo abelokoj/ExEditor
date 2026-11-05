@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-05 — Color emoji, scrolling tabs, plain-text font on open, Markdown layout
+
+- Emoji show in color, as on phones and in other apps, in plain, rich, code and Markdown documents. Windowed RichEdit can only draw them in black and white, so the editor now redraws each visible emoji on top in color with Direct2D and DirectWrite (Segoe UI Emoji). Whole sequences such as flags, skin tones, keycaps and family emoji are drawn as one picture. Selected emoji keep RichEdit's own highlight drawing.
+- When the tabs no longer fit the window, the tab strip scrolls sideways (mouse wheel or trackpad) instead of squeezing the tabs. The tab you switch to or open scrolls into view, and the "+" button stays visible at the end.
+- Fixed plain and code files opening in the rich-text font (Pretendard) instead of the plain-text font (Maple Mono NF). Opening a file and restoring a recovered buffer now apply the plain-text font and size from Settings.
+- Markdown view: nested list items are indented, the stray blank line before a nested list is gone, paragraphs have a little space after them, and body text uses the rich-text font instead of Arial. List items no longer start with a stray space. HTML import shares the list and whitespace fixes.
+- Checked in build 2026-11-5.5 (isolated data folder): code coloring with Automatic and Dracula, dark document paper, dark title bar, and the Markdown view. The live theme preview was not exercised by hand.
+
 ## 2026-11-05 — Dark documents, code coloring, Markdown, menus that run, closing
 
 - Fixed menus and settings that did nothing (Interface Size among them). A message box's modal loop could run the window's 100 ms poll while the window was busy; that failed update stopped the poll for good, so queued menu commands never ran. The poll now skips that tick and stops only when the window is gone.

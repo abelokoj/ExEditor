@@ -5,6 +5,7 @@ mod color;
 mod color_picker;
 mod dialogs;
 mod document;
+mod emoji;
 mod fonts;
 mod formats;
 mod native;
