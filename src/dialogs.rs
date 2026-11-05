@@ -141,13 +141,12 @@ pub fn menu(
 }
 impl MenuView {
     fn activate(&self, window: &mut Window) {
-        if let Some(entry) = self.selection.and_then(|index| self.entries.get(index)) {
-            if entry.enabled {
-                if let Some(command) = entry.command.clone() {
-                    self.commands.borrow_mut().push_back(command);
-                    window.remove_window();
-                }
-            }
+        if let Some(entry) = self.selection.and_then(|index| self.entries.get(index))
+            && entry.enabled
+            && let Some(command) = entry.command.clone()
+        {
+            self.commands.borrow_mut().push_back(command);
+            window.remove_window();
         }
     }
     fn navigate(&mut self, step: MenuStep, cx: &mut Context<Self>) {

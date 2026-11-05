@@ -87,6 +87,7 @@ pub enum Command {
     ClearRecent,
     Font,
     Foreground,
+    CustomSpacing,
     Background,
     Table,
     Link,
@@ -240,10 +241,10 @@ impl EditorWindow {
             speech: Speech::default(),
             _poll: Task::ready(()),
         };
-        if let Some(path) = path {
-            if let Err(error) = this.read_file(&path) {
-                show_error(&error);
-            }
+        if let Some(path) = path
+            && let Err(error) = this.read_file(&path)
+        {
+            show_error(&error);
         }
         if !cx.has_global::<OpenEditors>() {
             cx.set_global(OpenEditors::default());
@@ -311,7 +312,18 @@ impl EditorWindow {
         }
     }
     fn read_file(&mut self, path: &Path) -> Result<()> {
-        let loaded = document::load(path)?;
+        let format = DocumentFormat::from_path(path)?;
+        ensure!(
+            document::supports_format(format),
+            "This document format is not supported. Save it as RTF or DOCX in the originating application."
+        );
+        let loaded = document::load(path).or_else(|error| {
+            if format.is_plain() && self.prefs.default_encoding != TextEncoding::Utf8 {
+                document::load_with_encoding(path, self.prefs.default_encoding)
+            } else {
+                Err(error)
+            }
+        })?;
         self.editor()?
             .set_plain_text_mode(loaded.format.is_plain())?;
         self.load_content(&loaded.content)?;
@@ -366,25 +378,26 @@ impl EditorWindow {
         }
         self.doc.dirty = editor.is_modified() || self.doc.dirty;
         self.doc.formatting = editor.formatting();
-        if let Ok(text) = editor.text() {
-            if text != self.doc.last_text && window.is_window_active() && !self.doc.read_only {
-                let range = editor.selection();
-                if range.start == range.end
-                    && text.chars().count() == self.doc.last_text.chars().count() + 1
-                {
-                    if let Some(change) = services::substitution(
-                        &text,
-                        range.end,
-                        self.prefs.smart_quotes,
-                        self.prefs.smart_dashes,
-                    ) {
-                        let _ = editor
-                            .select_range(change.range)
-                            .and_then(|()| editor.replace_current(&change.replacement));
-                    }
-                }
-                self.doc.last_text = editor.text().unwrap_or(text);
+        if let Ok(text) = editor.text()
+            && text != self.doc.last_text
+            && window.is_window_active()
+            && !self.doc.read_only
+        {
+            let range = editor.selection();
+            if range.start == range.end
+                && text.chars().count() == self.doc.last_text.chars().count() + 1
+                && let Some(change) = services::substitution(
+                    &text,
+                    range.end,
+                    self.prefs.smart_quotes,
+                    self.prefs.smart_dashes,
+                )
+            {
+                let _ = editor
+                    .select_range(change.range)
+                    .and_then(|()| editor.replace_current(&change.replacement));
             }
+            self.doc.last_text = editor.text().unwrap_or(text);
         }
         if self.doc.dirty
             && self.doc.last_recovery.elapsed()
@@ -396,21 +409,19 @@ impl EditorWindow {
             self.doc.last_recovery = Instant::now();
         }
         if self.doc.last_external_check.elapsed() > Duration::from_secs(3) {
-            if let (Some(path), Some(old)) = (&self.doc.path, &self.doc.fingerprint) {
-                if let Ok(new) = document::fingerprint(path) {
-                    if &new != old {
-                        let path = path.clone();
-                        if !self.doc.dirty
-                            && confirm(
-                                "Document changed on disk",
-                                "Reload the changes made by another application?",
-                            )
-                        {
-                            if let Err(error) = self.read_file(&path) {
-                                show_error(&error);
-                            }
-                        }
-                    }
+            if let (Some(path), Some(old)) = (&self.doc.path, &self.doc.fingerprint)
+                && let Ok(new) = document::fingerprint(path)
+                && &new != old
+            {
+                let path = path.clone();
+                if !self.doc.dirty
+                    && confirm(
+                        "Document changed on disk",
+                        "Reload the changes made by another application?",
+                    )
+                    && let Err(error) = self.read_file(&path)
+                {
+                    show_error(&error);
                 }
             }
             self.doc.last_external_check = Instant::now();
@@ -458,17 +469,15 @@ impl EditorWindow {
                 .clone()
                 .context("A saved document must have a path")?
         };
-        if !as_new {
-            if let (Some(old), Ok(now)) = (&self.doc.fingerprint, document::fingerprint(&path)) {
-                if old != &now
-                    && !confirm(
-                        "Replace changed document?",
-                        "This file has changed outside ExEditor. Replace it with your current document?",
-                    )
-                {
-                    return Ok(false);
-                }
-            }
+        if !as_new
+            && let (Some(old), Ok(now)) = (&self.doc.fingerprint, document::fingerprint(&path))
+            && old != &now
+            && !confirm(
+                "Replace changed document?",
+                "This file has changed outside ExEditor. Replace it with your current document?",
+            )
+        {
+            return Ok(false);
         }
         let format = DocumentFormat::from_path(&path)?;
         if format.is_plain()
@@ -760,13 +769,13 @@ impl EditorWindow {
                 }
             }
             Command::Revert => {
-                if let Some(path) = self.doc.path.clone() {
-                    if confirm(
+                if let Some(path) = self.doc.path.clone()
+                    && confirm(
                         "Revert document?",
                         "Replace your current changes with the version saved on disk?",
-                    ) {
-                        self.read_file(&path)?;
-                    }
+                    )
+                {
+                    self.read_file(&path)?;
                 }
             }
             Command::Restore(path) => {
@@ -978,6 +987,13 @@ impl EditorWindow {
                     Field::toggle("Italic", self.doc.formatting.italic),
                     Field::toggle("Underline", self.doc.formatting.underline),
                 ],
+                window,
+                cx,
+            ),
+            Command::CustomSpacing => self.show_form(
+                FormKind::Spacing,
+                "Line Spacing",
+                vec![Field::text("Line spacing", 1.0)],
                 window,
                 cx,
             ),
@@ -1533,6 +1549,8 @@ impl EditorWindow {
                     "",
                     EditCommand::Direction(true),
                 ),
+                e("First Line Indent", "", EditCommand::FirstLineIndent(360)),
+                e("Hanging Indent", "", EditCommand::FirstLineIndent(-360)),
                 e("Increase Indent", "", EditCommand::Indent(360)),
                 e("Decrease Indent", "", EditCommand::Indent(-360)),
             ])
@@ -1616,6 +1634,7 @@ impl EditorWindow {
                         EditCommand::LineSpacing(spacing),
                     )
                 })
+                .chain([item("Custom…", "", C::CustomSpacing)])
                 .collect(),
             M::Colors => vec![
                 item("Show Colors…", "", C::Foreground),
@@ -1629,7 +1648,6 @@ impl EditorWindow {
         Ok(entries)
     }
     fn toolbar_control(
-        &self,
         id: &'static str,
         label: String,
         width: f32,
@@ -1653,107 +1671,106 @@ impl EditorWindow {
         } else {
             12.
         };
-        let mut controls =
-            vec![
-                self.toolbar_control(
-                    "paragraph-style",
-                    "¶⌄".into(),
-                    28.,
-                    false,
-                    Command::Menu(MenuKind::Lists),
-                    c,
-                    cx,
+        let mut controls = vec![
+            Self::toolbar_control(
+                "paragraph-style",
+                "¶⌄".into(),
+                28.,
+                false,
+                Command::Menu(MenuKind::Lists),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "font-family",
+                font,
+                130.,
+                false,
+                Command::Menu(MenuKind::Fonts),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "font-face",
+                if self.doc.formatting.bold {
+                    "Bold"
+                } else if self.doc.formatting.italic {
+                    "Italic"
+                } else {
+                    "Regular"
+                }
+                .into(),
+                78.,
+                false,
+                Command::Menu(MenuKind::Weights),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "font-size",
+                format!("{size:.0} ⌄"),
+                43.,
+                false,
+                Command::Menu(MenuKind::Sizes),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            ui::control("text-color", "", 24., false, c)
+                .child(
+                    div()
+                        .size(px(12.))
+                        .rounded(px(2.))
+                        .bg(rgb(self.doc.formatting.foreground)),
                 )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.command(Command::Menu(MenuKind::Colors), window, cx)
+                }))
                 .into_any_element(),
-                self.toolbar_control(
-                    "font-family",
-                    font,
-                    130.,
-                    false,
-                    Command::Menu(MenuKind::Fonts),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                self.toolbar_control(
-                    "font-face",
-                    if self.doc.formatting.bold {
-                        "Bold"
-                    } else if self.doc.formatting.italic {
-                        "Italic"
-                    } else {
-                        "Regular"
-                    }
-                    .into(),
-                    78.,
-                    false,
-                    Command::Menu(MenuKind::Weights),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                self.toolbar_control(
-                    "font-size",
-                    format!("{size:.0} ⌄"),
-                    43.,
-                    false,
-                    Command::Menu(MenuKind::Sizes),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                ui::control("text-color", "", 24., false, c)
-                    .child(
-                        div()
-                            .size(px(12.))
-                            .rounded(px(2.))
-                            .bg(rgb(self.doc.formatting.foreground)),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.command(Command::Foreground, window, cx)
-                    }))
-                    .into_any_element(),
-                self.toolbar_control(
-                    "text-background",
-                    "A̲".into(),
-                    24.,
-                    false,
-                    Command::Background,
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                self.toolbar_control(
-                    "bold",
-                    "B".into(),
-                    22.,
-                    self.doc.formatting.bold,
-                    Command::Edit(EditCommand::Bold),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                self.toolbar_control(
-                    "italic",
-                    "I".into(),
-                    22.,
-                    self.doc.formatting.italic,
-                    Command::Edit(EditCommand::Italic),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                self.toolbar_control(
-                    "underline",
-                    "U̲".into(),
-                    22.,
-                    self.doc.formatting.underline,
-                    Command::Edit(EditCommand::Underline),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-            ];
+            Self::toolbar_control(
+                "text-background",
+                "A̲".into(),
+                24.,
+                false,
+                Command::Background,
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "bold",
+                "B".into(),
+                22.,
+                self.doc.formatting.bold,
+                Command::Edit(EditCommand::Bold),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "italic",
+                "I".into(),
+                22.,
+                self.doc.formatting.italic,
+                Command::Edit(EditCommand::Italic),
+                c,
+                cx,
+            )
+            .into_any_element(),
+            Self::toolbar_control(
+                "underline",
+                "U̲".into(),
+                22.,
+                self.doc.formatting.underline,
+                Command::Edit(EditCommand::Underline),
+                c,
+                cx,
+            )
+            .into_any_element(),
+        ];
         for (id, data, alignment) in [
             ("left", ui::ALIGN_LEFT, Alignment::Left),
             ("center", ui::ALIGN_CENTER, Alignment::Center),
@@ -1772,7 +1789,7 @@ impl EditorWindow {
             );
         }
         controls.push(
-            self.toolbar_control(
+            Self::toolbar_control(
                 "line-spacing",
                 "1.0 ⌄".into(),
                 45.,

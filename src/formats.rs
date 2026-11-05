@@ -195,11 +195,12 @@ fn push_text(paragraph: &mut Paragraph, text: &str, style: &Style) {
     if text.is_empty() {
         return;
     }
-    if let Some(last) = paragraph.runs.last_mut() {
-        if last.picture.is_none() && last.style == *style {
-            last.text.push_str(text);
-            return;
-        }
+    if let Some(last) = paragraph.runs.last_mut()
+        && last.picture.is_none()
+        && last.style == *style
+    {
+        last.text.push_str(text);
+        return;
     }
     paragraph.runs.push(Run {
         text: text.into(),
@@ -444,13 +445,13 @@ impl RtfReader {
                 Token::Group(nested) => match destination(nested) {
                     Some("fonttbl") => {
                         for token in nested {
-                            if let Token::Group(font) = token {
-                                if let Some(index) = words(font, "f") {
-                                    self.fonts.insert(
-                                        index,
-                                        token_text(font)?.trim().trim_end_matches(';').to_owned(),
-                                    );
-                                }
+                            if let Token::Group(font) = token
+                                && let Some(index) = words(font, "f")
+                            {
+                                self.fonts.insert(
+                                    index,
+                                    token_text(font)?.trim().trim_end_matches(';').to_owned(),
+                                );
                             }
                         }
                     }
@@ -1305,10 +1306,10 @@ fn word_paragraph(
     let mut result = Paragraph::default();
     let mut style = defaults.clone();
     if let Some(properties) = child(node, "pPr") {
-        if let Some(id) = child(properties, "pStyle").and_then(|node| value(node, "val")) {
-            if let Some(stored) = styles.get(id) {
-                style = stored.clone();
-            }
+        if let Some(id) = child(properties, "pStyle").and_then(|node| value(node, "val"))
+            && let Some(stored) = styles.get(id)
+        {
+            style = stored.clone();
         }
         for property in properties.children().filter(Node::is_element) {
             match property.tag_name().name() {

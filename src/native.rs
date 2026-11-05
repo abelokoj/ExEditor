@@ -1431,15 +1431,13 @@ unsafe extern "system" fn editor_subclass(
                 GetKeyState(VK_SHIFT as i32) < 0,
             )
         };
-        if control {
-            if let Some(action) = shortcut(wparam as u32, shift) {
-                // SAFETY: data points to boxed state owned until subclass removal.
-                let state = unsafe { &*(data as *const NativeState) };
-                if let Ok(mut queue) = state.shortcuts.try_borrow_mut() {
-                    queue.push_back(action.to_owned());
-                }
-                return 0;
+        if control && let Some(action) = shortcut(wparam as u32, shift) {
+            // SAFETY: data points to boxed state owned until subclass removal.
+            let state = unsafe { &*(data as *const NativeState) };
+            if let Ok(mut queue) = state.shortcuts.try_borrow_mut() {
+                queue.push_back(action.to_owned());
             }
+            return 0;
         }
     } else if message == WM_CHAR {
         // TranslateMessage may queue a control character before dispatching its
@@ -1715,43 +1713,6 @@ fn bitmap_dib(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(dib)
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn rich_edit_abi_matches_microsoft_pack_four_layout() {
-        assert_eq!(size_of::<CharFormat>(), 116);
-        assert_eq!(size_of::<ParaFormat>(), 188);
-        assert_eq!(size_of::<EditStream>(), size_of::<usize>() * 2 + 4);
-    }
-    #[test]
-    fn rtf_escape_preserves_unicode_and_literal_controls() {
-        assert_eq!(
-            rtf_escape("a{\\}\n😀"),
-            "a\\{\\\\\\}\\line \\u-10179?\\u-8704?"
-        );
-        assert_eq!(normalize_newlines("a\r\nb\rc\n"), "a\nb\nc\n");
-    }
-    #[test]
-    fn dib_rows_are_bottom_up_bgr_and_padded() {
-        let dib = bitmap_dib(1, 2, &[255, 0, 0, 255, 0, 0, 255, 255]).expect("valid pixels");
-        assert_eq!(&dib[40..], &[255, 0, 0, 0, 0, 0, 255, 0]);
-    }
-    #[test]
-    fn title_case_and_application_shortcuts_are_explicit() {
-        let (changes, length) = case_changes("😀aß", Case::Upper, 10);
-        assert_eq!(length, 5);
-        assert_eq!(changes[0].start, 12);
-        assert_eq!(changes[0].replacement, "A");
-        assert_eq!(changes[1].start, 13);
-        assert_eq!(changes[1].original_len, 1);
-        assert_eq!(changes[1].replacement, "SS");
-        assert_eq!(shortcut(0x53, false), Some("save"));
-        assert_eq!(shortcut(0x53, true), Some("save-as"));
-        assert_eq!(shortcut(0x42, false), None);
-    }
-}
-
 #[repr(C)]
 struct UnknownVtable {
     query: unsafe extern "system" fn(
@@ -1822,4 +1783,41 @@ fn printer_mode(page: &PageSettings) -> Result<windows_sys::Win32::Graphics::Gdi
         },
         ..DEVMODEW::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rich_edit_abi_matches_microsoft_pack_four_layout() {
+        assert_eq!(size_of::<CharFormat>(), 116);
+        assert_eq!(size_of::<ParaFormat>(), 188);
+        assert_eq!(size_of::<EditStream>(), size_of::<usize>() * 2 + 4);
+    }
+    #[test]
+    fn rtf_escape_preserves_unicode_and_literal_controls() {
+        assert_eq!(
+            rtf_escape("a{\\}\n😀"),
+            "a\\{\\\\\\}\\line \\u-10179?\\u-8704?"
+        );
+        assert_eq!(normalize_newlines("a\r\nb\rc\n"), "a\nb\nc\n");
+    }
+    #[test]
+    fn dib_rows_are_bottom_up_bgr_and_padded() {
+        let dib = bitmap_dib(1, 2, &[255, 0, 0, 255, 0, 0, 255, 255]).expect("valid pixels");
+        assert_eq!(&dib[40..], &[255, 0, 0, 0, 0, 0, 255, 0]);
+    }
+    #[test]
+    fn title_case_and_application_shortcuts_are_explicit() {
+        let (changes, length) = case_changes("😀aß", Case::Upper, 10);
+        assert_eq!(length, 5);
+        assert_eq!(changes[0].start, 12);
+        assert_eq!(changes[0].replacement, "A");
+        assert_eq!(changes[1].start, 13);
+        assert_eq!(changes[1].original_len, 1);
+        assert_eq!(changes[1].replacement, "SS");
+        assert_eq!(shortcut(0x53, false), Some("save"));
+        assert_eq!(shortcut(0x53, true), Some("save-as"));
+        assert_eq!(shortcut(0x42, false), None);
+    }
 }

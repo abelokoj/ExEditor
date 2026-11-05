@@ -85,8 +85,9 @@ pub fn register(cx: &mut App) -> Result<()> {
             u32::try_from(bytes.len()).context("bundled font exceeds Windows' font size limit")?;
         let mut count = 0;
         // SAFETY: include_bytes provides immutable process-lifetime font data; count is writable.
-        let handle =
-            unsafe { AddFontMemResourceEx(bytes.as_ptr().cast(), length, ptr::null(), &mut count) };
+        let handle = unsafe {
+            AddFontMemResourceEx(bytes.as_ptr().cast(), length, ptr::null(), &raw mut count)
+        };
         ensure!(
             !handle.is_null(),
             "Windows could not load the bundled {face} font"

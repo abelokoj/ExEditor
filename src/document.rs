@@ -277,7 +277,7 @@ fn decode_text(bytes: &[u8], selected: Option<TextEncoding>) -> Result<(String, 
         TextEncoding::Utf8 | TextEncoding::Utf8Bom => String::from_utf8(bytes.to_vec()).context("This file is not UTF-8. Reopen it with its original text encoding; no bytes were replaced.")?,
         TextEncoding::Utf16Le | TextEncoding::Utf16Be => {
             ensure!(bytes.len().is_multiple_of(2), "The UTF-16 file ends in an incomplete code unit.");
-            let words: Vec<u16> = bytes.chunks_exact(2).map(|pair| {
+            let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|pair| {
                 if encoding == TextEncoding::Utf16Le { u16::from_le_bytes([pair[0], pair[1]]) } else { u16::from_be_bytes([pair[0], pair[1]]) }
             }).collect();
             String::from_utf16(&words).context("The UTF-16 file contains an invalid surrogate sequence.")?

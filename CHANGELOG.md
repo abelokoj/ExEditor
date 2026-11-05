@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-05T01:17:59-05:00 — Rust diagnostics cleanup (local changes)
+
+- Connected encoding fallback, custom line spacing, color presets, and first-line/hanging indents; removed an unused toolbar receiver and moved native helper tests after implementation items.
+- Applied GitHub-reported let-chain and chunk-iteration improvements; passed a raw mutable output pointer for the private Windows font registration boundary.
+- Added a local UI evidence batch for downloaded artifacts. Validation: GitHub run 41978641841 resolved the previous API type errors but failed strict lint checks before tests/build/package. No app built locally; next remote pass pending.
+
+
 ## 2026-11-05T01:09:40-05:00 — Workflow restoration and dependency lock (local fix)
 
 - Restored the build workflow after GitHub rejected run 41978493552 before scheduling a job; corrected accidental non-YAML content introduced in the previous batch.
