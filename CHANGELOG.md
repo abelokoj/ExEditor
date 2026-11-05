@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-05 — Startup format error, window dragging, TextEdit shortcuts, interface size (local)
+
+- Fixed "Windows could not apply the character formatting" at startup with plain text as the default. Plain-text RichEdit rejects selection formatting, so font and size now apply to the whole plain document. Character and paragraph styling commands do nothing in plain text, matching TextEdit's disabled items.
+- Fixed windows that could not be dragged. GPUI's start_window_move does nothing on Windows. The document title bar, Colors and Settings now mark their title areas as drag regions (HTCAPTION); the title-bar buttons keep their clicks.
+- Shortcuts follow TextEdit (Cmd becomes Ctrl) and also work while the window rather than the document has focus:
+  - Format: Ctrl+B/I/U, Ctrl+Shift+C (Show Colors), Ctrl++ / Ctrl+- (Bigger / Smaller), Ctrl+{ / Ctrl+| / Ctrl+} (align left / center / right).
+  - Edit: Ctrl+Shift+Z (Redo), Ctrl+Shift+V (Paste and Match Style), Ctrl+J (Jump to Selection), Ctrl+; and Ctrl+Shift+; (spelling).
+  - View: zoom moved to Ctrl+Shift+. / Ctrl+Shift+, so Ctrl++ / Ctrl+- resize the font as in TextEdit.
+- From the TextEdit gap audit:
+  - Format > Font > Copy Style / Paste Style, shared across windows, with no shortcut because Ctrl+Alt is AltGr on many layouts.
+  - Ctrl+R toggles the ruler instead of RichEdit's hidden align-right, and Ctrl+Shift+W toggles Wrap to Page.
+  - Jump to Selection now scrolls to the selection.
+  - Complete no longer shows an "Esc" shortcut that did nothing.
+- Custom font sizes: Format > Font > Other Size… and the toolbar size menu's Other… accept any size from 1 to 1000 points. Bigger and Smaller step by one point, and the toolbar shows fractional sizes.
+- View > Interface Size scales the whole interface: 75–200% presets or a custom percentage (50–300%). The setting is saved, and the document's own zoom is separate.
+- Toolbar matches TextEdit's controls:
+  - B I U S buttons draw their own effects.
+  - The text background control is a color well.
+  - Line spacing has an icon.
+  - Icon buttons have names in their tooltips.
+- Validation: formatting checked with the pinned 1.99.1 rustfmt, and GPUI behavior checked against gpui-pre 0.3.11, gpui-pre-windows 0.3.11 and gpui-component 0.9.0 sources. No local compilation or app testing performed; the GitHub build is pending.
+
 ## 2026-11-05 — Typing restored: document editor hosted above GPUI (local fix)
 
 - Fixed the blank, untypeable document area. GPUI draws through a topmost DirectComposition target with no GDI redirection surface (`WS_EX_NOREDIRECTIONBITMAP`), so the RichEdit child window was invisible and unreachable. RichEdit now lives in a borderless popup owned by the GPUI window, placed over the editor rectangle in screen coordinates and moved with the window; it hides with a hidden or minimized owner.

@@ -73,6 +73,13 @@ const EM_FINDTEXTEXW: u32 = WM_USER + 124;
 const EM_SETEDITSTYLE: u32 = WM_USER + 204;
 const EM_SETZOOM: u32 = WM_USER + 225;
 const SCF_SELECTION: usize = 1;
+const SCF_ALL: usize = 4;
+thread_local! {
+    /// The character style held by Copy Style; RichEdit lives on the UI thread only.
+    static COPIED_STYLE: Cell<Option<CharFormat>> = const { Cell::new(None) };
+}
+const EM_GETTEXTMODE: u32 = WM_USER + 90;
+const TM_PLAINTEXT: isize = 1;
 const SF_RTF: usize = 2;
 const SFF_SELECTION: usize = 0x8000;
 const CFM_BOLD: u32 = 1;
@@ -237,6 +244,9 @@ pub enum EditCommand {
     Direction(bool),
     List(ListKind),
     ConvertCase(Case),
+    /// Format > Font > Copy Style / Paste Style, shared by every document window.
+    CopyStyle,
+    PasteStyle,
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FormatState {
@@ -470,6 +480,10 @@ impl NativeEditor {
             }
         }
     }
+    /// Scrolls the selection into view (Find > Jump to Selection).
+    pub fn scroll_to_selection(&self) {
+        self.send(EM_SCROLLCARET, 0, 0);
+    }
     pub fn focus(&self) {
         if !self.state.alive.get() {
             return;
@@ -650,6 +664,13 @@ impl NativeEditor {
             EditCommand::Strikethrough => self.toggle_effect(CFM_STRIKEOUT, CFM_STRIKEOUT)?,
             EditCommand::Superscript => self.toggle_effect(CFM_SCRIPT, 0x0002_0000)?,
             EditCommand::Subscript => self.toggle_effect(CFM_SCRIPT, 0x0001_0000)?,
+            EditCommand::CopyStyle => COPIED_STYLE.set(Some(self.char_format())),
+            EditCommand::PasteStyle => {
+                let style = COPIED_STYLE
+                    .get()
+                    .context("Copy a style first with Format > Font > Copy Style")?;
+                self.apply_char(style)?;
+            }
             EditCommand::Font(font) => {
                 ensure!(
                     !font.is_empty() && !font.contains('\0'),
@@ -960,7 +981,7 @@ impl NativeEditor {
     }
     pub fn set_plain_text_mode(&self, plain: bool) -> Result<()> {
         ensure!(self.state.alive.get(), "the document window has closed");
-        let was_plain = self.send(WM_USER + 90, 0, 0) & 1 != 0;
+        let was_plain = self.send(EM_GETTEXTMODE, 0, 0) & TM_PLAINTEXT != 0;
         if was_plain == plain {
             return Ok(());
         }
@@ -1335,10 +1356,16 @@ impl NativeEditor {
         format
     }
     fn apply_char(&self, format: CharFormat) -> Result<()> {
+        // Plain-text RichEdit rejects selection formatting; it has one format for the whole text.
+        let scope = if self.send(EM_GETTEXTMODE, 0, 0) & TM_PLAINTEXT != 0 {
+            SCF_ALL
+        } else {
+            SCF_SELECTION
+        };
         ensure!(
             self.send(
                 EM_SETCHARFORMAT,
-                SCF_SELECTION,
+                scope,
                 (&format as *const CharFormat) as isize
             ) != 0,
             "Windows could not apply the character formatting"
@@ -1657,8 +1684,16 @@ unsafe extern "system" fn editor_subclass(
         // TranslateMessage may queue a control character before dispatching its
         // WM_KEYDOWN, so consume the application shortcut's character as well.
         // SAFETY: GetKeyState only reads this UI thread's keyboard state.
-        if unsafe { GetKeyState(VK_CONTROL as i32) } < 0
-            && matches!(wparam, 6 | 7 | 8 | 14 | 15 | 16 | 19 | 23)
+        let (control, shift) = unsafe {
+            (
+                GetKeyState(VK_CONTROL as i32) < 0,
+                GetKeyState(VK_SHIFT as i32) < 0,
+            )
+        };
+        // Ctrl+letter arrives as control character 1..=26 ('A' - 0x40).
+        if control
+            && (1..=26).contains(&wparam)
+            && shortcut((wparam + 0x40) as u32, shift).is_some()
         {
             return 0;
         }
@@ -1672,8 +1707,27 @@ unsafe extern "system" fn editor_subclass(
     // SAFETY: unhandled messages continue through the original native procedure.
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
-fn shortcut(key: u32, shift: bool) -> Option<&'static str> {
+/// Maps a Ctrl+key (Windows virtual-key code) to its command name; TextEdit's Cmd becomes Ctrl.
+pub fn shortcut(key: u32, shift: bool) -> Option<&'static str> {
     Some(match key {
+        0x42 => "bold",
+        0x49 => "italic",
+        0x55 => "underline",
+        0x5a if shift => "redo",
+        0x56 if shift => "paste-plain",
+        0x43 if shift => "colors",
+        // Ctrl+{ Ctrl+| Ctrl+} as in TextEdit.
+        0xdb if shift => "align-left",
+        0xdc if shift => "align-center",
+        0xdd if shift => "align-right",
+        0x4a => "jump-to-selection",
+        // Also keeps RichEdit's own Ctrl+R (align right) from firing.
+        0x52 => "ruler",
+        0x57 if shift => "wrap",
+        0xba if shift => "show-spelling",
+        0xba => "check-spelling",
+        0xbe if shift => "zoom-in",
+        0xbc if shift => "zoom-out",
         0x4e if shift => "new-tab",
         0x4e => "new",
         0x4f => "open",
@@ -1693,8 +1747,8 @@ fn shortcut(key: u32, shift: bool) -> Option<&'static str> {
         0x45 => "use-selection",
         0x4c => "go-to-line",
         0x30 => "actual-size",
-        0xbb | 0x6b => "zoom-in",
-        0xbd | 0x6d => "zoom-out",
+        0xbb | 0x6b => "bigger",
+        0xbd | 0x6d => "smaller",
         0x09 if shift => "previous-tab",
         0x09 => "next-tab",
         _ => return None,
@@ -2078,6 +2132,14 @@ mod tests {
         assert_eq!(changes[1].replacement, "SS");
         assert_eq!(shortcut(0x53, false), Some("save"));
         assert_eq!(shortcut(0x53, true), Some("save-as"));
-        assert_eq!(shortcut(0x42, false), None);
+        assert_eq!(shortcut(0x42, false), Some("bold"));
+        assert_eq!(shortcut(0x5a, false), None, "Ctrl+Z stays RichEdit's undo");
+        assert_eq!(shortcut(0x5a, true), Some("redo"));
+        assert_eq!(shortcut(0x56, false), None, "Ctrl+V stays RichEdit's paste");
+        assert_eq!(shortcut(0xbc, false), Some("preferences"));
+        assert_eq!(shortcut(0xbc, true), Some("zoom-out"));
+        assert_eq!(shortcut(0xbb, true), Some("bigger"));
+        // Ctrl+I's control character (Tab) is consumed, not typed.
+        assert_eq!(shortcut(9 + 0x40, false), Some("italic"));
     }
 }

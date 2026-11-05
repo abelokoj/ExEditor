@@ -21,6 +21,9 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
+            if let Ok(preferences) = preferences::Preferences::load() {
+                ui::set_scale_percent(preferences.interface_scale);
+            }
             if let Err(error) = fonts::register(cx) {
                 app::show_error(&error);
             }

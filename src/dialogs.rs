@@ -1,7 +1,7 @@
 //! Separate GPUI windows keep menus and panels above the native document surface.
 use crate::{
     app::Command,
-    ui::{self, Palette},
+    ui::{self, Palette, px},
 };
 use gpui_kit::base::Button as MenuButton;
 use gpui_kit::component::{
@@ -18,6 +18,8 @@ pub enum FormKind {
     Table,
     Link,
     Spacing,
+    FontSize,
+    InterfaceScale,
     PageSetup,
     Preferences,
     Find,
@@ -408,6 +410,14 @@ impl FormView {
                         .and_then(|s| s.parse::<f32>().ok())
                         .is_some_and(|n| n.is_finite() && n > 0. && n <= 1000.)
             }
+            FormKind::FontSize => values
+                .first()
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .is_some_and(|n| n.is_finite() && (1. ..=1000.).contains(&n)),
+            FormKind::InterfaceScale => values
+                .first()
+                .and_then(|s| s.trim().trim_end_matches('%').trim().parse::<u16>().ok())
+                .is_some_and(|n| ui::SCALE_RANGE.contains(&n)),
             FormKind::Table => values
                 .iter()
                 .all(|s| s.parse::<u16>().is_ok_and(|n| n > 0 && n <= 100)),

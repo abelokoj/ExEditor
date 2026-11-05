@@ -11,7 +11,7 @@ use crate::{
     preferences::{Appearance, Preferences},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
-    ui::{self, Palette},
+    ui::{self, Palette, px},
 };
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui_kit::component::InteractiveElementExt as _;
@@ -48,6 +48,7 @@ pub enum MenuKind {
     Weights,
     Spacing,
     Versions,
+    InterfaceSize,
 }
 #[derive(Clone, Debug)]
 pub enum Command {
@@ -85,6 +86,12 @@ pub enum Command {
     ToggleWrap,
     ToggleReadOnly,
     Zoom(i16),
+    /// Format > Font > Bigger/Smaller, in points.
+    FontStep(f32),
+    CustomFontSize,
+    /// View > Interface Size, in percent.
+    InterfaceScale(u16),
+    CustomInterfaceScale,
     Preferences,
     ClearRecent,
     Font,
@@ -116,6 +123,68 @@ pub fn show_error(error: &anyhow::Error) {
         .set_level(MessageLevel::Error)
         .set_buttons(MessageButtons::Ok)
         .show();
+}
+/// The command behind a `native::shortcut` name, shared by the document and window key paths.
+fn shortcut_command(name: &str) -> Option<Command> {
+    Some(match name {
+        "new" => Command::New,
+        "open" => Command::Open,
+        "save" => Command::Save,
+        "save-as" => Command::SaveAs,
+        "find" => Command::Find,
+        "replace" => Command::Replace,
+        "find-next" => Command::FindNext,
+        "print" => Command::Print,
+        "close" => Command::Close,
+        "toggle-format" => Command::ToggleFormat,
+        "zoom-in" => Command::Zoom(10),
+        "zoom-out" => Command::Zoom(-10),
+        "actual-size" => Command::Zoom(0),
+        "preferences" => Command::Preferences,
+        "quit" => Command::Quit,
+        "font" => Command::Font,
+        "find-previous" => Command::FindPrevious,
+        "use-selection" => Command::UseSelection,
+        "go-to-line" => Command::GoToLine,
+        "page-setup" => Command::PageSetup,
+        "new-tab" => Command::NewTab,
+        "next-tab" => Command::NextTab(false),
+        "previous-tab" => Command::NextTab(true),
+        "bold" => Command::Edit(EditCommand::Bold),
+        "italic" => Command::Edit(EditCommand::Italic),
+        "underline" => Command::Edit(EditCommand::Underline),
+        "redo" => Command::Edit(EditCommand::Redo),
+        "paste-plain" => Command::Edit(EditCommand::PastePlain),
+        "colors" => Command::Foreground,
+        "align-left" => Command::Edit(EditCommand::Align(Alignment::Left)),
+        "align-center" => Command::Edit(EditCommand::Align(Alignment::Center)),
+        "align-right" => Command::Edit(EditCommand::Align(Alignment::Right)),
+        "jump-to-selection" => Command::GoToSelection,
+        "ruler" => Command::ToggleRuler,
+        "wrap" => Command::ToggleWrap,
+        "check-spelling" | "show-spelling" => Command::CheckSpelling,
+        "bigger" => Command::FontStep(1.),
+        "smaller" => Command::FontStep(-1.),
+        _ => return None,
+    })
+}
+/// Windows virtual-key code for a GPUI key name, for shortcuts typed while the window has focus.
+fn virtual_key(key: &str) -> Option<u32> {
+    Some(match key {
+        "tab" => 0x09,
+        "," | "<" => 0xbc,
+        "." | ">" => 0xbe,
+        "=" | "+" => 0xbb,
+        "-" | "_" => 0xbd,
+        ";" | ":" => 0xba,
+        "[" | "{" => 0xdb,
+        "\\" | "|" => 0xdc,
+        "]" | "}" => 0xdd,
+        _ => match key.as_bytes() {
+            [c @ (b'a'..=b'z' | b'0'..=b'9')] => u32::from(c.to_ascii_uppercase()),
+            _ => return None,
+        },
+    })
 }
 fn confirm(title: &str, message: &str) -> bool {
     MessageDialog::new()
@@ -387,33 +456,9 @@ impl EditorWindow {
             return;
         };
         while let Some(shortcut) = editor.take_shortcut() {
-            let command = match shortcut.as_str() {
-                "new" => Command::New,
-                "open" => Command::Open,
-                "save" => Command::Save,
-                "save-as" => Command::SaveAs,
-                "find" => Command::Find,
-                "replace" => Command::Replace,
-                "find-next" => Command::FindNext,
-                "print" => Command::Print,
-                "close" => Command::Close,
-                "toggle-format" => Command::ToggleFormat,
-                "zoom-in" => Command::Zoom(10),
-                "zoom-out" => Command::Zoom(-10),
-                "actual-size" => Command::Zoom(0),
-                "preferences" => Command::Preferences,
-                "quit" => Command::Quit,
-                "font" => Command::Font,
-                "find-previous" => Command::FindPrevious,
-                "use-selection" => Command::UseSelection,
-                "go-to-line" => Command::GoToLine,
-                "page-setup" => Command::PageSetup,
-                "new-tab" => Command::NewTab,
-                "next-tab" => Command::NextTab(false),
-                "previous-tab" => Command::NextTab(true),
-                _ => continue,
-            };
-            self.command(command, window, cx);
+            if let Some(command) = shortcut_command(&shortcut) {
+                self.command(command, window, cx);
+            }
         }
         let Some(editor) = self.doc.native.clone() else {
             return;
@@ -936,7 +981,11 @@ impl EditorWindow {
             Command::UseSelection => {
                 self.doc.find_text = self.editor()?.selected_text()?;
             }
-            Command::GoToSelection => self.editor()?.focus(),
+            Command::GoToSelection => {
+                let editor = self.editor()?;
+                editor.scroll_to_selection();
+                editor.focus();
+            }
             Command::GoToLine => self.show_form(
                 FormKind::GoToLine,
                 "Go to Line",
@@ -993,6 +1042,38 @@ impl EditorWindow {
                 };
                 self.editor()?.set_zoom(self.doc.zoom);
             }
+            Command::FontStep(delta) => {
+                let editor = self.editor()?;
+                let size = editor.formatting().size;
+                let size = if size > 0. { size } else { 12. };
+                editor.execute(EditCommand::FontSize((size + delta).clamp(1., 1638.)))?;
+            }
+            Command::InterfaceScale(percent) => {
+                ensure!(
+                    ui::SCALE_RANGE.contains(&percent),
+                    "Interface size must be between {}% and {}%",
+                    ui::SCALE_RANGE.start(),
+                    ui::SCALE_RANGE.end()
+                );
+                ui::set_scale_percent(percent);
+                self.prefs.interface_scale = percent;
+                self.prefs.save()?;
+                cx.refresh_windows();
+            }
+            Command::CustomInterfaceScale => self.show_form(
+                FormKind::InterfaceScale,
+                "Interface Size",
+                vec![Field::text("Size (%)", ui::scale_percent())],
+                window,
+                cx,
+            ),
+            Command::CustomFontSize => self.show_form(
+                FormKind::FontSize,
+                "Font Size",
+                vec![Field::text("Size (points)", self.doc.formatting.size)],
+                window,
+                cx,
+            ),
             Command::Preferences => crate::settings::open(
                 self.prefs.clone(),
                 self.queue.clone(),
@@ -1169,9 +1250,37 @@ impl EditorWindow {
                 self.prefs.save()?;
             }
             Command::Edit(edit) => {
-                if self.doc.read_only && !matches!(edit, EditCommand::Copy | EditCommand::SelectAll)
+                if self.doc.read_only
+                    && !matches!(
+                        edit,
+                        EditCommand::Copy | EditCommand::SelectAll | EditCommand::CopyStyle
+                    )
                 {
                     bail!("This document is locked. Unlock it in the Format menu to make changes.");
+                }
+                // Plain text has one style for the whole document, so TextEdit disables
+                // character and paragraph styling there; only font and size apply.
+                if !self.doc.rich
+                    && matches!(
+                        edit,
+                        EditCommand::Bold
+                            | EditCommand::Italic
+                            | EditCommand::Underline
+                            | EditCommand::Strikethrough
+                            | EditCommand::Superscript
+                            | EditCommand::Subscript
+                            | EditCommand::Foreground(_)
+                            | EditCommand::Background(_)
+                            | EditCommand::Align(_)
+                            | EditCommand::LineSpacing(_)
+                            | EditCommand::Indent(_)
+                            | EditCommand::FirstLineIndent(_)
+                            | EditCommand::TabStop(_)
+                            | EditCommand::List(_)
+                            | EditCommand::PasteStyle
+                    )
+                {
+                    return Ok(());
                 }
                 self.editor()?.execute(edit)?;
             }
@@ -1235,7 +1344,10 @@ impl EditorWindow {
                 .context("A required field is missing")
         };
         let number = |index: usize| -> Result<f32> {
-            let n = value(index)?.parse::<f32>().context("Enter a number")?;
+            let n = value(index)?
+                .trim()
+                .parse::<f32>()
+                .context("Enter a number")?;
             ensure!(
                 n.is_finite() && n > 0. && n <= 1000.,
                 "Enter a number greater than zero and at most 1000"
@@ -1287,6 +1399,16 @@ impl EditorWindow {
             FormKind::Spacing => self
                 .editor()?
                 .execute(EditCommand::LineSpacing(number(0)?))?,
+            FormKind::InterfaceScale => {
+                let percent = value(0)?
+                    .trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<u16>()
+                    .context("Enter a whole percentage, such as 125")?;
+                self.try_command(Command::InterfaceScale(percent), window, cx)?;
+            }
+            FormKind::FontSize => self.editor()?.execute(EditCommand::FontSize(number(0)?))?,
             FormKind::PageSetup => {
                 let mut page = self.doc.page.clone();
                 page.width_twips = (number(0)? * 1440.).round() as i32;
@@ -1486,7 +1608,7 @@ impl EditorWindow {
                 sep(),
                 item("Start Speaking", "", C::Speak),
                 item("Stop Speaking", "", C::StopSpeaking),
-                item("Complete", "Esc", C::Complete),
+                item("Complete", "", C::Complete),
             ],
             M::Find => vec![
                 item("Find…", "Ctrl+F", C::Find),
@@ -1494,12 +1616,12 @@ impl EditorWindow {
                 item("Find Next", "Ctrl+G", C::FindNext),
                 item("Find Previous", "Ctrl+Shift+G", C::FindPrevious),
                 item("Use Selection for Find", "Ctrl+E", C::UseSelection),
-                item("Jump to Selection", "", C::GoToSelection),
+                item("Jump to Selection", "Ctrl+J", C::GoToSelection),
                 item("Go to Line…", "Ctrl+L", C::GoToLine),
             ],
             M::Spelling => vec![
-                item("Show Spelling…", "", C::CheckSpelling),
-                item("Check Document Now", "", C::CheckSpelling),
+                item("Show Spelling…", "Ctrl+Shift+;", C::CheckSpelling),
+                item("Check Document Now", "Ctrl+;", C::CheckSpelling),
                 sep(),
                 item("Check Spelling While Typing", "", C::Toggle("spelling"))
                     .checked(self.prefs.spellcheck),
@@ -1537,7 +1659,7 @@ impl EditorWindow {
                     } else {
                         "Wrap to Page"
                     },
-                    "",
+                    "Ctrl+Shift+W",
                     C::ToggleWrap,
                 ),
                 item(
@@ -1552,6 +1674,9 @@ impl EditorWindow {
             ],
             M::Font => vec![
                 item("Show Fonts", "Ctrl+T", C::Font),
+                item("Bigger", "Ctrl++", C::FontStep(1.)),
+                item("Smaller", "Ctrl+-", C::FontStep(-1.)),
+                item("Other Size…", "", C::CustomFontSize),
                 e("Bold", "Ctrl+B", EditCommand::Bold).checked(self.doc.formatting.bold),
                 e("Italic", "Ctrl+I", EditCommand::Italic).checked(self.doc.formatting.italic),
                 e("Underline", "Ctrl+U", EditCommand::Underline)
@@ -1562,19 +1687,23 @@ impl EditorWindow {
                 e("Superscript", "", EditCommand::Superscript),
                 e("Subscript", "", EditCommand::Subscript),
                 sep(),
-                item("Show Colors…", "", C::Foreground),
+                // shortcut: no keys; TextEdit's Option-Cmd-C/V would be AltGr typing on many layouts.
+                e("Copy Style", "", EditCommand::CopyStyle),
+                e("Paste Style", "", EditCommand::PasteStyle),
+                sep(),
+                item("Show Colors…", "Ctrl+Shift+C", C::Foreground),
                 item("Text Background Color…", "", C::Background),
                 item("Insert Color Code…", "", C::InsertColorCode),
             ],
             M::Alignment => [
-                ("Left", Alignment::Left),
-                ("Center", Alignment::Center),
-                ("Right", Alignment::Right),
-                ("Justified", Alignment::Justify),
+                ("Left", "Ctrl+{", Alignment::Left),
+                ("Center", "Ctrl+|", Alignment::Center),
+                ("Right", "Ctrl+}", Alignment::Right),
+                ("Justified", "", Alignment::Justify),
             ]
             .into_iter()
-            .map(|(name, alignment)| {
-                e(name, "", EditCommand::Align(alignment))
+            .map(|(name, shortcut, alignment)| {
+                e(name, shortcut, EditCommand::Align(alignment))
                     .checked(self.doc.formatting.alignment == alignment)
             })
             .chain([
@@ -1616,14 +1745,24 @@ impl EditorWindow {
                     } else {
                         "Show Ruler"
                     },
-                    "",
+                    "Ctrl+R",
                     C::ToggleRuler,
                 ),
                 sep(),
                 item("Actual Size", "Ctrl+0", C::Zoom(0)),
-                item("Zoom In", "Ctrl++", C::Zoom(10)),
-                item("Zoom Out", "Ctrl+-", C::Zoom(-10)),
+                item("Zoom In", "Ctrl+Shift+.", C::Zoom(10)),
+                item("Zoom Out", "Ctrl+Shift+,", C::Zoom(-10)),
+                sep(),
+                item("Interface Size", "›", C::Menu(M::InterfaceSize)),
             ],
+            M::InterfaceSize => [75, 90, 100, 110, 125, 150, 175, 200]
+                .into_iter()
+                .map(|percent| {
+                    item(&format!("{percent}%"), "", C::InterfaceScale(percent))
+                        .checked(ui::scale_percent() == percent)
+                })
+                .chain([sep(), item("Custom…", "", C::CustomInterfaceScale)])
+                .collect(),
             M::Window => vec![
                 item("New Window", "Ctrl+N", C::New),
                 sep(),
@@ -1659,6 +1798,7 @@ impl EditorWindow {
                 e(&format!("{size:.0}"), "", EditCommand::FontSize(size))
                     .checked((self.doc.formatting.size - size).abs() < 0.1)
             })
+            .chain([sep(), item("Other…", "", C::CustomFontSize)])
             .collect(),
             M::Weights => vec![
                 e("Regular", "", EditCommand::Bold).checked(!self.doc.formatting.bold),
@@ -1744,8 +1884,12 @@ impl EditorWindow {
                 .into_any_element(),
                 Self::toolbar_control(
                     "font-size",
-                    format!("{size:.0} ⌄"),
-                    43.,
+                    if size.fract() == 0. {
+                        format!("{size:.0} ⌄")
+                    } else {
+                        format!("{size:.1} ⌄")
+                    },
+                    48.,
                     false,
                     Command::Menu(MenuKind::Sizes),
                     c,
@@ -1753,6 +1897,7 @@ impl EditorWindow {
                 )
                 .into_any_element(),
                 ui::control("text-color", "", 24., false, c)
+                    .tooltip("Text Color")
                     .child(
                         div()
                             .size(px(12.))
@@ -1763,57 +1908,74 @@ impl EditorWindow {
                         this.command(Command::Foreground, window, cx)
                     }))
                     .into_any_element(),
-                Self::toolbar_control(
-                    "text-background",
-                    "A̲".into(),
-                    24.,
-                    false,
-                    Command::Background,
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "bold",
-                    "B".into(),
-                    22.,
-                    self.doc.formatting.bold,
-                    Command::Edit(EditCommand::Bold),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "italic",
-                    "I".into(),
-                    22.,
-                    self.doc.formatting.italic,
-                    Command::Edit(EditCommand::Italic),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "underline",
-                    "U̲".into(),
-                    22.,
-                    self.doc.formatting.underline,
-                    Command::Edit(EditCommand::Underline),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
+                // TextEdit shows text and background colors as two color wells.
+                ui::control("text-background", "", 24., false, c)
+                    .tooltip("Text Background Color")
+                    .child(
+                        div()
+                            .size(px(12.))
+                            .rounded(px(2.))
+                            .border_1()
+                            .border_color(rgb(c.border))
+                            .bg(rgb(self.doc.formatting.background)),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.command(Command::Background, window, cx)
+                    }))
+                    .into_any_element(),
             ];
-        for (id, data, alignment) in [
-            ("left", ui::ALIGN_LEFT, Alignment::Left),
-            ("center", ui::ALIGN_CENTER, Alignment::Center),
-            ("right", ui::ALIGN_RIGHT, Alignment::Right),
-            ("justify", ui::ALIGN_JUSTIFY, Alignment::Justify),
+        let styles: [(&'static str, &'static str, bool, EditCommand); 4] = [
+            ("bold", "Bold", self.doc.formatting.bold, EditCommand::Bold),
+            (
+                "italic",
+                "Italic",
+                self.doc.formatting.italic,
+                EditCommand::Italic,
+            ),
+            (
+                "underline",
+                "Underline",
+                self.doc.formatting.underline,
+                EditCommand::Underline,
+            ),
+            (
+                "strikethrough",
+                "Strikethrough",
+                self.doc.formatting.strikethrough,
+                EditCommand::Strikethrough,
+            ),
+        ];
+        for (id, name, active, edit) in styles {
+            // Each button draws its own effect, like TextEdit's B I U S segments.
+            let glyph = div().child(&name[..1]);
+            let glyph = match id {
+                "bold" => glyph.font_weight(FontWeight::BOLD),
+                "italic" => glyph.italic(),
+                "underline" => glyph.underline(),
+                _ => glyph.line_through(),
+            };
+            let command = Command::Edit(edit);
+            controls.push(
+                ui::control(id, "", 22., active, c)
+                    .tooltip(name)
+                    .child(glyph)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.command(command.clone(), window, cx)
+                    }))
+                    .into_any_element(),
+            );
+        }
+        for (id, name, data, alignment) in [
+            ("left", "Align Left", ui::ALIGN_LEFT, Alignment::Left),
+            ("center", "Center", ui::ALIGN_CENTER, Alignment::Center),
+            ("right", "Align Right", ui::ALIGN_RIGHT, Alignment::Right),
+            ("justify", "Justify", ui::ALIGN_JUSTIFY, Alignment::Justify),
         ] {
             let command = Command::Edit(EditCommand::Align(alignment));
             let active = self.doc.formatting.alignment == alignment;
             controls.push(
                 ui::control(id, "", 22., active, c)
+                    .tooltip(name)
                     .child(ui::icon(data, if active { 0xffffff } else { c.ink }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.command(command.clone(), window, cx)
@@ -1822,19 +1984,17 @@ impl EditorWindow {
             );
         }
         controls.push(
-            Self::toolbar_control(
-                "line-spacing",
-                "1.0 ⌄".into(),
-                45.,
-                false,
-                Command::Menu(MenuKind::Spacing),
-                c,
-                cx,
-            )
-            .into_any_element(),
+            ui::control("line-spacing", "", 32., false, c)
+                .tooltip("Line and Paragraph Spacing")
+                .child(ui::icon(ui::LINE_SPACING, c.ink))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.command(Command::Menu(MenuKind::Spacing), window, cx)
+                }))
+                .into_any_element(),
         );
         controls.push(
             ui::control("list", "", 32., false, c)
+                .tooltip("Lists")
                 .child(ui::icon(ui::LIST, c.ink))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.command(Command::Menu(MenuKind::Lists), window, cx)
@@ -1882,7 +2042,8 @@ impl Render for EditorWindow {
                     .border_color(rgb(color - 0x101010))
                     .bg(rgb(color))
                     .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // Keeps the title bar's drag area from swallowing clicks on the button.
+                    .occlude()
                     .when(id == "close" && dirty, |d| {
                         d.child(
                             div()
@@ -1907,8 +2068,9 @@ impl Render for EditorWindow {
             .bg(rgb(c.chrome))
             .flex()
             .items_center()
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-            .on_double_click(|_, window, _| window.zoom_window())
+            // GPUI's start_window_move is a no-op on Windows; a drag area is answered as
+            // HTCAPTION, so Windows moves the window and double-click zooms it.
+            .window_control_area(WindowControlArea::Drag)
             .child(lights)
             .child(
                 div()
@@ -1971,6 +2133,20 @@ impl Render for EditorWindow {
             .bg(rgb(c.paper))
             .text_color(rgb(c.ink))
             .font_family(crate::fonts::RICH_FONT)
+            // The document's RichEdit queues its own shortcuts; this covers focus on the window.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let m = &event.keystroke.modifiers;
+                if !m.control || m.alt || m.platform {
+                    return;
+                }
+                if let Some(command) = virtual_key(&event.keystroke.key)
+                    .and_then(|key| crate::native::shortcut(key, m.shift))
+                    .and_then(shortcut_command)
+                {
+                    cx.stop_propagation();
+                    this.command(command, window, cx);
+                }
+            }))
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 for path in &paths.0 {
                     this.command(Command::OpenPath(path.clone()), window, cx);

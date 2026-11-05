@@ -3,6 +3,7 @@ use crate::{
     app::{Command, show_error},
     color::{ColorFormat, ColorTarget, PickerState, Rgba, named_colors},
     dialogs::Commands,
+    ui::px,
 };
 use gpui_kit::base::{Disableable as _, IndexPath, Slider as BaseSlider, SliderThumb, SliderTrack};
 use gpui_kit::component::{
@@ -960,9 +961,7 @@ impl Render for ColorsPanel {
                             .justify_center()
                             .text_size(px(14.))
                             .child("Colors")
-                            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                                window.start_window_move()
-                            }),
+                            .window_control_area(WindowControlArea::Drag),
                     )
                     .child(div().w(px(65.))),
             )

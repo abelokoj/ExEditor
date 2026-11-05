@@ -4,6 +4,26 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
 };
 use gpui_kit::*;
+use std::sync::atomic::{AtomicU16, Ordering};
+
+/// Interface size in percent (View > Interface Size). GPUI exposes no scale override
+/// outside tests, so ExEditor's UI modules size themselves through [`px`] instead.
+static SCALE_PERCENT: AtomicU16 = AtomicU16::new(100);
+pub const SCALE_RANGE: std::ops::RangeInclusive<u16> = 50..=300;
+
+pub fn set_scale_percent(percent: u16) {
+    SCALE_PERCENT.store(
+        percent.clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end()),
+        Ordering::Relaxed,
+    );
+}
+pub fn scale_percent() -> u16 {
+    SCALE_PERCENT.load(Ordering::Relaxed)
+}
+/// Logical pixels multiplied by the interface size; shadows GPUI's `px` in UI modules.
+pub fn px(value: f32) -> Pixels {
+    gpui_kit::px(value * f32::from(scale_percent()) / 100.)
+}
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -84,7 +104,9 @@ pub const ALIGN_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1
 pub const ALIGN_CENTER: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M4 6h8M2 9h12M4 12h8"/></svg>"#;
 pub const ALIGN_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M6 6h8M2 9h12M6 12h8"/></svg>"#;
 pub const ALIGN_JUSTIFY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M2 6h12M2 9h12M2 12h12"/></svg>"#;
-pub const LIST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M5 3h9M5 7h9M5 11h9"/><circle cx="2" cy="3" r=".6"/><circle cx="2" cy="7" r=".6"/><circle cx="2" cy="11" r=".6"/></svg>"#;
+pub const LIST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M5 3h9M5 7h9M5 11h9"/><g fill="currentColor" stroke="none"><circle cx="2" cy="3" r="1"/><circle cx="2" cy="7" r="1"/><circle cx="2" cy="11" r="1"/></g></svg>"#;
+/// Lines with an up/down arrow, as on TextEdit's line and paragraph spacing control.
+pub const LINE_SPACING: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M7 3h7M7 6.5h7M7 10h7M7 13.5h7M3 2.5v11M1.5 4 3 2.5 4.5 4M1.5 12 3 13.5 4.5 12"/></svg>"#;
 
 pub fn ruler(
     colors: Palette,
@@ -111,7 +133,8 @@ pub fn ruler(
                     let origin = bounds.origin;
                     let mut ticks = PathBuilder::stroke(px(0.65));
                     for tick in 0..((width / (step / 8.)).ceil() as usize) {
-                        let x = origin.x + px(12. + tick as f32 * step / 8.);
+                        // Tick spacing follows the document's inches, not the interface size.
+                        let x = origin.x + gpui_kit::px(12. + tick as f32 * step / 8.);
                         let height = if tick % 8 == 0 {
                             10.
                         } else if tick % 4 == 0 {

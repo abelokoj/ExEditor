@@ -4,7 +4,7 @@ use crate::{
     dialogs::{Commands, FormKind},
     document::TextEncoding,
     preferences::{Appearance, Preferences},
-    ui::Palette,
+    ui::{Palette, px},
 };
 use gpui_kit::component::{
     Sizable as _, Size,
@@ -558,9 +558,7 @@ impl Render for Settings {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(13.))
                             .child("Settings")
-                            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                                window.start_window_move()
-                            }),
+                            .window_control_area(WindowControlArea::Drag),
                     )
                     .child(div().w(px(70.)).h_full()),
             )

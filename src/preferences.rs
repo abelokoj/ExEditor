@@ -36,6 +36,8 @@ pub struct Preferences {
     pub recent_files: Vec<PathBuf>,
     pub default_encoding: TextEncoding,
     pub remember_windows: bool,
+    /// Interface size in percent; see `ui::px`.
+    pub interface_scale: u16,
 }
 
 impl Default for Preferences {
@@ -57,6 +59,7 @@ impl Default for Preferences {
             recent_files: Vec::new(),
             default_encoding: TextEncoding::Utf8,
             remember_windows: true,
+            interface_scale: 100,
         }
     }
 }
@@ -80,8 +83,13 @@ impl Preferences {
     }
 
     pub fn save(&self) -> Result<()> {
-        self.validate()?;
-        let bytes = serde_json::to_vec_pretty(self)?;
+        // Each window holds its own copy; the live interface size wins over a stale one.
+        let current = Self {
+            interface_scale: crate::ui::scale_percent(),
+            ..self.clone()
+        };
+        current.validate()?;
+        let bytes = serde_json::to_vec_pretty(&current)?;
         atomic_write(&data_dir()?.join("preferences.json"), &bytes)
     }
 
@@ -131,6 +139,10 @@ impl Preferences {
         ensure!(
             self.recent_files.len() <= RECENT_FILE_LIMIT,
             "The recent-document list exceeds its limit."
+        );
+        ensure!(
+            crate::ui::SCALE_RANGE.contains(&self.interface_scale),
+            "The interface size must be between 50% and 300%."
         );
         Ok(())
     }
