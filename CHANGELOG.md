@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T18:27:01-05:00 — Divvun archive dependency alignment (local/uncommitted correction)
+
+- GitHub completed Voikko and dependency checks until Divvun rejected incompatible mmap-io Segment types (0.9.x versus 1.x). Aligned the vendored archive manifest with Divvun's 0.9.11 interface; retained the existing compression compatibility alias and documented both manifest-only changes.
+- Validation: source/API inspection and dependency resolution only for this correction. GitHub application tests and downloadable build remain pending. No local compilation or app launch.
+
 ## 2026-11-05T18:16:06-05:00 — Native build metadata compatibility (local/uncommitted correction)
 
 - GitHub successfully compiled the Voikko shared library, then failed while recording a removed MSYS2 package name. Record the actual complete installed package list instead of assuming gcc-libs remains a separate package.

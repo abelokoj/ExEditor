@@ -142,7 +142,7 @@ $provenance = @{
     spellbook = '0.4.2 (MPL-2.0)'
     divvun_fst_commit = $divvunCommit
     box_format_upstream_commit = $boxCommit
-    box_format_patch = 'manifest-only xz2 alias to liblzma >= 0.4.4, static native library, default bindgen disabled'
+    box_format_patch = 'manifest-only xz2 alias to liblzma >= 0.4.4 (static, no bindgen); mmap-io 0.9.11 matches Divvun'
     box_format_patched_source_sha256 = (Get-FileHash -LiteralPath $patchedBoxSource -Algorithm SHA256).Hash.ToLowerInvariant()
     liblzma = '0.4.9 (MIT OR Apache-2.0)'
     runtime = @($runtime)
@@ -155,7 +155,7 @@ $provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $des
     'Spellbook 0.4.2: MPL-2.0. Original crate source is under source/. ExEditor uses the unmodified Hunspell-compatible parser.',
     'Divvun FST: MIT OR Apache-2.0, commit 7c3400754ef3f3e39b1c725f0ea18c1acd749b0d. Only the library is linked; its separately licensed command-line tools are not built.',
     'Libvoikko 4.3.3: the core is used under LGPL-2.1-or-later and supplied as a replaceable shared library. VFST is enabled; GPL-only Lttoolbox sources and HFST/VISLCG3 are not linked. Original source and build scripts are under source/. Upstream tri-license headers remain intact. Rebuilding this DLL does not require rebuilding ExEditor.',
-    'Box-format: MIT OR Apache-2.0, upstream commit bff1974bdc3290759a86c5cebd123178a3b882f7. The sole upstream-file change aliases its xz2 dependency to the maintained liblzma wrapper. Original and complete patched source archives, PATCHES.md, and the resolved lockfile are under source/.',
+    'Box-format: MIT OR Apache-2.0, upstream commit bff1974bdc3290759a86c5cebd123178a3b882f7. Its manifest aliases xz2 to the maintained liblzma wrapper and aligns mmap-io 0.9.11 with the pinned Divvun interface. Original and complete patched source archives, PATCHES.md, and the resolved lockfile are under source/.',
     'Liblzma 0.4.9: MIT OR Apache-2.0. Its crate source and original license texts are included. The LZMA native library is linked statically.',
     'Additional native runtimes retain their original package notices under licenses/.',
     '',
