@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T18:16:06-05:00 — Native build metadata compatibility (local/uncommitted correction)
+
+- GitHub successfully compiled the Voikko shared library, then failed while recording a removed MSYS2 package name. Record the actual complete installed package list instead of assuming gcc-libs remains a separate package.
+- Cache the native package by its complete build/source/license/lock inputs; subsequent application-only corrections can reuse it. No local compilation or application launch occurred; GitHub app compilation and tests remain pending.
+
 ## 2026-11-05T18:08:58-05:00 — Markdown opening, Explorer integration, Noto emoji and offline language tools (local/uncommitted source)
 
 - Markdown previews preserve unsupported, relative, local and custom-scheme link labels instead of rejecting the whole document. Source destinations remain intact; inactive links cannot launch unsafe schemes. Strict rich-document conversion still rejects unsafe links; permitted schemes now compare without case sensitivity and reject controls/quotes.

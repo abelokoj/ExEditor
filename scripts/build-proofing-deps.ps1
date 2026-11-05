@@ -107,7 +107,7 @@ while ((`${#queue[@]})); do
     fi
   done < <(objdump -p "`$out/`$current" | sed -n 's/^[[:space:]]*DLL Name: //p')
 done
-pacman -Q mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-libs > "`$out/source/native-toolchain.txt"
+pacman -Q > "`$out/source/native-toolchain.txt"
 "@
 
 $nativeScriptPath = Join-Path $workPath 'build-native.sh'

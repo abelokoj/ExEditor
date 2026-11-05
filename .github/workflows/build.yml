@@ -58,7 +58,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Cache the native proofing package
+        id: proofing-cache
+        uses: actions/cache@v4
+        with:
+          path: artifacts/proofing
+          key: windows-proofing-v1-${{ hashFiles('scripts/build-proofing-deps.ps1', 'assets/licenses/proofing/**', 'vendor/box-format/**', 'Cargo.lock') }}
+
       - name: Prepare the native proofing toolchain
+        if: steps.proofing-cache.outputs.cache-hit != 'true'
         id: msys2
         uses: msys2/setup-msys2@v2
         with:
@@ -77,6 +85,7 @@ jobs:
             curl
 
       - name: Build the native proofing runtime
+        if: steps.proofing-cache.outputs.cache-hit != 'true'
         run: |
           ./scripts/build-proofing-deps.ps1 -Msys2Root '${{ steps.msys2.outputs.msys2-location }}' -Destination artifacts/proofing
 
