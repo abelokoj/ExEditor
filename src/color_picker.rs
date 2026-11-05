@@ -313,7 +313,9 @@ impl ColorsPanel {
                     this.error = None;
                     cx.notify();
                 }
-                InputEvent::PressEnter { .. } => this.apply(window, cx),
+                InputEvent::PressEnter { .. } => {
+                    this.parse_code(window, cx);
+                }
                 InputEvent::Blur => {
                     let _ = this.parse_code(window, cx);
                 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05T02:47:31-05:00 — Windows resource linking and color-field Enter behavior (local fixes)
+
+- Removed ExEditor's duplicate process-manifest resource: GPUI already embeds the Windows asInvoker, common-controls and PerMonitorV2 settings. Retained the selected application icon and version resources; removed the now-unused manifest template.
+- Made Enter in the color-code field parse/update the selected color, matching CotEditor. Apply/Insert and Ctrl+Enter commit the color action separately.
+- Validation: GitHub run 41989293275 passed formatting and strict Clippy but linking the test binary failed because two manifest resources shared ID 1; no regression tests or installer ran. Inspected both resource definitions and formatted this fix. No local compilation or app testing performed.
+
 ## 2026-11-05T02:43:16-05:00 — Strict Rust lint integration (local fixes)
 
 - Applied the four let-chain changes requested by strict Clippy in GitHub run 41988878649. The earlier compiler errors are resolved; this run stopped at lint checks before tests and packaging.
