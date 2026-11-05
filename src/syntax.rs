@@ -137,7 +137,7 @@ impl CodeHighlighter {
         let highlighter = Highlighter::new(theme);
         let new: Vec<&str> = text.split_inclusive('\n').collect();
         let old = std::mem::take(&mut self.lines);
-        let first = old
+        let mut first = old
             .iter()
             .zip(&new)
             .take_while(|(line, text)| line.text == **text)
@@ -149,6 +149,10 @@ impl CodeHighlighter {
             .zip(new[first..].iter().rev())
             .take_while(|(line, text)| line.text == **text)
             .count();
+        // Appending has no cached next line; replay the last line to recover its end state.
+        if first == old.len() && first < new.len() {
+            first = first.saturating_sub(1);
+        }
         let (mut parse, mut highlight) = old.get(first).map_or_else(
             || {
                 (
@@ -196,6 +200,8 @@ impl CodeHighlighter {
                     }
                 }
                 None => {
+                    // A failed parse may have advanced; keep it paired with the unchanged highlight state.
+                    parse = lines[index].parse.clone();
                     let len = line.encode_utf16().count();
                     push_span(&mut spans, offset, len, highlighter.get_default());
                     offset += len;
@@ -294,6 +300,115 @@ mod tests {
             spans
                 .iter()
                 .all(|s| s.start >= start && s.start < start + 20)
+        );
+    }
+    type UnitStyle = Option<(u32, bool, bool)>;
+
+    fn apply_spans(styles: &mut [UnitStyle], spans: &[Span]) {
+        for span in spans {
+            let end = span
+                .start
+                .checked_add(span.len)
+                .expect("bounded span length");
+            styles
+                .get_mut(span.start..end)
+                .expect("highlight span stays inside the UTF-16 document")
+                .fill(Some((span.color, span.bold, span.italic)));
+        }
+    }
+
+    fn assert_incremental_matches_fresh(syntax: &str, documents: &[&str]) {
+        let mut incremental = CodeHighlighter::new(syntax.into(), "Dracula", true);
+        let mut old_units: Vec<u16> = Vec::new();
+        let mut actual: Vec<UnitStyle> = Vec::new();
+        for (step, text) in documents.iter().enumerate() {
+            let new_units: Vec<u16> = text.encode_utf16().collect();
+            let prefix = old_units
+                .iter()
+                .zip(&new_units)
+                .take_while(|(old, new)| old == new)
+                .count();
+            let tail = old_units[prefix..]
+                .iter()
+                .rev()
+                .zip(new_units[prefix..].iter().rev())
+                .take_while(|(old, new)| old == new)
+                .count();
+            // RichEdit shifts retained character formatting with the edited text.
+            drop(actual.splice(
+                prefix..old_units.len() - tail,
+                std::iter::repeat_n(None, new_units.len() - prefix - tail),
+            ));
+            apply_spans(&mut actual, &incremental.update(text));
+            let mut fresh = CodeHighlighter::new(syntax.into(), "Dracula", true);
+            let mut expected = vec![None; new_units.len()];
+            apply_spans(&mut expected, &fresh.update(text));
+            assert_eq!(
+                actual, expected,
+                "complete UTF-16 styling at step {step}: {text:?}"
+            );
+            assert!(incremental.update(text).is_empty(), "unchanged step {step}");
+            old_units = new_units;
+        }
+    }
+
+    #[test]
+    fn appending_lines_preserves_open_block_comment_state() {
+        assert_incremental_matches_fresh(
+            "Rust",
+            &[
+                "/* open 🦀\n",
+                "/* open 🦀\ncontinued α\n",
+                "/* open 🦀\ncontinued α\n*/\nlet answer = 42;\n",
+            ],
+        );
+    }
+
+    #[test]
+    fn appending_lines_preserves_multiline_string_state() {
+        assert_incremental_matches_fresh(
+            "Python",
+            &[
+                "message = \"\"\"first 🦀\n",
+                "message = \"\"\"first 🦀\nsecond β\n",
+                "message = \"\"\"first 🦀\nsecond β\n\"\"\"\nanswer = 42\n",
+            ],
+        );
+    }
+
+    #[test]
+    fn deletion_append_and_full_clear_preserve_parser_state() {
+        assert_incremental_matches_fresh(
+            "Rust",
+            &[
+                "/* open 🦀\ncontinued α\n*/\nlet answer = 42;\n",
+                "/* open 🦀\ncontinued α\n",
+                "/* open 🦀\ncontinued α\nmore β\n",
+                "/* open 🦀\n",
+                "/* open 🦀\n*/\nlet answer = 42;\n",
+                "",
+                "fn main() {\n    let text = \"🦀 e\u{301}\";\n}\n",
+            ],
+        );
+    }
+
+    #[test]
+    fn skipped_long_lines_keep_append_and_delete_updates_consistent() {
+        let long_line = format!("{}\n", "x".repeat(MAX_LINE_BYTES + 1));
+        let before = format!("/* open 🦀\n{long_line}");
+        let appended = format!("{before}continued β\n*/\nlet answer = 42;\n");
+        let shortened = appended.replacen(&long_line, "short α\n", 1);
+        assert_incremental_matches_fresh("Rust", &[&before, &appended, &shortened]);
+    }
+    #[test]
+    fn appending_a_repeated_final_line_colors_the_new_utf16_units() {
+        assert_incremental_matches_fresh(
+            "Rust",
+            &[
+                "/* repeated 🦀\n",
+                "/* repeated 🦀\n/* repeated 🦀\n",
+                "/* repeated 🦀\n/* repeated 🦀\n*/\n*/\nlet answer = 42;\n",
+            ],
         );
     }
 }

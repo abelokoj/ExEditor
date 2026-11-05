@@ -573,6 +573,8 @@ pub struct RecoveryDocument {
     pub encoding: TextEncoding,
     pub line_ending: LineEnding,
     pub saved_at: String,
+    #[serde(default)]
+    pub untitled_name: Option<String>,
 }
 
 pub(crate) fn validate_recovery_id(id: &str) -> Result<()> {
@@ -620,7 +622,26 @@ impl<W: Write> Write for LimitedWriter<W> {
     }
 }
 
+fn validate_untitled_name(name: Option<&str>) -> Result<()> {
+    let Some(name) = name else {
+        return Ok(());
+    };
+    ensure!(
+        name == name.trim() && name.chars().count() <= 101,
+        "The recovered document name is invalid; its snapshot has been preserved."
+    );
+    let prefix = name
+        .rsplit_once(' ')
+        .filter(|(_, number)| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map_or(name, |(prefix, _)| prefix);
+    crate::names::validate_prefix(prefix)
+        .context("The recovered document name is invalid; its snapshot has been preserved")
+}
+
 pub fn write_recovery(document: &RecoveryDocument) -> Result<()> {
+    validate_untitled_name(document.untitled_name.as_deref())?;
     let path = recovery_path(&document.id)?;
     let parent = path
         .parent()
@@ -686,6 +707,7 @@ pub fn read_recovery(path: &Path) -> Result<RecoveryDocument> {
             )
         })?;
     validate_recovery_id(&document.id)?;
+    validate_untitled_name(document.untitled_name.as_deref())?;
     ensure!(
         document.id == id,
         "The recovery file identifier does not match its file name."
@@ -1034,5 +1056,41 @@ mod tests {
         assert!(writer.write_all(b"5").is_err());
         assert_eq!(writer.inner, b"1234");
         assert_eq!(writer.remaining, 0);
+    }
+    #[test]
+    fn recovery_names_are_optional_for_older_snapshots_and_preserved_in_new_ones() {
+        let old = r#"{"id":"draft","original_path":null,"format":"PlainText","content":{"Plain":"Unsaved text"},"encoding":"Utf8","line_ending":"Lf","saved_at":"2026-11-05T10:00:00-05:00"}"#;
+        let mut document: RecoveryDocument = serde_json::from_str(old).expect("older snapshot");
+        assert!(document.untitled_name.is_none());
+        document.untitled_name = Some("Notes 12".into());
+        let encoded = serde_json::to_string(&document).expect("named snapshot");
+        let decoded: RecoveryDocument =
+            serde_json::from_str(&encoded).expect("restored named snapshot");
+        assert_eq!(decoded.untitled_name.as_deref(), Some("Notes 12"));
+    }
+
+    #[test]
+    fn recovery_names_must_be_safe_save_as_suggestions() {
+        for name in [
+            None,
+            Some("Untitled 1"),
+            Some("Notes 12"),
+            Some("Legacy Untitled"),
+        ] {
+            assert!(validate_untitled_name(name).is_ok(), "valid name {name:?}");
+        }
+        assert!(validate_untitled_name(Some(&format!("{} 12", "🦀".repeat(80)))).is_ok());
+        for name in [
+            "",
+            "../Notes 1",
+            "Notes\\Private 2",
+            "Notes\n1",
+            "CON.txt 1",
+        ] {
+            assert!(
+                validate_untitled_name(Some(name)).is_err(),
+                "invalid name {name:?}"
+            );
+        }
     }
 }

@@ -7,6 +7,7 @@ use crate::{
         self, DocumentContent, DocumentFormat, FileFingerprint, LineEnding, RecoveryDocument,
         TextEncoding,
     },
+    editing::LineAction,
     native::{Alignment, Case, EditCommand, FormatState, ListKind, NativeEditor, PageSettings},
     preferences::{Appearance, Preferences},
     services::{self, Speech},
@@ -98,6 +99,21 @@ pub enum Command {
     /// View > Interface Size, in percent.
     InterfaceScale(u16),
     CustomInterfaceScale,
+    Line(LineAction),
+    SelectLine,
+    MatchingBracket,
+    ToggleWordWrap,
+    ScrollEditor(i32, bool),
+    CommandPalette,
+    KeyboardHelp,
+    SaveAll,
+    CloseAll,
+    CopyPath,
+    RevealFile,
+    PasteOrPreview,
+    BlockComment,
+    Fullscreen,
+    ReopenClosed,
     Preferences,
     ClearRecent,
     Font,
@@ -133,10 +149,47 @@ pub fn show_error(error: &anyhow::Error) {
 /// The command behind a `native::shortcut` name, shared by the document and window key paths.
 fn shortcut_command(name: &str) -> Option<Command> {
     Some(match name {
+        "command-palette" => Command::CommandPalette,
+        "block-comment" => Command::BlockComment,
+        "fullscreen" => Command::Fullscreen,
+        "reopen-closed" => Command::ReopenClosed,
+        "keyboard-help" => Command::KeyboardHelp,
         "new" => Command::New,
         "open" => Command::Open,
         "save" => Command::Save,
         "save-as" => Command::SaveAs,
+        "save-all" => Command::SaveAll,
+        "close-all" => Command::CloseAll,
+        "close-window" => Command::CloseWindow,
+        "copy-path" => Command::CopyPath,
+        "reveal-file" => Command::RevealFile,
+        "markdown-preview" => Command::ToggleMarkdown,
+        "paste-or-preview" => Command::PasteOrPreview,
+        "undo" => Command::Edit(EditCommand::Undo),
+        "copy" => Command::Edit(EditCommand::Copy),
+        "cut" => Command::Edit(EditCommand::Cut),
+        "paste" => Command::Edit(EditCommand::Paste),
+        "select-all" => Command::Edit(EditCommand::SelectAll),
+        "select-line" => Command::SelectLine,
+        "matching-bracket" => Command::MatchingBracket,
+        "word-wrap" => Command::ToggleWordWrap,
+        "move-line-up" => Command::Line(LineAction::MoveUp),
+        "move-line-down" => Command::Line(LineAction::MoveDown),
+        "copy-line-up" => Command::Line(LineAction::CopyUp),
+        "copy-line-down" => Command::Line(LineAction::CopyDown),
+        "delete-line" => Command::Line(LineAction::Delete),
+        "insert-line-above" => Command::Line(LineAction::InsertAbove),
+        "insert-line-below" => Command::Line(LineAction::InsertBelow),
+        "indent-line" => Command::Line(LineAction::Indent),
+        "outdent-line" => Command::Line(LineAction::Outdent),
+        "toggle-comment" => Command::Line(LineAction::ToggleComment),
+        "add-comment" => Command::Line(LineAction::AddComment),
+        "remove-comment" => Command::Line(LineAction::RemoveComment),
+        "trim-whitespace" => Command::Line(LineAction::TrimTrailingWhitespace),
+        "scroll-line-up" => Command::ScrollEditor(-1, false),
+        "scroll-line-down" => Command::ScrollEditor(1, false),
+        "scroll-page-up" => Command::ScrollEditor(-1, true),
+        "scroll-page-down" => Command::ScrollEditor(1, true),
         "find" => Command::Find,
         "replace" => Command::Replace,
         "find-next" => Command::FindNext,
@@ -178,6 +231,16 @@ fn shortcut_command(name: &str) -> Option<Command> {
 fn virtual_key(key: &str) -> Option<u32> {
     Some(match key {
         "tab" => 0x09,
+        "enter" => 0x0d,
+        "up" => 0x26,
+        "down" => 0x28,
+        "pageup" => 0x21,
+        "pagedown" => 0x22,
+        "f1" => 0x70,
+        "f3" => 0x72,
+        "f4" => 0x73,
+        "f11" => 0x7a,
+        "/" | "?" => 0xbf,
         "," | "<" => 0xbc,
         "." | ">" => 0xbe,
         "=" | "+" => 0xbb,
@@ -279,6 +342,22 @@ fn is_markdown(path: &Path) -> bool {
                 "md" | "markdown" | "mdown" | "mkd" | "mkdn"
             )
         })
+}
+fn comment_prefix(path: Option<&Path>) -> &'static str {
+    match path
+        .and_then(Path::extension)
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "py" | "pyw" | "rb" | "sh" | "bash" | "zsh" | "ps1" | "psm1" | "yml" | "yaml" | "toml"
+        | "r" | "pl" => "#",
+        "sql" | "lua" | "hs" => "--",
+        "bat" | "cmd" => "REM",
+        "tex" | "erl" => "%",
+        _ => "//",
+    }
 }
 fn confirm(title: &str, message: &str) -> bool {
     MessageDialog::new()
@@ -384,16 +463,20 @@ struct DocumentTab {
     encoding: TextEncoding,
     line_ending: LineEnding,
     fingerprint: Option<FileFingerprint>,
+    observed_fingerprint: Option<FileFingerprint>,
     rich: bool,
     dirty: bool,
     read_only: bool,
     ruler: bool,
     wrap_page: bool,
+    word_wrap: bool,
+    untitled_name: String,
     zoom: u16,
     formatting: FormatState,
     page: PageSettings,
     recovery_id: String,
-    buffer_lease: Option<BufferLease>,
+    buffer_lease: Option<std::sync::Arc<BufferLease>>,
+    pending_buffer: Option<std::sync::mpsc::Receiver<Result<()>>>,
     buffered: bool,
     retain_buffer: bool,
     buffer_error_reported: bool,
@@ -412,7 +495,7 @@ struct DocumentTab {
     /// The editor's background color.
     paper: u32,
     /// Markdown shown formatted (read-only); this is the text that is saved.
-    markdown_source: Option<String>,
+    markdown_source: Option<Rc<NativeEditor>>,
 }
 struct EditorWindow {
     doc: DocumentTab,
@@ -427,6 +510,7 @@ struct EditorWindow {
     preview_theme: Option<String>,
     /// Horizontal scroll of the document tab strip.
     tab_scroll: ScrollHandle,
+    chord: Option<Instant>,
     _poll: Task<()>,
 }
 
@@ -452,6 +536,7 @@ impl EditorWindow {
             was_active: false,
             preview_theme: None,
             tab_scroll: ScrollHandle::new(),
+            chord: None,
             _poll: Task::ready(()),
         };
         if let Some(path) = path
@@ -461,6 +546,9 @@ impl EditorWindow {
         }
         if !cx.has_global::<OpenEditors>() {
             cx.set_global(OpenEditors::default());
+        }
+        if !cx.has_global::<RecentlyClosed>() {
+            cx.set_global(RecentlyClosed::default());
         }
         let registration = (Window::window_handle(window), cx.entity().downgrade());
         cx.global_mut::<OpenEditors>().0.push(registration);
@@ -571,37 +659,37 @@ impl EditorWindow {
             .path
             .as_deref()
             .and_then(Path::parent)
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
-        let rtf = crate::formats::markdown_to_rtf(&source, &directory)?;
+            .unwrap_or(Path::new("."));
+        let rtf = crate::formats::markdown_to_rtf(&source, directory)?;
         let editor = self.editor()?;
-        let modified = self.doc.dirty;
-        editor.set_plain_text_mode(false)?;
-        editor.set_rtf(&rtf)?;
-        editor.set_read_only(true);
-        editor.mark_saved();
-        self.doc.dirty = modified;
-        self.doc.markdown_source = Some(source);
-        self.doc.last_text = editor.text()?;
+        let preview = Rc::new(editor.preview(&rtf)?);
+        // Keep the original native buffer alive: text, undo, selection and dirty state.
+        self.doc.dirty |= editor.is_modified();
+        self.doc.last_text = preview.text()?;
+        editor.set_visible(false);
+        self.doc.markdown_source = Some(editor);
+        preview.set_visible(true);
+        self.doc.native = Some(preview);
         self.doc.look = None;
         Ok(())
     }
-    /// Returns from the formatted Markdown view to its editable source.
     fn show_markdown_source(&mut self) -> Result<()> {
-        let Some(source) = self.doc.markdown_source.take() else {
+        let Some(source) = self.doc.markdown_source.as_ref() else {
             return Ok(());
         };
-        let editor = self.editor()?;
-        editor.set_read_only(false);
-        editor.set_plain_text_mode(true)?;
-        // The rendered view's first run may be a heading; source uses the plain-text font.
-        editor.execute(EditCommand::Font(self.prefs.plain_font.clone()))?;
-        editor.execute(EditCommand::FontSize(self.prefs.plain_size))?;
-        editor.set_text(&source)?;
-        editor.set_read_only(self.doc.read_only);
-        editor.mark_saved();
-        self.doc.last_text = source;
+        let text = source.text()?;
+        source.set_read_only(self.doc.read_only);
+        self.doc.dirty |= source.is_modified();
+        if let Some(preview) = &self.doc.native {
+            preview.set_visible(false);
+        }
+        self.doc.native = self.doc.markdown_source.take();
+        self.doc.last_text = text;
         self.doc.look = None;
+        if let Some(source) = &self.doc.native {
+            source.set_visible(true);
+            source.focus();
+        }
         Ok(())
     }
     fn name(&self) -> String {
@@ -610,12 +698,12 @@ impl EditorWindow {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled".into())
+            .unwrap_or_else(|| self.doc.untitled_name.clone())
     }
     fn content(&self) -> Result<DocumentContent> {
         let editor = self.editor()?;
         if let Some(source) = &self.doc.markdown_source {
-            Ok(DocumentContent::Plain(source.clone()))
+            Ok(DocumentContent::Plain(source.text()?))
         } else if self.doc.rich {
             Ok(DocumentContent::Rich(editor.rtf()?))
         } else {
@@ -661,9 +749,10 @@ impl EditorWindow {
         self.doc.encoding = loaded.encoding;
         self.doc.line_ending = loaded.line_ending;
         self.doc.fingerprint = Some(loaded.fingerprint);
+        self.doc.observed_fingerprint = None;
         self.doc.dirty = false;
         self.editor()?.mark_saved();
-        document::remove_recovery(&self.doc.recovery_id)?;
+        self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
         self.prefs.add_recent(loaded.path);
@@ -740,16 +829,29 @@ impl EditorWindow {
                 text = editor.text().unwrap_or(text);
             }
             self.doc.last_text = text;
-            if let Err(error) = self.highlight(&editor) {
+            let recolored = if self.doc.highlighter.is_some() {
+                self.highlight(&editor)
+            } else {
+                editor.adapt_automatic_text()
+            };
+            if let Err(error) = recolored {
                 self.doc.highlighter = None;
                 show_error(&error.context("Code coloring is turned off for this document"));
             }
         }
-        if editor.take_pasted() {
-            let _ = editor.adapt_automatic_text();
-        }
+        let _ = editor.take_pasted();
         if let Err(error) = self.refresh_look(window) {
             show_error(&error);
+        }
+        for tab in std::iter::once(&mut self.doc).chain(self.tabs.iter_mut().flatten()) {
+            if let Err(error) = tab.poll_buffer() {
+                if !tab.buffer_error_reported {
+                    show_error(&error);
+                }
+                tab.buffered = false;
+                tab.buffer_error_reported = true;
+                tab.last_recovery = Instant::now();
+            }
         }
         let needs_buffer = editor.is_modified()
             || (!self.doc.buffered && (self.doc.dirty || self.doc.path.is_none()))
@@ -759,7 +861,7 @@ impl EditorWindow {
         if needs_buffer
             && (!self.doc.buffer_error_reported
                 || self.doc.last_recovery.elapsed() >= Duration::from_secs(5))
-            && let Err(error) = self.doc.persist_buffer()
+            && let Err(error) = self.doc.queue_buffer()
         {
             if !self.doc.buffer_error_reported {
                 show_error(&error);
@@ -771,6 +873,7 @@ impl EditorWindow {
             if let (Some(path), Some(old)) = (&self.doc.path, &self.doc.fingerprint)
                 && let Ok(new) = document::fingerprint(path)
                 && &new != old
+                && self.doc.observed_fingerprint.as_ref() != Some(&new)
             {
                 let path = path.clone();
                 if !self.doc.dirty {
@@ -782,8 +885,8 @@ impl EditorWindow {
                             show_error(&error);
                         }
                     } else {
-                        // Asked once per outside change, not every few seconds.
-                        self.doc.fingerprint = Some(new);
+                        // Suppress repeated prompts without accepting unseen disk contents.
+                        self.doc.observed_fingerprint = Some(new);
                     }
                 }
             }
@@ -850,8 +953,10 @@ impl EditorWindow {
         {
             return Ok(false);
         }
-        let content = if let Some(source) = &self.doc.markdown_source {
-            DocumentContent::Plain(source.clone())
+        let content = if format.is_plain()
+            && let Some(source) = &self.doc.markdown_source
+        {
+            DocumentContent::Plain(source.text()?)
         } else if format.is_plain() {
             DocumentContent::Plain(self.editor()?.text()?)
         } else {
@@ -867,7 +972,12 @@ impl EditorWindow {
         self.doc.path = Some(path.clone());
         self.doc.format = format;
         self.doc.fingerprint = Some(fingerprint);
+        self.doc.observed_fingerprint = None;
         self.doc.rich = !format.is_plain();
+        if !format.is_plain() && self.doc.markdown_source.take().is_some() {
+            // Save As rich text deliberately keeps the rendered document as the new editable file.
+            self.editor()?.set_read_only(self.doc.read_only);
+        }
         if self.doc.markdown_source.is_none() {
             self.editor()?.set_plain_text_mode(format.is_plain())?;
         }
@@ -875,7 +985,7 @@ impl EditorWindow {
         self.doc.look = None;
         self.doc.dirty = false;
         self.editor()?.mark_saved();
-        document::remove_recovery(&self.doc.recovery_id)?;
+        self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
         self.prefs.add_recent(path);
@@ -885,7 +995,7 @@ impl EditorWindow {
     fn confirm_current(&mut self) -> Result<bool> {
         self.doc.dirty |= self.editor()?.is_modified();
         if !self.doc.dirty {
-            document::remove_recovery(&self.doc.recovery_id)?;
+            self.doc.discard_recovery()?;
             self.doc.retain_buffer = false;
             return Ok(true);
         }
@@ -899,11 +1009,11 @@ impl EditorWindow {
             MessageDialogResult::Yes => self.save(false)?,
             MessageDialogResult::Custom(ref label) if label == "Save" => self.save(false)?,
             MessageDialogResult::No => {
-                document::remove_recovery(&self.doc.recovery_id)?;
+                self.doc.discard_recovery()?;
                 true
             }
             MessageDialogResult::Custom(ref label) if label == "Discard" => {
-                document::remove_recovery(&self.doc.recovery_id)?;
+                self.doc.discard_recovery()?;
                 true
             }
             _ => false,
@@ -939,7 +1049,7 @@ impl EditorWindow {
         if index == self.active_tab {
             return Ok(());
         }
-        self.doc.persist_buffer()?;
+        self.doc.queue_buffer()?;
         let next = self.tabs[index]
             .take()
             .context("The document tab is unavailable")?;
@@ -971,9 +1081,16 @@ impl EditorWindow {
         self.show_tabs = true;
         self.switch_tab(self.tabs.len() - 1)
     }
-    fn close_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
+    fn close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         if !self.confirm_current()? {
             return Ok(());
+        }
+        if let Some(path) = self.doc.path.clone() {
+            let closed = &mut cx.global_mut::<RecentlyClosed>().0;
+            closed.push(path);
+            if closed.len() > 20 {
+                closed.remove(0);
+            }
         }
         if self.tabs.len() == 1 {
             window.remove_window();
@@ -1013,6 +1130,221 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         match command {
+            Command::ReopenClosed => {
+                if let Some(path) = cx.global_mut::<RecentlyClosed>().0.pop() {
+                    open_document(Some(path), cx);
+                }
+            }
+            Command::Fullscreen => window.toggle_fullscreen(),
+            Command::BlockComment => {
+                ensure!(
+                    self.doc.markdown_source.is_none(),
+                    "Choose Show Markdown Source before editing the preview."
+                );
+                let editor = self.editor()?;
+                let text = editor.text()?;
+                let extension = self
+                    .doc
+                    .path
+                    .as_deref()
+                    .and_then(Path::extension)
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(
+                    extension.as_str(),
+                    "py" | "rb" | "sh" | "ps1" | "yml" | "yaml" | "toml" | "r" | "sql"
+                ) {
+                    self.try_command(Command::Line(LineAction::ToggleComment), window, cx)?;
+                } else {
+                    let (open, close) = if matches!(
+                        extension.as_str(),
+                        "html" | "htm" | "xml" | "md" | "markdown"
+                    ) {
+                        ("<!--", "-->")
+                    } else if extension == "lua" {
+                        ("--[[", "]]")
+                    } else {
+                        ("/*", "*/")
+                    };
+                    if let Some(edit) = crate::editing::toggle_block_comment(
+                        &text,
+                        editor.selection(),
+                        open,
+                        close,
+                    )? {
+                        editor.edit_lines(edit)?;
+                    }
+                }
+            }
+            Command::Line(action) => {
+                ensure!(
+                    self.doc.markdown_source.is_none(),
+                    "Choose Show Markdown Source before editing the preview."
+                );
+                let editor = self.editor()?;
+                let text = editor.text()?;
+                if action == LineAction::ToggleComment
+                    && self
+                        .doc
+                        .path
+                        .as_deref()
+                        .and_then(Path::extension)
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| {
+                            matches!(
+                                e.to_ascii_lowercase().as_str(),
+                                "html" | "htm" | "xml" | "md" | "markdown"
+                            )
+                        })
+                {
+                    return self.try_command(Command::BlockComment, window, cx);
+                }
+                let prefix = comment_prefix(self.doc.path.as_deref());
+                if let Some(edit) = crate::editing::plan(&text, editor.selection(), action, prefix)?
+                {
+                    editor.edit_lines(edit)?;
+                }
+            }
+            Command::SelectLine => {
+                let editor = self.editor()?;
+                editor.select_range(crate::editing::select_line(
+                    &editor.text()?,
+                    editor.selection(),
+                )?)?;
+            }
+            Command::MatchingBracket => {
+                let editor = self.editor()?;
+                if let Some(position) =
+                    crate::editing::matching_bracket(&editor.text()?, editor.selection().end)
+                {
+                    editor.select_range(position..position)?;
+                    editor.scroll_to_selection();
+                }
+            }
+            Command::ToggleWordWrap => self.doc.word_wrap = !self.doc.word_wrap,
+            Command::ScrollEditor(amount, page) => self.editor()?.scroll_editor(amount, page),
+            Command::SaveAll => {
+                let active = self.active_tab;
+                let result = (|| -> Result<()> {
+                    for index in 0..self.tabs.len() {
+                        self.switch_tab(index)?;
+                        if !self.save(false)? {
+                            break;
+                        }
+                    }
+                    Ok(())
+                })();
+                self.switch_tab(active)?;
+                result?;
+            }
+            Command::CloseAll => loop {
+                let before = self.tabs.len();
+                self.close_tab(window, cx)?;
+                if before == 1 || self.tabs.len() == before {
+                    break;
+                }
+            },
+            Command::CopyPath => {
+                let path = self
+                    .doc
+                    .path
+                    .as_ref()
+                    .context("Save this document before copying its path")?;
+                cx.write_to_clipboard(ClipboardItem::new_string(
+                    path.to_string_lossy().into_owned(),
+                ));
+            }
+            Command::RevealFile => {
+                let path = self
+                    .doc
+                    .path
+                    .as_ref()
+                    .context("Save this document before revealing it in Explorer")?;
+                std::process::Command::new("explorer.exe")
+                    .arg(format!("/select,{}", path.display()))
+                    .spawn()?;
+            }
+            Command::PasteOrPreview => {
+                if self.doc.markdown_source.is_some()
+                    || self.doc.path.as_deref().is_some_and(is_markdown)
+                {
+                    self.try_command(Command::ToggleMarkdown, window, cx)?;
+                } else {
+                    self.editor()?.execute(EditCommand::PastePlain)?;
+                }
+            }
+            Command::CommandPalette => {
+                let mut entries = Vec::new();
+                for menu in [
+                    MenuKind::App,
+                    MenuKind::File,
+                    MenuKind::Edit,
+                    MenuKind::Find,
+                    MenuKind::Font,
+                    MenuKind::Format,
+                    MenuKind::View,
+                    MenuKind::Window,
+                ] {
+                    entries.extend(self.menu_entries(menu)?.into_iter().filter(|entry| {
+                        entry.enabled
+                            && entry
+                                .command
+                                .as_ref()
+                                .is_some_and(|c| !matches!(c, Command::Menu(_)))
+                    }));
+                }
+                for (label, shortcut, action) in [
+                    ("Move Line Up", "Alt+Up", LineAction::MoveUp),
+                    ("Move Line Down", "Alt+Down", LineAction::MoveDown),
+                    ("Copy Line Up", "Shift+Alt+Up", LineAction::CopyUp),
+                    ("Copy Line Down", "Shift+Alt+Down", LineAction::CopyDown),
+                    ("Delete Line", "Ctrl+Shift+K", LineAction::Delete),
+                    (
+                        "Insert Line Above",
+                        "Ctrl+Shift+Enter",
+                        LineAction::InsertAbove,
+                    ),
+                    ("Insert Line Below", "Ctrl+Enter", LineAction::InsertBelow),
+                    ("Indent Line", "Ctrl+]", LineAction::Indent),
+                    ("Outdent Line", "Ctrl+[", LineAction::Outdent),
+                    ("Toggle Line Comment", "Ctrl+/", LineAction::ToggleComment),
+                    (
+                        "Trim Trailing Whitespace",
+                        "Ctrl+K Ctrl+X",
+                        LineAction::TrimTrailingWhitespace,
+                    ),
+                ] {
+                    entries.push(MenuEntry::item(label, shortcut, Command::Line(action)));
+                }
+                entries.push(MenuEntry::item(
+                    "Toggle Block Comment",
+                    "Shift+Alt+A",
+                    Command::BlockComment,
+                ));
+                entries.push(MenuEntry::item(
+                    "Toggle Full Screen",
+                    "F11",
+                    Command::Fullscreen,
+                ));
+                entries.push(MenuEntry::item(
+                    "Keyboard Shortcuts",
+                    "Ctrl+K Ctrl+S",
+                    Command::KeyboardHelp,
+                ));
+                entries.push(MenuEntry::item(
+                    "Toggle Word Wrap",
+                    "Alt+Z",
+                    Command::ToggleWordWrap,
+                ));
+                crate::palette::open(entries, self.queue.clone(), self.colors(window), cx);
+            }
+            Command::KeyboardHelp => {
+                MessageDialog::new()
+                    .set_title("ExEditor Keyboard Shortcuts")
+                    .set_description(include_str!("../docs/KEYBOARD_SHORTCUTS.txt"))
+                    .show();
+            }
             Command::New => open_document(None, cx),
             Command::NewTab => self.new_tab(window, cx)?,
             Command::SwitchTab(index) => self.switch_tab(index)?,
@@ -1138,6 +1470,7 @@ impl EditorWindow {
                     "Your current document will be replaced. You can save the restored version when ready.",
                 ) {
                     let loaded = document::load(&path)?;
+                    self.show_markdown_source()?;
                     self.load_content(&loaded.content)?;
                     self.doc.dirty = true;
                 }
@@ -1454,7 +1787,7 @@ impl EditorWindow {
                     }
                     ColorTarget::InsertCode => editor.replace_current(&code)?,
                 }
-                self.doc.persist_buffer()?;
+                self.doc.queue_buffer()?;
             }
             Command::Table => self.show_form(
                 FormKind::Table,
@@ -1597,7 +1930,21 @@ impl EditorWindow {
                 {
                     return Ok(());
                 }
-                self.editor()?.execute(edit)?;
+                let editor = self.editor()?;
+                let selection = editor.selection();
+                if selection.is_empty() && matches!(edit, EditCommand::Copy | EditCommand::Cut) {
+                    editor.select_range(crate::editing::select_line(
+                        &editor.text()?,
+                        selection.clone(),
+                    )?)?;
+                    let copied = matches!(edit, EditCommand::Copy);
+                    editor.execute(edit)?;
+                    if copied {
+                        editor.select_range(selection)?;
+                    }
+                } else {
+                    editor.execute(edit)?;
+                }
             }
             Command::Menu(kind) => {
                 let entries = self.menu_entries(kind)?;
@@ -1782,6 +2129,10 @@ impl EditorWindow {
                         _ => bail!("Choose a valid default encoding"),
                     };
                 }
+                if let Some(prefix) = values.get(14) {
+                    crate::names::validate_prefix(prefix)?;
+                    prefs.untitled_prefix = prefix.trim().to_owned();
+                }
                 prefs.save()?;
                 self.prefs = prefs;
                 // Show a new default font now where it can't overwrite chosen styling:
@@ -1865,8 +2216,10 @@ impl EditorWindow {
                 item("Quit ExEditor", "Ctrl+Q", C::Quit),
             ],
             M::File => vec![
-                item("New", "Ctrl+N", C::New),
-                item("New Tab", "Ctrl+Shift+N", C::NewTab),
+                item("New Window", "Ctrl+Shift+N", C::New),
+                item("New Tab", "Ctrl+N", C::NewTab),
+                item("Reopen Closed File", "Ctrl+Shift+T", C::ReopenClosed),
+                item("Save All", "Ctrl+K S", C::SaveAll),
                 item("Open…", "Ctrl+O", C::Open),
                 item("Open RTFD Folder…", "", C::OpenBundle),
                 item("Open Recent", "›", C::Menu(M::Recent)),
@@ -1883,8 +2236,8 @@ impl EditorWindow {
                 item("Export as PDF…", "", C::Pdf),
                 item("Show Properties", "", C::Properties),
                 sep(),
-                item("Page Setup…", "Ctrl+Shift+P", C::PageSetup),
-                item("Print…", "Ctrl+P", C::Print),
+                item("Page Setup…", "", C::PageSetup),
+                item("Print…", "", C::Print),
             ],
             M::Recent => {
                 let mut items = self
@@ -1926,11 +2279,7 @@ impl EditorWindow {
                 e("Cut", "Ctrl+X", EditCommand::Cut),
                 e("Copy", "Ctrl+C", EditCommand::Copy),
                 e("Paste", "Ctrl+V", EditCommand::Paste),
-                e(
-                    "Paste and Match Style",
-                    "Ctrl+Shift+V",
-                    EditCommand::PastePlain,
-                ),
+                e("Paste and Match Style", "", EditCommand::PastePlain),
                 e("Delete", "", EditCommand::Delete),
                 e("Select All", "Ctrl+A", EditCommand::SelectAll),
                 sep(),
@@ -1946,11 +2295,11 @@ impl EditorWindow {
             M::Find => vec![
                 item("Find…", "Ctrl+F", C::Find),
                 item("Find and Replace…", "Ctrl+H", C::Replace),
-                item("Find Next", "Ctrl+G", C::FindNext),
-                item("Find Previous", "Ctrl+Shift+G", C::FindPrevious),
+                item("Find Next", "F3", C::FindNext),
+                item("Find Previous", "Shift+F3", C::FindPrevious),
                 item("Use Selection for Find", "Ctrl+E", C::UseSelection),
                 item("Jump to Selection", "Ctrl+J", C::GoToSelection),
-                item("Go to Line…", "Ctrl+L", C::GoToLine),
+                item("Go to Line…", "Ctrl+G", C::GoToLine),
             ],
             M::Spelling => vec![
                 item("Show Spelling…", "Ctrl+Shift+;", C::CheckSpelling),
@@ -1983,7 +2332,7 @@ impl EditorWindow {
                     } else {
                         "Make Rich Text"
                     },
-                    "Ctrl+Shift+T",
+                    "Ctrl+Shift+M",
                     C::ToggleFormat,
                 ),
                 item(
@@ -1992,7 +2341,7 @@ impl EditorWindow {
                     } else {
                         "Wrap to Page"
                     },
-                    "Ctrl+Shift+W",
+                    "",
                     C::ToggleWrap,
                 ),
                 item(
@@ -2007,8 +2356,8 @@ impl EditorWindow {
             ],
             M::Font => vec![
                 item("Show Fonts", "Ctrl+T", C::Font),
-                item("Bigger", "Ctrl++", C::FontStep(1.)),
-                item("Smaller", "Ctrl+-", C::FontStep(-1.)),
+                item("Bigger", "Ctrl+Shift++", C::FontStep(1.)),
+                item("Smaller", "Ctrl+Shift+-", C::FontStep(-1.)),
                 item("Other Size…", "", C::CustomFontSize),
                 e("Bold", "Ctrl+B", EditCommand::Bold).checked(self.doc.formatting.bold),
                 e("Italic", "Ctrl+I", EditCommand::Italic).checked(self.doc.formatting.italic),
@@ -2029,9 +2378,9 @@ impl EditorWindow {
                 item("Insert Color Code…", "", C::InsertColorCode),
             ],
             M::Alignment => [
-                ("Left", "Ctrl+{", Alignment::Left),
-                ("Center", "Ctrl+|", Alignment::Center),
-                ("Right", "Ctrl+}", Alignment::Right),
+                ("Left", "", Alignment::Left),
+                ("Center", "", Alignment::Center),
+                ("Right", "", Alignment::Right),
                 ("Justified", "", Alignment::Justify),
             ]
             .into_iter()
@@ -2105,8 +2454,8 @@ impl EditorWindow {
             .chain([
                 sep(),
                 item("Actual Size", "Ctrl+0", C::Zoom(0)),
-                item("Zoom In", "Ctrl+Shift+.", C::Zoom(10)),
-                item("Zoom Out", "Ctrl+Shift+,", C::Zoom(-10)),
+                item("Zoom In", "Ctrl++", C::Zoom(10)),
+                item("Zoom Out", "Ctrl+-", C::Zoom(-10)),
                 sep(),
                 item("Interface Size", "›", C::Menu(M::InterfaceSize)),
             ])
@@ -2128,11 +2477,13 @@ impl EditorWindow {
                 .chain([sep(), item("Custom…", "", C::CustomInterfaceScale)])
                 .collect(),
             M::Window => vec![
-                item("New Window", "Ctrl+N", C::New),
+                item("New Window", "Ctrl+Shift+N", C::New),
                 sep(),
                 item(&self.name(), "", C::GoToSelection),
             ],
             M::Help => vec![
+                item("Command Palette…", "F1 / Ctrl+Shift+P", C::CommandPalette),
+                item("Keyboard Shortcuts…", "Ctrl+K Ctrl+S", C::KeyboardHelp),
                 item("ExEditor Help", "", C::Help),
                 item("About ExEditor", "", C::About),
             ],
@@ -2384,6 +2735,9 @@ impl EditorWindow {
 
 #[derive(Default)]
 struct OpenEditors(Vec<(AnyWindowHandle, WeakEntity<EditorWindow>)>);
+#[derive(Default)]
+struct RecentlyClosed(Vec<PathBuf>);
+impl Global for RecentlyClosed {}
 impl Global for OpenEditors {}
 
 impl Render for EditorWindow {
@@ -2502,15 +2856,28 @@ impl Render for EditorWindow {
             // The document's RichEdit queues its own shortcuts; this covers focus on the window.
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let m = &event.keystroke.modifiers;
-                if !m.control || m.alt || m.platform {
+                if m.platform {
                     return;
                 }
-                if let Some(command) = virtual_key(&event.keystroke.key)
-                    .and_then(|key| crate::native::shortcut(key, m.shift))
-                    .and_then(shortcut_command)
-                {
+                let Some(key) = virtual_key(&event.keystroke.key) else {
+                    return;
+                };
+                let chord = this
+                    .chord
+                    .take()
+                    .is_some_and(|started| started.elapsed() < Duration::from_secs(3));
+                let modifiers = crate::keyboard::Modifiers {
+                    control: m.control,
+                    shift: m.shift,
+                    alt: m.alt,
+                };
+                if let Some(action) = crate::keyboard::shortcut(key, modifiers, chord) {
                     cx.stop_propagation();
-                    this.command(command, window, cx);
+                    if action == "chord" {
+                        this.chord = Some(Instant::now());
+                    } else if let Some(command) = shortcut_command(action) {
+                        this.command(command, window, cx);
+                    }
                 }
             }))
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
@@ -2578,7 +2945,7 @@ impl Render for EditorWindow {
             let page = self.doc.page.clone();
             let wrap_page = self.doc.wrap_page;
             let zoom = self.doc.zoom;
-            editor.set_wrap(true);
+            editor.set_wrap(self.doc.word_wrap);
             // RichEdit is a child HWND: position it in physical pixels after GPUI layout.
             root = root.child(
                 div()
@@ -2684,16 +3051,20 @@ impl DocumentTab {
             encoding: prefs.default_encoding,
             line_ending: LineEnding::CrLf,
             fingerprint: None,
+            observed_fingerprint: None,
             rich: prefs.rich_text,
             dirty: false,
             read_only: false,
             ruler: prefs.show_ruler,
             wrap_page: prefs.wrap_to_page,
+            word_wrap: true,
+            untitled_name: crate::names::next_name(&prefs.untitled_prefix),
             zoom: 100,
             formatting: FormatState::default(),
             page: PageSettings::default(),
             recovery_id,
-            buffer_lease,
+            buffer_lease: buffer_lease.map(std::sync::Arc::new),
+            pending_buffer: None,
             buffered: false,
             retain_buffer: true,
             buffer_error_reported: false,
@@ -2729,6 +3100,10 @@ impl DocumentTab {
         tab.last_text = editor.text()?;
         tab.formatting = editor.formatting();
         editor.acknowledge_buffered_changes();
+        if let Some(name) = buffer.document.untitled_name {
+            crate::names::reserve_name(&name);
+            tab.untitled_name = name;
+        }
         tab.path = buffer.document.original_path;
         tab.fingerprint = tab
             .path
@@ -2739,52 +3114,112 @@ impl DocumentTab {
         tab.line_ending = buffer.document.line_ending;
         tab.rich = !tab.format.is_plain();
         tab.recovery_id = buffer.document.id;
-        tab.buffer_lease = Some(buffer.lease);
+        tab.buffer_lease = Some(std::sync::Arc::new(buffer.lease));
         tab.dirty = true;
         tab.restored_buffer = true;
         tab.buffered = true;
         Ok(tab)
     }
-    fn persist_buffer(&mut self) -> Result<()> {
+    fn canonical_editor(&self) -> Option<&Rc<NativeEditor>> {
+        self.markdown_source.as_ref().or(self.native.as_ref())
+    }
+    fn snapshot(&mut self) -> Result<Option<RecoveryDocument>> {
         if !self.retain_buffer {
-            return Ok(());
+            return Ok(None);
         }
-        // Without an editor there is no text to protect.
-        let Some(editor) = self.native.as_ref() else {
-            return Ok(());
+        let Some(editor) = self.canonical_editor().cloned() else {
+            return Ok(None);
         };
         self.dirty |= editor.is_modified();
-        // An unedited document has nothing to recover.
         if !self.dirty {
-            return Ok(());
+            return Ok(None);
         }
         if self.buffer_lease.is_none() {
-            self.buffer_lease = session::lease_buffer(&self.recovery_id)?;
+            self.buffer_lease = session::lease_buffer(&self.recovery_id)?.map(std::sync::Arc::new);
         }
         ensure!(
             self.buffer_lease.is_some(),
             "Another ExEditor instance owns this unsaved buffer; save a copy before closing."
         );
-        let content = if let Some(source) = &self.markdown_source {
-            DocumentContent::Plain(source.clone())
-        } else if self.rich {
-            DocumentContent::Rich(editor.rtf()?)
-        } else {
+        let content = if self.markdown_source.is_some() || !self.rich {
             DocumentContent::Plain(editor.text()?)
+        } else {
+            DocumentContent::Rich(editor.rtf()?)
         };
-        document::write_recovery(&RecoveryDocument {
+        Ok(Some(RecoveryDocument {
             id: self.recovery_id.clone(),
+            untitled_name: Some(self.untitled_name.clone()),
             original_path: self.path.clone(),
             format: self.format,
             content,
             encoding: self.encoding,
             line_ending: self.line_ending,
             saved_at: chrono::Local::now().to_rfc3339(),
-        })?;
-        editor.acknowledge_buffered_changes();
+        }))
+    }
+    fn poll_buffer(&mut self) -> Result<()> {
+        use std::sync::mpsc::TryRecvError;
+        let result = match self
+            .pending_buffer
+            .as_ref()
+            .map(|receiver| receiver.try_recv())
+        {
+            None | Some(Err(TryRecvError::Empty)) => return Ok(()),
+            Some(Err(TryRecvError::Disconnected)) => Err(anyhow::anyhow!(
+                "The recovery writer stopped before confirming the snapshot"
+            )),
+            Some(Ok(result)) => result,
+        };
+        self.pending_buffer = None;
+        result?;
         self.buffered = true;
         self.buffer_error_reported = false;
-        self.last_recovery = Instant::now();
+        Ok(())
+    }
+    fn finish_buffer(&mut self) -> Result<()> {
+        if let Some(receiver) = self.pending_buffer.take() {
+            receiver
+                .recv()
+                .context("Waiting for the unsaved buffer to finish writing")??;
+            self.buffered = true;
+        }
+        Ok(())
+    }
+    fn queue_buffer(&mut self) -> Result<()> {
+        self.poll_buffer()?;
+        if self.pending_buffer.is_some() {
+            return Ok(());
+        }
+        if let Some(snapshot) = self.snapshot()? {
+            let lease = self
+                .buffer_lease
+                .as_ref()
+                .context("The buffer lease is missing")?
+                .clone();
+            self.pending_buffer = Some(session::queue_recovery(snapshot, lease));
+            if let Some(editor) = self.canonical_editor() {
+                editor.acknowledge_buffered_changes();
+            }
+            self.last_recovery = Instant::now();
+        }
+        Ok(())
+    }
+    fn discard_recovery(&mut self) -> Result<()> {
+        // Waiting prevents an older queued snapshot resurrecting a saved/discarded tab.
+        let _ = self.finish_buffer();
+        document::remove_recovery(&self.recovery_id)
+    }
+    fn persist_buffer(&mut self) -> Result<()> {
+        let _ = self.finish_buffer();
+        if let Some(snapshot) = self.snapshot()? {
+            document::write_recovery(&snapshot)?;
+            if let Some(editor) = self.canonical_editor() {
+                editor.acknowledge_buffered_changes();
+            }
+            self.buffered = true;
+            self.buffer_error_reported = false;
+            self.last_recovery = Instant::now();
+        }
         Ok(())
     }
     fn name(&self) -> String {
@@ -2792,6 +3227,6 @@ impl DocumentTab {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled".into())
+            .unwrap_or_else(|| self.untitled_name.clone())
     }
 }

@@ -27,6 +27,7 @@ enum FontEditor {
 }
 struct Settings {
     draft: Preferences,
+    untitled_prefix: Entity<InputState>,
     rich_font: Entity<InputState>,
     rich_size: Entity<InputState>,
     plain_font: Entity<InputState>,
@@ -52,33 +53,44 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette, cx: &
     };
     let result = gpui_kit::open_window(options, cx, move |window, cx| {
         window.set_window_title("ExEditor Settings");
-        cx.new(|cx| Settings {
-            rich_font: input("Rich text font", &preferences.rich_font, window, cx),
-            rich_size: input(
-                "Rich text font size",
-                &preferences.rich_size.to_string(),
+        cx.new(|cx| {
+            let untitled_prefix = input(
+                "New document name prefix",
+                &preferences.untitled_prefix,
                 window,
                 cx,
-            ),
-            plain_font: input("Plain text font", &preferences.plain_font, window, cx),
-            plain_size: input(
-                "Plain text font size",
-                &preferences.plain_size.to_string(),
-                window,
-                cx,
-            ),
-            recovery: input(
-                "Additional recovery checkpoint interval in seconds",
-                &preferences.autosave_seconds.to_string(),
-                window,
-                cx,
-            ),
-            draft: preferences,
-            tab: Tab::NewDocument,
-            font_editor: None,
-            error: None,
-            commands,
-            colors,
+            );
+            cx.observe(&untitled_prefix, |_, _, cx| cx.notify())
+                .detach();
+            Settings {
+                untitled_prefix,
+                rich_font: input("Rich text font", &preferences.rich_font, window, cx),
+                rich_size: input(
+                    "Rich text font size",
+                    &preferences.rich_size.to_string(),
+                    window,
+                    cx,
+                ),
+                plain_font: input("Plain text font", &preferences.plain_font, window, cx),
+                plain_size: input(
+                    "Plain text font size",
+                    &preferences.plain_size.to_string(),
+                    window,
+                    cx,
+                ),
+                recovery: input(
+                    "Additional recovery checkpoint interval in seconds",
+                    &preferences.autosave_seconds.to_string(),
+                    window,
+                    cx,
+                ),
+                draft: preferences,
+                tab: Tab::NewDocument,
+                font_editor: None,
+                error: None,
+                commands,
+                colors,
+            }
         })
     });
     if let Err(error) = result {
@@ -211,6 +223,33 @@ impl Settings {
             .flex()
             .flex_col()
             .gap(px(18.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.))
+                    .child(self.heading("Document Name"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(div().w(px(185.)).child("New document name prefix:"))
+                            .child(
+                                div().flex_1().child(
+                                    Input::new(&self.untitled_prefix).with_size(Size::Small),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(c.muted))
+                            .child(name_examples(
+                                self.untitled_prefix.read(cx).value().as_ref(),
+                            )),
+                    ),
+            )
             .child(
                 div()
                     .flex()
@@ -388,6 +427,7 @@ impl Settings {
             (&self.plain_font, defaults.plain_font.clone()),
             (&self.plain_size, defaults.plain_size.to_string()),
             (&self.recovery, defaults.autosave_seconds.to_string()),
+            (&self.untitled_prefix, defaults.untitled_prefix.clone()),
         ];
         for (field, value) in fields {
             field.update(cx, |state, cx| state.set_value(value, window, cx));
@@ -398,6 +438,7 @@ impl Settings {
         cx.notify();
     }
     fn values(&self, cx: &App) -> Result<Vec<String>, String> {
+        let untitled_prefix = validated_prefix(self.untitled_prefix.read(cx).value().as_ref())?;
         let rich_font = self.rich_font.read(cx).value().to_string();
         let plain_font = self.plain_font.read(cx).value().to_string();
         for font in [&rich_font, &plain_font] {
@@ -444,6 +485,7 @@ impl Settings {
             recovery.to_string(),
             appearance.into(),
             encoding.into(),
+            untitled_prefix,
         ])
     }
     fn submit(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -689,6 +731,21 @@ impl Render for Settings {
     }
 }
 
+fn validated_prefix(value: &str) -> Result<String, String> {
+    crate::names::validate_prefix(value).map_err(|error| error.to_string())?;
+    Ok(value.trim().to_owned())
+}
+
+fn name_examples(value: &str) -> String {
+    let prefix = value.trim();
+    let prefix = if prefix.is_empty() {
+        crate::names::DEFAULT_PREFIX
+    } else {
+        prefix
+    };
+    format!("Examples: {prefix} 1, {prefix} 2")
+}
+
 fn font_size(value: &str) -> Result<f32, String> {
     let size = value
         .trim()
@@ -702,7 +759,7 @@ fn font_size(value: &str) -> Result<f32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::font_size;
+    use super::{font_size, name_examples, validated_prefix};
     #[test]
     fn font_size_validation_accepts_boundaries_and_rejects_non_finite_input() {
         assert_eq!(font_size("1"), Ok(1.));
@@ -710,5 +767,12 @@ mod tests {
         for invalid in ["NaN", "inf", "0", "1639", "twelve"] {
             assert!(font_size(invalid).is_err(), "invalid size {invalid}");
         }
+    }
+    #[test]
+    fn document_name_prefix_is_validated_and_examples_use_the_current_value() {
+        assert_eq!(validated_prefix(" Notes "), Ok("Notes".into()));
+        assert!(validated_prefix("../Notes").is_err());
+        assert_eq!(name_examples(" Notes "), "Examples: Notes 1, Notes 2");
+        assert_eq!(name_examples(""), "Examples: Untitled 1, Untitled 2");
     }
 }

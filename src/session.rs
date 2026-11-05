@@ -123,11 +123,78 @@ fn restore_buffers_in(folder: &Path) -> Result<RestoreResult> {
     Ok(result)
 }
 
+/// Each tab permits one outstanding snapshot. Its lease lives until the write
+/// completes; callers drain this receiver before saving, discarding or closing.
+pub fn queue_recovery(
+    snapshot: RecoveryDocument,
+    lease: std::sync::Arc<BufferLease>,
+) -> std::sync::mpsc::Receiver<Result<()>> {
+    recovery_job(move || document::write_recovery(&snapshot), lease)
+}
+fn recovery_job(
+    work: impl FnOnce() -> Result<()> + Send + 'static,
+    lease: std::sync::Arc<BufferLease>,
+) -> std::sync::mpsc::Receiver<Result<()>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    smol::spawn(async move {
+        let result = smol::unblock(move || {
+            let _lease = lease;
+            work()
+        })
+        .await;
+        let _ = sender.send(result);
+    })
+    .detach();
+    receiver
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use crate::document::{DocumentContent, DocumentFormat, LineEnding, TextEncoding};
     use tempfile::TempDir;
+
+    #[test]
+    fn background_write_holds_the_exclusive_lease_until_completion() {
+        use std::{
+            sync::{Arc, mpsc},
+            time::Duration,
+        };
+        let folder = TempDir::new().expect("private buffer folder");
+        let lease = Arc::new(
+            lease_buffer_in(folder.path(), "pending")
+                .expect("lease")
+                .expect("unused"),
+        );
+        let (started, waiting) = mpsc::channel();
+        let (release, finish) = mpsc::channel();
+        let result = recovery_job(
+            move || {
+                started.send(()).context("starting write")?;
+                finish.recv().context("finishing write")?;
+                Ok(())
+            },
+            lease,
+        );
+        waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("background write started");
+        assert!(
+            lease_buffer_in(folder.path(), "pending")
+                .expect("check pending lease")
+                .is_none()
+        );
+        release.send(()).expect("finish write");
+        result
+            .recv_timeout(Duration::from_secs(5))
+            .expect("completion")
+            .expect("write succeeded");
+        assert!(
+            lease_buffer_in(folder.path(), "pending")
+                .expect("released lease")
+                .is_some()
+        );
+    }
 
     fn snapshot(id: &str, text: &str, saved_at: &str) -> RecoveryDocument {
         RecoveryDocument {
@@ -138,6 +205,7 @@ mod tests {
             encoding: TextEncoding::Utf8,
             line_ending: LineEnding::Lf,
             saved_at: saved_at.into(),
+            untitled_name: None,
         }
     }
 
@@ -274,5 +342,18 @@ mod tests {
         let restored = restore_buffers_in(folder.path()).expect("restoring timestamp fixtures");
         assert_eq!(restored.buffers[0].document.id, "earlier");
         assert_eq!(restored.buffers[1].document.id, "later");
+    }
+    #[test]
+    fn restoring_a_buffer_keeps_its_numbered_untitled_name() {
+        let folder = TempDir::new().expect("temporary buffer folder");
+        let mut document = snapshot("draft", "Private notes", "2026-11-05T10:00:00-05:00");
+        document.untitled_name = Some("Notes 12".into());
+        write_snapshot(folder.path(), &document);
+        let restored = restore_buffers_in(folder.path()).expect("restoring a named buffer");
+        assert_eq!(restored.buffers.len(), 1);
+        assert_eq!(
+            restored.buffers[0].document.untitled_name.as_deref(),
+            Some("Notes 12")
+        );
     }
 }

@@ -1,0 +1,14 @@
+Files: Ctrl+N new tab; Ctrl+Shift+N new window; Ctrl+O / Ctrl+P open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+K S save all.
+Tabs: Ctrl+W / Ctrl+F4 close; Ctrl+Shift+W close window; Ctrl+Tab / Ctrl+Shift+Tab next/previous; Ctrl+PageDown / Ctrl+PageUp next/previous; Ctrl+K Ctrl+W close all; Ctrl+Shift+T reopen closed saved file.
+Editing: Ctrl+Z undo; Ctrl+Y / Ctrl+Shift+Z redo; Ctrl+C / Ctrl+X copy/cut (whole line with no selection); Ctrl+V paste; Ctrl+A select all.
+Lines: Ctrl+L select line; Ctrl+Enter / Ctrl+Shift+Enter insert below/above; Ctrl+Shift+K delete line; Alt+Up/Down move line; Shift+Alt+Up/Down copy line; Ctrl+]/[ indent/outdent.
+Comments: Ctrl+/ toggle line comment; Shift+Alt+A toggle block comment; Ctrl+K Ctrl+C add; Ctrl+K Ctrl+U remove; Ctrl+K Ctrl+X trim trailing whitespace.
+Navigation: Ctrl+G go to line; Ctrl+Shift+\ matching bracket; Home/End and Ctrl+Home/End; Ctrl+Left/Right and Shift extend selection.
+Find: Ctrl+F find; Ctrl+H replace; F3 / Shift+F3 next/previous.
+Display: Ctrl+Plus/Minus zoom; Ctrl+0 reset zoom; F11 full screen; Alt+Z word wrap; Ctrl+Up/Down scroll line; Alt+PageUp/PageDown scroll page.
+Markdown: Ctrl+Shift+V or Ctrl+K V switches source/preview. Elsewhere Ctrl+Shift+V pastes plain text.
+Formatting: Ctrl+B/I/U bold/italic/underline; Ctrl+Shift+C Colors; Ctrl+Shift+M rich/plain mode; Ctrl+Shift+Plus/Minus font size.
+Commands: F1 / Ctrl+Shift+P Command Palette; Ctrl+, Settings; Ctrl+K Ctrl+S this reference.
+File location: Ctrl+K P copy path; Ctrl+K R reveal in Explorer.
+
+Shortcuts apply to this editor's capabilities. VS Code workspace/debugger commands and multiple simultaneous cursors are not available in the native single-selection editor. Ctrl+K chords expire after three seconds. AltGr remains available for typing.

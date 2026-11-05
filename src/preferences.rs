@@ -21,6 +21,7 @@ pub enum Appearance {
 #[serde(default)]
 pub struct Preferences {
     pub rich_text: bool,
+    pub untitled_prefix: String,
     pub rich_font: String,
     pub rich_size: f32,
     pub plain_font: String,
@@ -49,6 +50,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             rich_text: true,
+            untitled_prefix: crate::names::DEFAULT_PREFIX.into(),
             rich_font: crate::fonts::RICH_FONT.into(),
             rich_size: 12.0,
             plain_font: crate::fonts::PLAIN_FONT.into(),
@@ -123,6 +125,7 @@ impl Preferences {
     }
 
     fn validate(&self) -> Result<()> {
+        crate::names::validate_prefix(&self.untitled_prefix)?;
         ensure!(
             !self.rich_font.trim().is_empty() && self.rich_font.len() <= 256,
             "Choose a valid default rich-text font."
@@ -164,6 +167,7 @@ mod tests {
         let preferences: Preferences =
             serde_json::from_str(r#"{"rich_text":false}"#).expect("older settings");
         assert!(!preferences.rich_text);
+        assert_eq!(preferences.untitled_prefix, "Untitled");
         assert!(preferences.spellcheck);
         assert_eq!(preferences.autosave_seconds, 30);
     }
@@ -192,6 +196,16 @@ mod tests {
         assert!(preferences.validate().is_err());
         preferences.rich_size = 12.0;
         preferences.autosave_seconds = 0;
+        assert!(preferences.validate().is_err());
+    }
+    #[test]
+    fn invalid_untitled_prefixes_are_rejected_before_preferences_are_saved() {
+        let mut preferences = Preferences {
+            untitled_prefix: "Notes".into(),
+            ..Preferences::default()
+        };
+        assert!(preferences.validate().is_ok());
+        preferences.untitled_prefix = "Notes/Private".into();
         assert!(preferences.validate().is_err());
     }
 }

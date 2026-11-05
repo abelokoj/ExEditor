@@ -77,6 +77,29 @@ The default icon is the selected paper-and-pencil artwork with calligraphic Ex.
 All three calligraphic PNG variants are retained in assets/icons/paper-calligraphy.
 
 The latest changes still need the user's visual and interaction feedback. In particular,
-a previously observed blank native document surface has not been resolved or ruled out
-by a new interactive test. Unsaved-buffer snapshots are atomic and flushed, but an
+the earlier blank writing area was addressed by hosting RichEdit above GPUI; current
+interactive behavior still needs user feedback. Unsaved-buffer snapshots are atomic and flushed, but an
 abrupt crash can still lose edits made since the most recent editing checkpoint.
+
+## Editing shortcuts and document names
+
+ExEditor supports familiar VS Code editing shortcuts, including moving/copying lines,
+indent/outdent, line and block comments, bracket navigation, scrolling, Find/Replace,
+Save All, reopening closed saved files, Markdown source/preview, and the searchable
+Command Palette (F1 or Ctrl+Shift+P). **Help > Keyboard Shortcuts** lists the bindings.
+The source reference is [Microsoft's Windows shortcut sheet](https://code.visualstudio.com/shortcuts/keyboard-shortcuts-windows.pdf).
+VS Code workspace/debugger commands and multiple simultaneous cursors are outside the
+native editor's current capabilities. Rich-text formatting shortcuts remain available.
+
+New documents receive names such as Untitled 1 and Untitled 2 across tabs and windows.
+Change the word under **Settings > New Document > New document names**; for example,
+Notes produces Notes 3 next. Existing unsaved documents keep their assigned names,
+and recovery reserves their numbers before later new documents. Saved files display
+their actual file names.
+
+Display colors use RichEdit's temporary formatting; saved/recovered RTF retains its
+original color identities. Markdown preview keeps a separate native view, preserving
+the source buffer's undo history, selection and unsaved changes. Print/PDF suppresses
+temporary display colors. Recovery writes run in the background with one pending
+snapshot per tab; saving, discarding and closing drain earlier writes to prevent a stale
+snapshot from returning.

@@ -3,16 +3,18 @@
 //! fonts, the way phones and browsers show them. Skin tones, flags, keycaps and joined
 //! sequences (families, professions) become one picture.
 use std::{cell::RefCell, ffi::c_void, ops::Range, ptr};
+use unicode_segmentation::UnicodeSegmentation as _;
 use windows::{
     Win32::{
         Foundation::RECT,
         Graphics::{
             Direct2D::{
                 Common::{D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT},
+                D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP,
                 D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_FACTORY_TYPE_SINGLE_THREADED,
                 D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
                 D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1CreateFactory,
-                ID2D1DCRenderTarget, ID2D1Factory,
+                ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
             },
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -22,14 +24,20 @@ use windows::{
             Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
             Gdi::HDC,
         },
-        UI::Controls::RichEdit::{ITextDocument, tomConstants},
+        UI::Controls::RichEdit::{
+            ITextDocument, ITextPara2, ITextRange, tomAutoColor, tomConstants, tomParaEffectTable,
+            tomParaEffectTableRowDelimiter,
+        },
     },
     core::{IUnknown, Interface, w},
 };
 use windows_sys::Win32::{
     Foundation::RECT as SysRect,
     Graphics::Gdi::{GetDC, ReleaseDC},
-    UI::WindowsAndMessaging::{GetClientRect, SendMessageW},
+    UI::{
+        HiDpi::GetDpiForWindow,
+        WindowsAndMessaging::{GetClientRect, SendMessageW},
+    },
 };
 
 const WM_USER: u32 = 0x0400;
@@ -53,8 +61,7 @@ struct TextRange {
     text: *mut u16,
 }
 
-/// One emoji picture in UTF-16 units: where it starts and ends, and the length of its
-/// first code point, whose single-glyph width gives the size RichEdit drew it at.
+/// One complete emoji grapheme in UTF-16 units, with its first code point length.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Cluster {
     pub units: Range<usize>,
@@ -63,49 +70,29 @@ pub struct Cluster {
 
 /// Finds the emoji in UTF-16 text.
 pub fn clusters(text: &[u16]) -> Vec<Cluster> {
-    let mut chars = Vec::with_capacity(text.len());
-    let mut offset = 0;
-    for decoded in char::decode_utf16(text.iter().copied()) {
-        let c = decoded.unwrap_or(char::REPLACEMENT_CHARACTER);
-        chars.push((offset, c));
-        offset += c.len_utf16();
-    }
-    let at = |i: usize| chars.get(i).map(|&(_, c)| c);
-    let position = |i: usize| chars.get(i).map_or(text.len(), |&(offset, _)| offset);
+    let decoded = String::from_utf16_lossy(text);
+    let mut position = 0;
     let mut found = Vec::new();
-    let mut i = 0;
-    while let Some(c) = at(i) {
-        let end = if is_regional(c) && at(i + 1).is_some_and(is_regional) {
-            i + 2
-        } else if matches!(c, '0'..='9' | '#' | '*')
-            && at(i + 1) == Some('\u{FE0F}')
-            && at(i + 2) == Some('\u{20E3}')
-        {
-            i + 3
-        } else if is_emoji(c) || (is_text_emoji(c) && at(i + 1) == Some('\u{FE0F}')) {
-            let mut j = i + 1;
-            loop {
-                match at(j) {
-                    Some('\u{FE0F}' | '\u{20E3}' | '\u{1F3FB}'..='\u{1F3FF}')
-                    | Some('\u{E0020}'..='\u{E007F}') => j += 1,
-                    Some('\u{200D}')
-                        if at(j + 1).is_some_and(|next| is_emoji(next) || is_text_emoji(next)) =>
-                    {
-                        j += 2
-                    }
-                    _ => break,
-                }
-            }
-            j
-        } else {
-            i += 1;
+    for grapheme in decoded.graphemes(true) {
+        let length = grapheme.encode_utf16().count();
+        let mut chars = grapheme.chars();
+        let Some(first) = chars.next() else {
             continue;
         };
-        found.push(Cluster {
-            units: position(i)..position(end),
-            first: c.len_utf16(),
-        });
-        i = end;
+        let regional_pair = is_regional(first) && chars.next().is_some_and(is_regional);
+        let keycap = matches!(first, '0'..='9' | '#' | '*') && grapheme.ends_with('\u{20E3}');
+        if !grapheme.contains('\u{FE0E}')
+            && (is_emoji(first)
+                || regional_pair
+                || keycap
+                || (is_text_emoji(first) && grapheme.contains('\u{FE0F}')))
+        {
+            found.push(Cluster {
+                units: position..position + length,
+                first: first.len_utf16(),
+            });
+        }
+        position += length;
     }
     found
 }
@@ -157,8 +144,49 @@ struct Painter {
     dwrite: IDWriteFactory,
     target: ID2D1DCRenderTarget,
 }
+#[derive(Default)]
+struct PainterCache {
+    painter: Option<Painter>,
+    busy: bool,
+}
 thread_local! {
-    static PAINTER: RefCell<Option<Painter>> = const { RefCell::new(None) };
+    static PAINTER: RefCell<PainterCache> = const { RefCell::new(PainterCache { painter: None, busy: false }) };
+}
+struct PainterLease {
+    painter: Option<Painter>,
+    healthy: bool,
+}
+impl PainterLease {
+    fn take() -> Option<Self> {
+        let painter = PAINTER
+            .try_with(|cell| {
+                let mut cache = cell.try_borrow_mut().ok()?;
+                if cache.busy {
+                    return None;
+                }
+                cache.busy = true;
+                Some(cache.painter.take())
+            })
+            .ok()??;
+        Some(Self {
+            painter,
+            healthy: true,
+        })
+    }
+}
+impl Drop for PainterLease {
+    fn drop(&mut self) {
+        let _ = PAINTER.try_with(|cell| {
+            if let Ok(mut cache) = cell.try_borrow_mut() {
+                cache.painter = if self.healthy {
+                    self.painter.take()
+                } else {
+                    None
+                };
+                cache.busy = false;
+            }
+        });
+    }
 }
 impl Painter {
     fn new() -> windows::core::Result<Self> {
@@ -196,27 +224,89 @@ impl Painter {
             )
         }
     }
-    /// Width, height, and baseline of `text` at `size` pixels.
     fn measure(
         &self,
         text: &[u16],
         format: &IDWriteTextFormat,
-    ) -> windows::core::Result<(f32, f32, f32)> {
+    ) -> windows::core::Result<GlyphMetrics> {
         // SAFETY: the layout borrows only these live arguments during the calls.
         unsafe {
             let layout = self
                 .dwrite
-                .CreateTextLayout(text, format, 100_000.0, 100_000.0)?;
+                .CreateTextLayout(text, format, 100_000., 100_000.)?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
             let mut lines = [DWRITE_LINE_METRICS::default(); 1];
             let mut count = 0;
             layout.GetLineMetrics(Some(&mut lines), &mut count)?;
-            Ok((
-                metrics.widthIncludingTrailingWhitespace,
-                metrics.height,
-                lines[0].baseline,
-            ))
+            let overhang = layout.GetOverhangMetrics()?;
+            Ok(GlyphMetrics {
+                width: metrics.widthIncludingTrailingWhitespace,
+                height: metrics.height,
+                baseline: lines[0].baseline,
+                ink: D2D_RECT_F {
+                    left: -overhang.left,
+                    top: -overhang.top,
+                    right: metrics.layoutWidth + overhang.right,
+                    bottom: metrics.layoutHeight + overhang.bottom,
+                },
+            })
+        }
+    }
+}
+
+struct GlyphMetrics {
+    width: f32,
+    height: f32,
+    baseline: f32,
+    ink: D2D_RECT_F,
+}
+struct GlyphDraw {
+    text: Vec<u16>,
+    format: IDWriteTextFormat,
+    layout: D2D_RECT_F,
+    clip: D2D_RECT_F,
+    background: ID2D1SolidColorBrush,
+    ink: ID2D1SolidColorBrush,
+}
+struct WindowDc {
+    hwnd: *mut c_void,
+    dc: *mut c_void,
+}
+impl Drop for WindowDc {
+    fn drop(&mut self) {
+        // SAFETY: this guard owns the matching GetDC result on the same window.
+        unsafe {
+            ReleaseDC(self.hwnd, self.dc);
+        }
+    }
+}
+struct DrawSession<'a> {
+    target: &'a ID2D1DCRenderTarget,
+    active: bool,
+}
+impl<'a> DrawSession<'a> {
+    fn begin(target: &'a ID2D1DCRenderTarget) -> Self {
+        // SAFETY: BindDC and all fallible layout/brush preparation finished first.
+        unsafe {
+            target.BeginDraw();
+        }
+        Self {
+            target,
+            active: true,
+        }
+    }
+    fn finish(mut self) -> windows::core::Result<()> {
+        self.active = false;
+        // SAFETY: this guard started exactly one draw session on the live target.
+        unsafe { self.target.EndDraw(None, None) }
+    }
+}
+impl Drop for DrawSession<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            // SAFETY: an early return or unwind must close the active session.
+            let _ = unsafe { self.target.EndDraw(None, None) };
         }
     }
 }
@@ -249,22 +339,24 @@ fn color(rgb: u32) -> D2D1_COLOR_F {
     }
 }
 
-/// Draws the visible emoji of a just-painted RichEdit window in color over a `paper`
-/// background. Returns whether any emoji were visible. Emoji inside the selection keep
-/// RichEdit's highlighted glyph.
+/// Draws color emoji using the document's fixed font size, DPI and zoom. Selected
+/// clusters and any region whose original background is uncertain stay native.
 pub fn paint(hwnd: *mut c_void, paper: u32) -> bool {
+    // A nested WM_PAINT must neither borrow the active painter nor create another.
+    let Some(mut lease) = PainterLease::take() else {
+        return false;
+    };
     let mut client = SysRect {
         left: 0,
         top: 0,
         right: 0,
         bottom: 0,
     };
-    // SAFETY: a live window and a writable rectangle.
+    // SAFETY: a live window and initialized writable rectangle.
     if unsafe { GetClientRect(hwnd, &mut client) } == 0 || client.right <= 0 || client.bottom <= 0 {
         return false;
     }
     let length = send(hwnd, WM_GETTEXTLENGTH, 0, 0).max(0) as i32;
-    // Back up a little so a sequence that starts above the window is still found whole.
     let first = (char_at(hwnd, 0, 0) - 16).max(0);
     let last = (char_at(hwnd, client.right, client.bottom) + 64).min(length);
     if last <= first {
@@ -291,12 +383,14 @@ pub fn paint(hwnd: *mut c_void, paper: u32) -> bool {
         return false;
     }
     let selected = selection(hwnd);
-    let _ = PAINTER.with(|cell| -> windows::core::Result<()> {
-        let mut cell = cell.borrow_mut();
-        if cell.is_none() {
-            *cell = Some(Painter::new()?);
+    lease.healthy = false;
+    let result = (|| -> windows::core::Result<()> {
+        if lease.painter.is_none() {
+            lease.painter = Some(Painter::new()?);
         }
-        let painter = cell.as_ref().expect("painter was just created");
+        let Some(painter) = lease.painter.as_ref() else {
+            return Ok(());
+        };
         let mut ole: *mut c_void = ptr::null_mut();
         send(
             hwnd,
@@ -309,101 +403,225 @@ pub fn paint(hwnd: *mut c_void, paper: u32) -> bool {
         }
         // SAFETY: EM_GETOLEINTERFACE returned an owned COM reference.
         let document: ITextDocument = unsafe { IUnknown::from_raw(ole) }.cast()?;
-        let point = |cp: i32| -> Option<(f32, f32)> {
-            // SAFETY: a live document; GetPoint writes the two integers.
-            unsafe {
-                let range = document.Range(cp, cp).ok()?;
-                let (mut x, mut y) = (0, 0);
-                range.GetPoint(POINT_FLAGS, &mut x, &mut y).ok()?;
-                Some((x as f32, y as f32))
-            }
-        };
-        // SAFETY: the window DC is released below on every path.
+        // SAFETY: obtains DPI for this live per-monitor-aware window.
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let (mut numerator, mut denominator) = (0_u32, 0_u32);
+        let zoom = send(
+            hwnd,
+            WM_USER + 224,
+            (&mut numerator as *mut u32) as usize,
+            (&mut denominator as *mut u32) as isize,
+        );
+        if zoom == 0 || (numerator == 0 && denominator == 0) {
+            numerator = 1;
+            denominator = 1;
+        }
+        // SAFETY: the window DC is owned by the guard through every return path.
         let dc = unsafe { GetDC(hwnd) };
         if dc.is_null() {
             return Ok(());
         }
-        let result = (|| -> windows::core::Result<()> {
-            let target = &painter.target;
-            let bounds = RECT {
-                left: 0,
-                top: 0,
-                right: client.right,
-                bottom: client.bottom,
+        let dc = WindowDc { hwnd, dc };
+        let target = &painter.target;
+        let bounds = RECT {
+            left: client.left,
+            top: client.top,
+            right: client.right,
+            bottom: client.bottom,
+        };
+        // SAFETY: this window DC and rectangle remain valid until the guard drops.
+        unsafe {
+            target.BindDC(HDC(dc.dc), &bounds)?;
+        }
+        let visible = D2D_RECT_F {
+            left: client.left as f32,
+            top: client.top as f32,
+            right: client.right as f32,
+            bottom: client.bottom as f32,
+        };
+        let mut draws = Vec::new();
+        for cluster in &found {
+            let start = first + cluster.units.start as i32;
+            let end = first + cluster.units.end as i32;
+            if selected.min < selected.max && selected.min < end && start < selected.max {
+                continue;
+            }
+            // SAFETY: these non-mutating TOM ranges never alter the user's caret,
+            // selection or document formatting, including inside joined graphemes.
+            let range = match unsafe { document.Range(start, end) } {
+                Ok(range) => range,
+                Err(_) => continue,
             };
-            // SAFETY: the DC and rectangle are valid for this draw.
-            unsafe {
-                target.BindDC(HDC(dc), &bounds)?;
-                let background = target.CreateSolidColorBrush(&color(paper), None)?;
-                let dark = ((paper >> 16) & 255) + ((paper >> 8) & 255) + (paper & 255) < 384;
+            let Some(background) = range_background(&range, paper) else {
+                continue;
+            };
+            // SAFETY: the live font object describes this entire emoji range.
+            let points = match unsafe { range.GetFont().and_then(|font| font.GetSize()) } {
+                Ok(points) => points,
+                Err(_) => continue,
+            };
+            let Some(pixel_size) = font_pixels(points, dpi, numerator, denominator) else {
+                continue;
+            };
+            let (
+                Some((x0, baseline)),
+                Some((x_end, end_baseline)),
+                Some((_, top)),
+                Some((_, bottom)),
+            ) = (
+                range_point(&range, POINT_FLAGS),
+                range_point(&range, tomConstants(256 | 24)),
+                range_point(&range, tomConstants(32 | 256)),
+                range_point(&range, tomConstants(32 | 256 | 8)),
+            )
+            else {
+                continue;
+            };
+            // Wrapped or ambiguous advances remain native; sizing never consults
+            // the caret position inside the first code point of a joined emoji.
+            if end_baseline != baseline || x_end <= x0 || bottom <= top {
+                continue;
+            }
+            let text = &units[cluster.units.clone()];
+            let mut format = painter.format(pixel_size)?;
+            let mut metrics = painter.measure(text, &format)?;
+            let reserved_width = x_end - x0;
+            if !metrics.width.is_finite() || metrics.width <= 0. {
+                continue;
+            }
+            if metrics.width > reserved_width {
+                format = painter.format(pixel_size * reserved_width / metrics.width)?;
+                metrics = painter.measure(text, &format)?;
+            }
+            let origin_x = x0 + (reserved_width - metrics.width).max(0.) / 2.;
+            let origin_y = baseline - metrics.baseline;
+            let glyph = D2D_RECT_F {
+                left: origin_x + metrics.ink.left,
+                top: origin_y + metrics.ink.top,
+                right: origin_x + metrics.ink.right,
+                bottom: origin_y + metrics.ink.bottom,
+            };
+            let cell = D2D_RECT_F {
+                left: x0,
+                top,
+                right: x_end,
+                bottom,
+            };
+            let Some(clip) =
+                intersect_rect(glyph, cell).and_then(|clip| intersect_rect(clip, visible))
+            else {
+                continue;
+            };
+            // All fallible font, layout and brush work completes before BeginDraw.
+            // SAFETY: the render target is bound; these colors are fully initialized.
+            let (background_brush, ink) = unsafe {
+                let brush = target.CreateSolidColorBrush(&color(background), None)?;
+                let dark =
+                    ((background >> 16) & 255) + ((background >> 8) & 255) + (background & 255)
+                        < 384;
                 let ink = target
                     .CreateSolidColorBrush(&color(if dark { 0xe6e6e5 } else { 0x1a1a1a }), None)?;
-                target.BeginDraw();
-                for cluster in &found {
-                    let start = first + cluster.units.start as i32;
-                    let end = first + cluster.units.end as i32;
-                    if selected.min < selected.max && selected.min < end && start < selected.max {
-                        continue;
-                    }
-                    let (Some((x0, baseline)), Some((x_first, y_first)), Some((x_end, y_end))) = (
-                        point(start),
-                        point(start + cluster.first as i32),
-                        point(end),
-                    ) else {
-                        continue;
-                    };
-                    // A sequence broken across lines keeps RichEdit's glyphs.
-                    if y_first != baseline || y_end != baseline || x_first <= x0 {
-                        continue;
-                    }
-                    let text = &units[cluster.units.clone()];
-                    let first_glyph = &text[..cluster.first];
-                    // Size the color glyph so its first code point matches RichEdit's width.
-                    let (unit_width, _, _) =
-                        painter.measure(first_glyph, &painter.format(100.0)?)?;
-                    if unit_width <= 0.0 {
-                        continue;
-                    }
-                    let format = painter.format(100.0 * (x_first - x0) / unit_width)?;
-                    let (width, height, ascent) = painter.measure(text, &format)?;
-                    let top = baseline - ascent;
-                    if top > client.bottom as f32 || top + height < 0.0 {
-                        continue;
-                    }
-                    let right = x_end.max(x0 + width);
-                    target.FillRectangle(
-                        &D2D_RECT_F {
-                            left: x0,
-                            top,
-                            right,
-                            bottom: top + height,
-                        },
-                        &background,
-                    );
-                    target.DrawText(
-                        text,
-                        &format,
-                        &D2D_RECT_F {
-                            left: x0,
-                            top,
-                            right: x0 + width + 1.0,
-                            bottom: top + height,
-                        },
-                        &ink,
-                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-                        DWRITE_MEASURING_MODE_NATURAL,
-                    );
-                }
-                target.EndDraw(None, None)
-            }
-        })();
-        // SAFETY: releases the DC obtained above.
-        unsafe {
-            ReleaseDC(hwnd, dc);
+                (brush, ink)
+            };
+            draws.push(GlyphDraw {
+                text: text.to_vec(),
+                format,
+                layout: D2D_RECT_F {
+                    left: origin_x,
+                    top: origin_y,
+                    right: origin_x + metrics.width + 1.,
+                    bottom: origin_y + metrics.height,
+                },
+                clip,
+                background: background_brush,
+                ink,
+            });
         }
-        result
-    });
-    true
+        if draws.is_empty() {
+            return Ok(());
+        }
+        let session = DrawSession::begin(target);
+        for draw in draws {
+            // SAFETY: every brush/layout is prepared above. The clip intersects
+            // actual glyph ink, the reserved native cell and the visible client.
+            unsafe {
+                target.PushAxisAlignedClip(&draw.clip, D2D1_ANTIALIAS_MODE_ALIASED);
+                target.FillRectangle(&draw.clip, &draw.background);
+                target.DrawText(
+                    &draw.text,
+                    &draw.format,
+                    &draw.layout,
+                    &draw.ink,
+                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                target.PopAxisAlignedClip();
+            }
+        }
+        session.finish()
+    })();
+    lease.healthy = result.is_ok();
+    result.is_ok()
+}
+
+fn range_point(range: &ITextRange, flags: tomConstants) -> Option<(f32, f32)> {
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: a live, non-mutating range and initialized output integers.
+    unsafe {
+        range.GetPoint(flags, &mut x, &mut y).ok()?;
+    }
+    Some((x as f32, y as f32))
+}
+fn range_background(range: &ITextRange, paper: u32) -> Option<u32> {
+    // SAFETY: all interfaces are obtained from the live range; these calls only
+    // inspect attributes. Unsupported or mixed properties conservatively skip it.
+    unsafe {
+        let background = range.GetFont().ok()?.GetBackColor().ok()?;
+        let paragraph: ITextPara2 = range.GetPara().ok()?.cast().ok()?;
+        let (mut effects, mut mask) = (0, 0);
+        paragraph.GetEffects(&mut effects, &mut mask).ok()?;
+        repaint_background(background, effects, mask, paper)
+    }
+}
+fn repaint_background(background: i32, effects: i32, mask: i32, paper: u32) -> Option<u32> {
+    let table = tomParaEffectTable.0 | tomParaEffectTableRowDelimiter.0;
+    if mask & table != table || effects & table != 0 {
+        return None;
+    }
+    if background == tomAutoColor.0 {
+        return (paper <= 0xffffff).then_some(paper);
+    }
+    // COLORREF's high byte must be zero. Mixed values, palette indices and
+    // unknown automatic/system values cannot safely erase a native rectangle.
+    if !(0..=0xffffff).contains(&background) {
+        return None;
+    }
+    let native = background as u32;
+    Some(((native & 255) << 16) | (native & 0xff00) | ((native >> 16) & 255))
+}
+fn font_pixels(points: f32, dpi: u32, numerator: u32, denominator: u32) -> Option<f32> {
+    if !points.is_finite() || points <= 0. || dpi == 0 || numerator == 0 || denominator == 0 {
+        return None;
+    }
+    let pixels = points * dpi as f32 / 72. * numerator as f32 / denominator as f32;
+    (pixels.is_finite() && pixels > 0.).then_some(pixels)
+}
+fn intersect_rect(a: D2D_RECT_F, b: D2D_RECT_F) -> Option<D2D_RECT_F> {
+    if [
+        a.left, a.top, a.right, a.bottom, b.left, b.top, b.right, b.bottom,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+    let result = D2D_RECT_F {
+        left: a.left.max(b.left),
+        top: a.top.max(b.top),
+        right: a.right.min(b.right),
+        bottom: a.bottom.min(b.bottom),
+    };
+    (result.left < result.right && result.top < result.bottom).then_some(result)
 }
 
 #[cfg(test)]
@@ -418,6 +636,122 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn text_presentation_selectors_keep_native_glyphs() {
+        assert!(found("😀\u{fe0e}").is_empty());
+        assert!(found("👩\u{fe0e}\u{200d}💻").is_empty());
+        assert_eq!(found("⭐\u{fe0e} ✅"), [(3, 4, 1)]);
+        assert_eq!(
+            found("1\u{20e3}"),
+            [(0, 2, 1)],
+            "keycap without redundant VS16"
+        );
+    }
+
+    #[test]
+    fn emoji_metrics_are_document_size_dpi_and_zoom_not_internal_caret_widths() {
+        assert_eq!(font_pixels(12., 96, 1, 1), Some(16.));
+        assert_eq!(font_pixels(12., 144, 150, 100), Some(36.));
+        assert_eq!(font_pixels(18., 192, 1, 2), Some(24.));
+        for invalid in [0., -9_999_999., f32::NAN, f32::INFINITY] {
+            assert_eq!(font_pixels(invalid, 96, 1, 1), None);
+        }
+        assert_eq!(font_pixels(12., 0, 1, 1), None);
+        assert_eq!(font_pixels(12., 96, 1, 0), None);
+    }
+
+    #[test]
+    fn emoji_repainting_uses_the_actual_uniform_background_or_skips() {
+        let stable = tomParaEffectTable.0 | tomParaEffectTableRowDelimiter.0;
+        assert_eq!(
+            repaint_background(0x00332211, 0, stable, 0xffffff),
+            Some(0x112233)
+        );
+        assert_eq!(
+            repaint_background(tomAutoColor.0, 0, stable, 0x202020),
+            Some(0x202020)
+        );
+        assert_eq!(
+            repaint_background(-9_999_999, 0, stable, 0xffffff),
+            None,
+            "mixed background"
+        );
+        assert_eq!(
+            repaint_background(0x01000012, 0, stable, 0xffffff),
+            None,
+            "palette index"
+        );
+        assert_eq!(
+            repaint_background(0x00332211, tomParaEffectTable.0, stable, 0xffffff),
+            None,
+            "table cell"
+        );
+        assert_eq!(
+            repaint_background(0x00332211, 0, 0, 0xffffff),
+            None,
+            "unknown paragraph effects"
+        );
+        assert_eq!(
+            repaint_background(0x00332211, 0, tomParaEffectTable.0, 0xffffff),
+            None,
+            "mixed table boundary"
+        );
+    }
+
+    #[test]
+    fn emoji_clip_cannot_cover_a_neighbor_or_leave_the_client() {
+        let ink = D2D_RECT_F {
+            left: 8.,
+            top: -4.,
+            right: 40.,
+            bottom: 30.,
+        };
+        let cell = D2D_RECT_F {
+            left: 10.,
+            top: -2.,
+            right: 25.,
+            bottom: 22.,
+        };
+        let client = D2D_RECT_F {
+            left: 0.,
+            top: 0.,
+            right: 100.,
+            bottom: 20.,
+        };
+        let clipped = intersect_rect(ink, cell)
+            .and_then(|rect| intersect_rect(rect, client))
+            .expect("visible glyph");
+        assert_eq!(
+            (clipped.left, clipped.top, clipped.right, clipped.bottom),
+            (10., 0., 25., 20.)
+        );
+        let outside = D2D_RECT_F {
+            left: 101.,
+            top: 0.,
+            right: 110.,
+            bottom: 20.,
+        };
+        assert!(intersect_rect(outside, client).is_none());
+        let unknown = D2D_RECT_F {
+            left: f32::NAN,
+            ..ink
+        };
+        assert!(intersect_rect(unknown, client).is_none());
+    }
+
+    #[test]
+    fn reentrant_paints_do_not_borrow_or_replace_an_active_painter() {
+        let lease = PainterLease::take().expect("idle painter cache");
+        assert!(
+            PainterLease::take().is_none(),
+            "reentry leaves native drawing intact"
+        );
+        drop(lease);
+        assert!(
+            PainterLease::take().is_some(),
+            "completion releases the busy flag"
+        );
+    }
     #[test]
     fn finds_whole_emoji_sequences() {
         assert_eq!(found("a😀b"), [(1, 3, 2)]);

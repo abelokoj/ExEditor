@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-05T16:25:16-05:00 — Document safety, stable emoji, editing shortcuts and numbered names (local source batch)
+
+- Kept loaded and acknowledged external-file versions separate so declining Reload cannot silently authorize overwriting another application's changes.
+- Replaced destructive dark-color substitutions and RTF color-table rewriting with native temporary display formatting. Typed TOM interfaces now manage formatting/undo resources; print/PDF hides temporary colors with automatic restoration.
+- Markdown preview uses a separate native view while retaining the source editor's contents, undo history, selection and pending edits. Save As rich text deliberately converts the preview into the new editable document.
+- Fixed incremental highlighting after appended comments/strings and parser failures. Added complete UTF-16 style comparisons for append/delete/Unicode/long-line cases.
+- Stabilized emoji geometry with native font size, per-monitor DPI and zoom, rather than caret positions inside a sequence. Preserve local backgrounds and native table/mixed-background rendering; clip to reserved cluster bounds, pair every Direct2D draw and release/reset failed resources. Cached native layout settings avoid repeated reflow while idle.
+- Added VS Code-style line movement/copy/deletion/insertion, indentation, line/block comments, bracket navigation, scrolling, Find shortcuts, Save All, reopening saved files, full screen, Ctrl+K chords, searchable Command Palette and keyboard help. Rich fragment provenance preserves styling through line edits; multiple simultaneous cursors and VS Code workspace/debugger features remain unsupported.
+- New documents receive process-wide numbered titles (Untitled 1, Untitled 2). Settings accepts a validated naming prefix with live examples. Assigned names persist in backward-compatible recovery metadata, and restored numbers advance later naming.
+- Recovery snapshots write off the interface thread with one outstanding job per tab. Exclusive leases survive pending writes; save/discard/close drain earlier snapshots so stale work cannot resurrect a buffer.
+- Validation performed locally: source/API inspection, rustfmt and whitespace checks only. Regression-test source covers native color identity, preview undo/selection, rich line movement, print cleanup, writer ownership, editing plans, shortcuts, emoji geometry and names. No local compilation, application launch or interactive testing; GitHub build/check result pending. Personal dev_notes remain ignored and excluded.
+
 ## 2026-11-05 — Color emoji, scrolling tabs, plain-text font on open, Markdown layout
 
 - Emoji show in color, as on phones and in other apps, in plain, rich, code and Markdown documents. Windowed RichEdit can only draw them in black and white, so the editor now redraws each visible emoji on top in color with Direct2D and DirectWrite (Segoe UI Emoji). Whole sequences such as flags, skin tones, keycaps and family emoji are drawn as one picture. Selected emoji keep RichEdit's own highlight drawing.
