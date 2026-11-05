@@ -102,23 +102,21 @@ pub fn open_with_code(
     initial_code: Option<String>,
     cx: &mut App,
 ) {
-    if let Some(previous) = cx.try_global::<PickerWindow>().cloned() {
-        if let Some(panel) = previous.panel.upgrade() {
-            if previous
-                .handle
-                .update(cx, |_, window, cx| {
-                    panel.update(cx, |panel, cx| {
-                        panel.target = target;
-                        panel.commands = commands.clone();
-                        panel.initial_color(initial, initial_code.as_deref(), window, cx);
-                    });
-                    window.activate_window();
-                })
-                .is_ok()
-            {
-                return;
-            }
-        }
+    if let Some(previous) = cx.try_global::<PickerWindow>().cloned()
+        && let Some(panel) = previous.panel.upgrade()
+        && previous
+            .handle
+            .update(cx, |_, window, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.target = target;
+                    panel.commands = commands.clone();
+                    panel.initial_color(initial, initial_code.as_deref(), window, cx);
+                });
+                window.activate_window();
+            })
+            .is_ok()
+    {
+        return;
     }
     let saved = match PickerState::load() {
         Ok(saved) => saved,
@@ -281,15 +279,14 @@ impl ColorsPanel {
             &panel.formats,
             window,
             |this, _, event: &SelectEvent<Vec<&'static str>>, window, cx| {
-                if let SelectEvent::Confirm(Some(label)) = event {
-                    if let Some(format) = ColorFormat::ALL
+                if let SelectEvent::Confirm(Some(label)) = event
+                    && let Some(format) = ColorFormat::ALL
                         .into_iter()
                         .find(|format| format.label() == *label)
-                    {
-                        this.saved.format = format;
-                        this.sync_code(window, cx);
-                        this.persist(cx);
-                    }
+                {
+                    this.saved.format = format;
+                    this.sync_code(window, cx);
+                    this.persist(cx);
                 }
             },
         ));

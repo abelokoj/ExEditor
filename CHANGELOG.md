@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T02:43:16-05:00 — Strict Rust lint integration (local fixes)
+
+- Applied the four let-chain changes requested by strict Clippy in GitHub run 41988878649. The earlier compiler errors are resolved; this run stopped at lint checks before tests and packaging.
+- Validation: inspected remote diagnostics and formatted the corrected source. No local compilation or app testing performed; replacement online build pending.
+
 ## 2026-11-05T02:39:41-05:00 — Colors panel compiler integration (local fixes)
 
 - Imported the GPUI disabled-control trait and selection index type, annotated mouse events and color-channel bit operations to resolve the seven compiler errors in GitHub run 41988334949.

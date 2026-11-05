@@ -449,14 +449,13 @@ impl EditorWindow {
         if needs_buffer
             && (!self.doc.buffer_error_reported
                 || self.doc.last_recovery.elapsed() >= Duration::from_secs(5))
+            && let Err(error) = self.doc.persist_buffer()
         {
-            if let Err(error) = self.doc.persist_buffer() {
-                if !self.doc.buffer_error_reported {
-                    show_error(&error);
-                }
-                self.doc.buffer_error_reported = true;
-                self.doc.last_recovery = Instant::now();
+            if !self.doc.buffer_error_reported {
+                show_error(&error);
             }
+            self.doc.buffer_error_reported = true;
+            self.doc.last_recovery = Instant::now();
         }
         if self.doc.last_external_check.elapsed() > Duration::from_secs(3) {
             if let (Some(path), Some(old)) = (&self.doc.path, &self.doc.fingerprint)
