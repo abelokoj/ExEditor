@@ -104,7 +104,7 @@ pub enum Command {
     MatchingBracket,
     ToggleWordWrap,
     ScrollEditor(i32, bool),
-    CommandPalette,
+    Palette,
     KeyboardHelp,
     SaveAll,
     CloseAll,
@@ -149,7 +149,7 @@ pub fn show_error(error: &anyhow::Error) {
 /// The command behind a `native::shortcut` name, shared by the document and window key paths.
 fn shortcut_command(name: &str) -> Option<Command> {
     Some(match name {
-        "command-palette" => Command::CommandPalette,
+        "command-palette" => Command::Palette,
         "block-comment" => Command::BlockComment,
         "fullscreen" => Command::Fullscreen,
         "reopen-closed" => Command::ReopenClosed,
@@ -1274,7 +1274,7 @@ impl EditorWindow {
                     self.editor()?.execute(EditCommand::PastePlain)?;
                 }
             }
-            Command::CommandPalette => {
+            Command::Palette => {
                 let mut entries = Vec::new();
                 for menu in [
                     MenuKind::App,
@@ -2482,7 +2482,7 @@ impl EditorWindow {
                 item(&self.name(), "", C::GoToSelection),
             ],
             M::Help => vec![
-                item("Command Palette…", "F1 / Ctrl+Shift+P", C::CommandPalette),
+                item("Command Palette…", "F1 / Ctrl+Shift+P", C::Palette),
                 item("Keyboard Shortcuts…", "Ctrl+K Ctrl+S", C::KeyboardHelp),
                 item("ExEditor Help", "", C::Help),
                 item("About ExEditor", "", C::About),

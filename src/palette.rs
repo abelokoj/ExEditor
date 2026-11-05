@@ -96,11 +96,11 @@ impl CommandPalette {
         else {
             return;
         };
-        if entry.enabled {
-            if let Some(command) = entry.command.clone() {
-                self.commands.borrow_mut().push_back(command);
-                window.remove_window();
-            }
+        if entry.enabled
+            && let Some(command) = entry.command.clone()
+        {
+            self.commands.borrow_mut().push_back(command);
+            window.remove_window();
         }
     }
     fn move_selection(&mut self, backwards: bool, cx: &mut Context<Self>) {

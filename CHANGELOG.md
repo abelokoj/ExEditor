@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-05T16:38:12-05:00 — Command palette diagnostic corrections (local/uncommitted)
+
+- Simplified the palette command variant and conditional invocation after GitHub strict Clippy reported enum_variant_names and collapsible_if. No shortcut behavior changed.
+- Validation: GitHub accepted the native pointer correction and reached Clippy; regression tests remain pending. Local formatting and whitespace checks only; no local compilation or application launch.
+
 ## 2026-11-05T16:34:31-05:00 — Native editor build correction (local/uncommitted)
 
 - Gave the RichEdit COM out-pointer its explicit native type after GitHub reported E0282.
