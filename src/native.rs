@@ -78,8 +78,17 @@ thread_local! {
     /// The character style held by Copy Style; RichEdit lives on the UI thread only.
     static COPIED_STYLE: Cell<Option<CharFormat>> = const { Cell::new(None) };
 }
-const EM_GETTEXTMODE: u32 = WM_USER + 90;
-const TM_PLAINTEXT: isize = 1;
+const SCF_DEFAULT: usize = 0;
+const CFE_AUTOCOLOR: u32 = 0x4000_0000;
+const EM_SETEVENTMASK: u32 = WM_USER + 69;
+const ENM_CHANGE: isize = 1;
+const EN_CHANGE: usize = 0x0300;
+const EM_GETSCROLLPOS: u32 = WM_USER + 221;
+const EM_SETSCROLLPOS: u32 = WM_USER + 222;
+const CF_UNICODETEXT: usize = 13;
+// ITextDocument::Undo arguments that pause and resume undo recording (tom.h).
+const TOM_SUSPEND: i32 = -9_999_995;
+const TOM_RESUME: i32 = -9_999_994;
 const SF_RTF: usize = 2;
 const SFF_SELECTION: usize = 0x8000;
 const CFM_BOLD: u32 = 1;
@@ -293,6 +302,11 @@ struct NativeState {
     bounds: Cell<Option<(i32, i32, i32, i32)>>,
     visible: Cell<bool>,
     focus_on_show: Cell<bool>,
+    /// Plain documents keep one style and paste text only; RichEdit itself
+    /// stays in rich mode so source code can be colored.
+    plain: Cell<bool>,
+    /// Set by a paste so rich text pasted into a dark document can be adapted.
+    pasted: Cell<bool>,
 }
 impl NativeState {
     /// Moves the host over the editor rectangle and shows it when the owner is on screen.
@@ -347,6 +361,8 @@ pub struct NativeEditor {
     hwnd: HWND,
     state: Box<NativeState>,
     read_only: Cell<bool>,
+    /// Light color standing in for automatic text on a dark document.
+    text_override: Cell<Option<u32>>,
     _ui_thread: PhantomData<Rc<()>>,
 }
 impl NativeEditor {
@@ -424,6 +440,8 @@ impl NativeEditor {
             bounds: Cell::new(None),
             visible: Cell::new(true),
             focus_on_show: Cell::new(false),
+            plain: Cell::new(false),
+            pasted: Cell::new(false),
         });
         let data = (&*state as *const NativeState) as usize;
         // SAFETY: boxed state stays stable until both subclasses are removed in Drop;
@@ -444,9 +462,12 @@ impl NativeEditor {
             hwnd,
             state,
             read_only: Cell::new(false),
+            text_override: Cell::new(None),
             _ui_thread: PhantomData,
         };
         editor.send(EM_EXLIMITTEXT, 0, 64 * 1024 * 1024);
+        // EN_CHANGE lets the window skip reading unchanged text every tick.
+        editor.send(EM_SETEVENTMASK, 0, ENM_CHANGE);
         editor.send(EM_SETUNDOLIMIT, 1_000, 0);
         editor.send(EM_AUTOURLDETECT, 1, 0);
         editor.set_spellcheck(true);
@@ -524,9 +545,10 @@ impl NativeEditor {
             copied >= 0 && copied as usize <= len,
             "Windows could not read the complete document"
         );
-        String::from_utf16(&buffer[..copied as usize])
-            .map(|text| normalize_newlines(&text))
-            .context("the document contains invalid Unicode")
+        // Lossy: a lone surrogate must not make saving or closing impossible.
+        Ok(normalize_newlines(&String::from_utf16_lossy(
+            &buffer[..copied as usize],
+        )))
     }
     pub fn set_text(&self, text: &str) -> Result<()> {
         ensure!(
@@ -538,10 +560,18 @@ impl NativeEditor {
             "the document is too large"
         );
         let value = wide(&text.replace("\r\n", "\r").replace('\n', "\r"));
-        ensure!(
-            self.send(0x000c, 0, value.as_ptr() as isize) != 0,
-            "Windows could not load the document text"
-        );
+        // EM_REPLACESEL, unlike WM_SETTEXT, never parses text that starts with
+        // `{\rtf`, and the new text keeps a plain document's single style.
+        let read_only = self.read_only.get();
+        if read_only {
+            self.send(EM_SETREADONLY, 0, 0);
+        }
+        self.set_selection(CharRange { min: 0, max: -1 });
+        self.send(EM_REPLACESEL, 0, value.as_ptr() as isize);
+        self.set_selection(CharRange::default());
+        if read_only {
+            self.send(EM_SETREADONLY, 1, 0);
+        }
         self.send(EM_EMPTYUNDOBUFFER, 0, 0);
         Ok(())
     }
@@ -566,6 +596,16 @@ impl NativeEditor {
             !bytes.is_empty(),
             "Windows returned an empty rich-text stream"
         );
+        if let Some(color) = self.text_override.get() {
+            // Dark-document text is stored as automatic color, not as its stand-in.
+            let entry = format!(
+                "\\red{}\\green{}\\blue{};",
+                color >> 16,
+                (color >> 8) & 0xff,
+                color & 0xff
+            );
+            bytes = replace_bytes(&bytes, entry.as_bytes(), b";");
+        }
         Ok(bytes)
     }
     pub fn set_rtf(&self, bytes: &[u8]) -> Result<()> {
@@ -584,7 +624,7 @@ impl NativeEditor {
             return Err(error);
         }
         self.send(EM_EMPTYUNDOBUFFER, 0, 0);
-        Ok(())
+        self.adapt_automatic_text()
     }
     pub fn is_modified(&self) -> bool {
         self.send(EM_GETMODIFY, 0, 0) != 0
@@ -627,9 +667,9 @@ impl NativeEditor {
             copied >= 0 && copied as usize <= len,
             "Windows could not read the selected text"
         );
-        String::from_utf16(&buffer[..copied as usize])
-            .map(|text| normalize_newlines(&text))
-            .context("the selection contains invalid Unicode")
+        Ok(normalize_newlines(&String::from_utf16_lossy(
+            &buffer[..copied as usize],
+        )))
     }
     pub fn execute(&self, command: EditCommand) -> Result<()> {
         if self.read_only.get() && !matches!(command, EditCommand::Copy | EditCommand::SelectAll) {
@@ -981,33 +1021,200 @@ impl NativeEditor {
     }
     pub fn set_plain_text_mode(&self, plain: bool) -> Result<()> {
         ensure!(self.state.alive.get(), "the document window has closed");
-        let was_plain = self.send(EM_GETTEXTMODE, 0, 0) & TM_PLAINTEXT != 0;
-        if was_plain == plain {
+        if self.state.plain.replace(plain) == plain || !plain {
             return Ok(());
         }
+        // Rich to plain drops every style, paragraph format, and attachment.
         let modified = self.is_modified();
-        let previous_rtf = if was_plain { None } else { Some(self.rtf()?) };
         let text = self.text()?;
-        self.set_text("")?;
-        let mode = if plain { 1 } else { 2 } | 8 | 32;
-        if self.send(WM_USER + 89, mode, 0) != 0 {
-            if let Some(rtf) = previous_rtf {
-                self.set_rtf(&rtf)?;
-            } else {
-                self.set_text(&text)?;
-            }
-            if modified {
-                self.mark_modified();
-            }
-            bail!("Windows could not change the document's text mode");
-        }
+        self.set_selection(CharRange::default());
+        let mut font = self.char_format();
+        font.mask &= CFM_FACE | CFM_SIZE;
+        self.stream_rtf(b"{\\rtf1 }", false)?;
+        self.send(
+            EM_SETCHARFORMAT,
+            SCF_DEFAULT,
+            (&font as *const CharFormat) as isize,
+        );
+        self.send(
+            EM_SETCHARFORMAT,
+            SCF_ALL,
+            (&font as *const CharFormat) as isize,
+        );
         self.set_text(&text)?;
+        if let Some(color) = self.text_override.take() {
+            self.set_text_override(Some(color))?;
+        }
         if modified {
             self.mark_modified();
         } else {
             self.mark_saved();
         }
         Ok(())
+    }
+    /// True once after the user changed the text (EN_CHANGE), so callers can
+    /// skip reading an unchanged document.
+    pub fn take_text_changed(&self) -> bool {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, SetWindowLongPtrW};
+        // SAFETY: the host is a live window owned by this UI thread.
+        self.state.alive.get()
+            && unsafe { SetWindowLongPtrW(self.state.host, GWLP_USERDATA, 0) } != 0
+    }
+    /// Colors runs of a source file without touching undo, selection,
+    /// scrolling, or the modified flag.
+    pub fn apply_spans(&self, spans: &[crate::syntax::Span]) -> Result<()> {
+        if spans.is_empty() {
+            return Ok(());
+        }
+        let _quiet = QuietEdit::new(self)?;
+        let length = self.text_length();
+        for span in spans {
+            let (Ok(min), Ok(max)) = (
+                i32::try_from(span.start.min(length)),
+                i32::try_from((span.start + span.len).min(length)),
+            ) else {
+                break;
+            };
+            if min >= max {
+                continue;
+            }
+            self.set_selection(CharRange { min, max });
+            let mut format = self.empty_char_format();
+            format.mask = CFM_COLOR | CFM_BOLD | CFM_ITALIC;
+            format.foreground = color_ref(span.color);
+            if span.bold {
+                format.effects |= CFM_BOLD;
+            }
+            if span.italic {
+                format.effects |= CFM_ITALIC;
+            }
+            self.send(
+                EM_SETCHARFORMAT,
+                SCF_SELECTION,
+                (&format as *const CharFormat) as isize,
+            );
+        }
+        Ok(())
+    }
+    /// Shows automatic (black) text in `color` on a dark document, or restores
+    /// automatic text with `None`. Saved documents keep automatic color.
+    /// Removes source-code coloring: all text back to automatic color, no bold or italic.
+    pub fn clear_spans(&self) -> Result<()> {
+        let _quiet = QuietEdit::new(self)?;
+        let mut format = self.empty_char_format();
+        format.mask = CFM_COLOR | CFM_BOLD | CFM_ITALIC;
+        format.effects = CFE_AUTOCOLOR;
+        if !self.state.plain.get() {
+            self.set_selection(CharRange { min: 0, max: -1 });
+        }
+        let scope = if self.state.plain.get() {
+            SCF_ALL
+        } else {
+            SCF_SELECTION
+        };
+        self.send(
+            EM_SETCHARFORMAT,
+            scope,
+            (&format as *const CharFormat) as isize,
+        );
+        self.send(
+            EM_SETCHARFORMAT,
+            SCF_DEFAULT,
+            (&format as *const CharFormat) as isize,
+        );
+        self.text_override.set(None);
+        Ok(())
+    }
+    pub fn set_text_override(&self, color: Option<u32>) -> Result<()> {
+        let previous = self.text_override.replace(color);
+        if previous == color {
+            return Ok(());
+        }
+        let _quiet = QuietEdit::new(self)?;
+        let mut target = self.empty_char_format();
+        target.mask = CFM_COLOR;
+        match color {
+            Some(color) => target.foreground = color_ref(color),
+            None => target.effects = CFE_AUTOCOLOR,
+        }
+        self.send(
+            EM_SETCHARFORMAT,
+            SCF_DEFAULT,
+            (&target as *const CharFormat) as isize,
+        );
+        if self.state.plain.get() {
+            self.send(
+                EM_SETCHARFORMAT,
+                SCF_ALL,
+                (&target as *const CharFormat) as isize,
+            );
+            return Ok(());
+        }
+        let length = i32::try_from(self.text_length())?;
+        if let Some(old) = previous {
+            let mut automatic = self.empty_char_format();
+            automatic.mask = CFM_COLOR;
+            automatic.effects = CFE_AUTOCOLOR;
+            let old = color_ref(old);
+            self.recolor(
+                0,
+                length,
+                &|f| f.effects & CFE_AUTOCOLOR == 0 && f.foreground == old,
+                &automatic,
+            );
+        }
+        if color.is_some() {
+            self.recolor(0, length, &|f| f.effects & CFE_AUTOCOLOR != 0, &target);
+        }
+        Ok(())
+    }
+    /// True once after a paste.
+    pub fn take_pasted(&self) -> bool {
+        self.state.pasted.replace(false)
+    }
+    /// Gives newly loaded or pasted automatic text the dark-document stand-in color.
+    pub fn adapt_automatic_text(&self) -> Result<()> {
+        if let Some(color) = self.text_override.get()
+            && !self.state.plain.get()
+        {
+            let _quiet = QuietEdit::new(self)?;
+            let mut target = self.empty_char_format();
+            target.mask = CFM_COLOR;
+            target.foreground = color_ref(color);
+            let length = i32::try_from(self.text_length())?;
+            self.recolor(0, length, &|f| f.effects & CFE_AUTOCOLOR != 0, &target);
+        }
+        Ok(())
+    }
+    /// Applies `target` to every run in `min..max` whose color satisfies
+    /// `matches`, halving the range until each piece has a single color.
+    fn recolor(
+        &self,
+        min: i32,
+        max: i32,
+        matches: &dyn Fn(&CharFormat) -> bool,
+        target: &CharFormat,
+    ) {
+        if min >= max {
+            return;
+        }
+        self.set_selection(CharRange { min, max });
+        let format = self.char_format();
+        if format.mask & CFM_COLOR != 0 {
+            if matches(&format) {
+                self.send(
+                    EM_SETCHARFORMAT,
+                    SCF_SELECTION,
+                    (target as *const CharFormat) as isize,
+                );
+            }
+            return;
+        }
+        if max - min > 1 {
+            let middle = min + (max - min) / 2;
+            self.recolor(min, middle, matches, target);
+            self.recolor(middle, max, matches, target);
+        }
     }
     pub fn set_zoom(&self, percent: u16) {
         self.send(EM_SETZOOM, usize::from(percent.clamp(10, 500)), 100);
@@ -1356,8 +1563,13 @@ impl NativeEditor {
         format
     }
     fn apply_char(&self, format: CharFormat) -> Result<()> {
-        // Plain-text RichEdit rejects selection formatting; it has one format for the whole text.
-        let scope = if self.send(EM_GETTEXTMODE, 0, 0) & TM_PLAINTEXT != 0 {
+        // A plain document has one style for all of its text, including text typed later.
+        let scope = if self.state.plain.get() {
+            self.send(
+                EM_SETCHARFORMAT,
+                SCF_DEFAULT,
+                (&format as *const CharFormat) as isize,
+            );
             SCF_ALL
         } else {
             SCF_SELECTION
@@ -1411,13 +1623,13 @@ impl NativeEditor {
         }
         self.select_range(original_range.start..original_range.start + transformed_length)
     }
-    fn begin_collection(&self) -> Result<EditCollection> {
+    fn tom_document(&self) -> Result<TomDocument> {
         use std::ffi::c_void;
         let mut ole: *mut c_void = ptr::null_mut();
         ensure!(
             self.send(WM_USER + 60, 0, (&mut ole as *mut *mut c_void) as isize) != 0
                 && !ole.is_null(),
-            "the native editor could not begin a compound edit"
+            "the native text document interface is unavailable"
         );
         let iid = windows_sys::core::GUID::from_u128(0x8cc497c0_a1df_11ce_8098_00aa0047be5d);
         let mut document: *mut c_void = ptr::null_mut();
@@ -1434,17 +1646,19 @@ impl NativeEditor {
             "the native text document interface is unavailable"
         );
         // SAFETY: QueryInterface verified IID_ITextDocument; the vtable layout
-        // through BeginEditCollection/EndEditCollection follows Microsoft's tom.h.
+        // through Undo follows Microsoft's tom.h.
         let table = unsafe { *(document as *const *const TextDocumentVtable) };
+        Ok(TomDocument { document, table })
+    }
+    fn begin_collection(&self) -> Result<EditCollection> {
+        let document = self.tom_document()?;
         // SAFETY: the owned document pointer implements this exact COM vtable.
-        if unsafe { ((*table).begin)(document) } < 0 {
-            // SAFETY: release the COM reference whose initialization failed.
-            unsafe {
-                ((*table).unknown.release)(document);
-            }
-            bail!("the native editor could not group the edit for undo");
-        }
-        Ok(EditCollection { document, table })
+        let status = unsafe { ((*document.table).begin)(document.document) };
+        ensure!(
+            status >= 0,
+            "the native editor could not group the edit for undo"
+        );
+        Ok(EditCollection(document))
     }
     fn stream_rtf(&self, bytes: &[u8], selection: bool) -> Result<()> {
         ensure!(
@@ -1476,6 +1690,9 @@ impl NativeEditor {
             error == 0,
             "Windows could not read the complete rich-text stream (error {error})"
         );
+        if selection {
+            self.state.pasted.set(true);
+        }
         Ok(())
     }
 }
@@ -1534,6 +1751,16 @@ unsafe extern "system" fn host_proc(
                     let height = ((lparam >> 16) & 0xffff) as i32;
                     MoveWindow(child, 0, 0, width, height, 1);
                 }
+                0
+            }
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND
+                if (wparam >> 16) & 0xffff == EN_CHANGE =>
+            {
+                windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+                    hwnd,
+                    windows_sys::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                    1,
+                );
                 0
             }
             WM_SETFOCUS | FOCUS_EDITOR => {
@@ -1672,6 +1899,14 @@ unsafe extern "system" fn editor_subclass(
                 GetKeyState(VK_SHIFT as i32) < 0,
             )
         };
+        // RichEdit handles Ctrl+V and Shift+Insert internally; route them through WM_PASTE.
+        if (control && !shift && wparam == 0x56) || (shift && !control && wparam == 0x2d) {
+            // SAFETY: a synchronous message to this live window.
+            unsafe {
+                SendMessageW(hwnd, WM_PASTE, 0, 0);
+            }
+            return 0;
+        }
         if control && let Some(action) = shortcut(wparam as u32, shift) {
             // SAFETY: data points to boxed state owned until subclass removal.
             let state = unsafe { &*(data as *const NativeState) };
@@ -1693,10 +1928,22 @@ unsafe extern "system" fn editor_subclass(
         // Ctrl+letter arrives as control character 1..=26 ('A' - 0x40).
         if control
             && (1..=26).contains(&wparam)
-            && shortcut((wparam + 0x40) as u32, shift).is_some()
+            && (wparam == 0x16 || shortcut((wparam + 0x40) as u32, shift).is_some())
         {
             return 0;
         }
+    } else if message == WM_PASTE && data != 0 {
+        // SAFETY: data points to boxed state owned until subclass removal.
+        let state = unsafe { &*(data as *const NativeState) };
+        let (message, wparam) = if state.plain.get() {
+            (EM_PASTESPECIAL, CF_UNICODETEXT)
+        } else {
+            (WM_PASTE, 0)
+        };
+        // SAFETY: the original procedure handles the paste on this live window.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, 0) };
+        state.pasted.set(true);
+        return result;
     } else if message == WM_CONTEXTMENU {
         // SAFETY: the helper uses only synchronous calls on this live window.
         unsafe {
@@ -1995,23 +2242,101 @@ struct UnknownVtable {
 struct TextDocumentVtable {
     unknown: UnknownVtable,
     dispatch: [usize; 4],
-    preceding_methods: [usize; 13],
+    /// GetName through Save.
+    preceding_methods: [usize; 11],
+    freeze: unsafe extern "system" fn(*mut std::ffi::c_void, *mut i32) -> i32,
+    unfreeze: unsafe extern "system" fn(*mut std::ffi::c_void, *mut i32) -> i32,
     begin: unsafe extern "system" fn(*mut std::ffi::c_void) -> i32,
     end: unsafe extern "system" fn(*mut std::ffi::c_void) -> i32,
+    undo: unsafe extern "system" fn(*mut std::ffi::c_void, i32, *mut i32) -> i32,
 }
-struct EditCollection {
+/// One owned ITextDocument reference.
+struct TomDocument {
     document: *mut std::ffi::c_void,
     table: *const TextDocumentVtable,
 }
-impl Drop for EditCollection {
+impl Drop for TomDocument {
     fn drop(&mut self) {
-        // SAFETY: the successful BeginEditCollection owns one COM reference;
-        // ending the collection and releasing that reference cannot outlive it.
+        // SAFETY: this struct owns exactly one reference to the live document.
         unsafe {
-            ((*self.table).end)(self.document);
             ((*self.table).unknown.release)(self.document);
         }
     }
+}
+/// Groups edits into one undo step until dropped.
+struct EditCollection(TomDocument);
+impl Drop for EditCollection {
+    fn drop(&mut self) {
+        // SAFETY: BeginEditCollection succeeded on this live document; the
+        // reference is released afterwards when the field drops.
+        unsafe {
+            ((*self.0.table).end)(self.0.document);
+        }
+    }
+}
+/// Formatting that is presentation, not an edit: no undo step, no redraw
+/// until done, and the selection, scroll position, read-only state, and
+/// modified flag are restored on drop.
+struct QuietEdit<'a> {
+    editor: &'a NativeEditor,
+    document: TomDocument,
+    selection: CharRange,
+    scroll: POINT,
+    modified: bool,
+}
+impl<'a> QuietEdit<'a> {
+    fn new(editor: &'a NativeEditor) -> Result<Self> {
+        let document = editor.tom_document()?;
+        let mut scroll = POINT { x: 0, y: 0 };
+        editor.send(EM_GETSCROLLPOS, 0, (&mut scroll as *mut POINT) as isize);
+        let quiet = Self {
+            selection: editor.native_selection(),
+            modified: editor.is_modified(),
+            scroll,
+            editor,
+            document,
+        };
+        let mut count = 0;
+        // SAFETY: live document; both calls only change display and undo state.
+        unsafe {
+            ((*quiet.document.table).freeze)(quiet.document.document, &mut count);
+            ((*quiet.document.table).undo)(quiet.document.document, TOM_SUSPEND, ptr::null_mut());
+        }
+        if editor.read_only.get() {
+            editor.send(EM_SETREADONLY, 0, 0);
+        }
+        Ok(quiet)
+    }
+}
+impl Drop for QuietEdit<'_> {
+    fn drop(&mut self) {
+        let editor = self.editor;
+        if editor.read_only.get() {
+            editor.send(EM_SETREADONLY, 1, 0);
+        }
+        editor.set_selection(self.selection);
+        if !self.modified {
+            editor.send(EM_SETMODIFY, 0, 0);
+        }
+        let mut count = 0;
+        // SAFETY: the document reference is still owned by this guard.
+        unsafe {
+            ((*self.document.table).undo)(self.document.document, TOM_RESUME, ptr::null_mut());
+            ((*self.document.table).unfreeze)(self.document.document, &mut count);
+        }
+        editor.send(EM_SETSCROLLPOS, 0, (&self.scroll as *const POINT) as isize);
+    }
+}
+fn replace_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while let Some(index) = rest.windows(from.len()).position(|window| window == from) {
+        output.extend_from_slice(&rest[..index]);
+        output.extend_from_slice(to);
+        rest = &rest[index + from.len()..];
+    }
+    output.extend_from_slice(rest);
+    output
 }
 
 fn printer_mode(page: &PageSettings) -> Result<windows_sys::Win32::Graphics::Gdi::DEVMODEW> {

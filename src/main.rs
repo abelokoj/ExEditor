@@ -12,6 +12,7 @@ mod preferences;
 mod services;
 mod session;
 mod settings;
+mod syntax;
 mod ui;
 
 use gpui_kit::QuitMode;

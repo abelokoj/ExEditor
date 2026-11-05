@@ -38,6 +38,11 @@ pub struct Preferences {
     pub remember_windows: bool,
     /// Interface size in percent; see `ui::px`.
     pub interface_scale: u16,
+    /// In dark mode, show documents on a dark background (TextEdit's
+    /// "Use Dark Background for Windows").
+    pub dark_documents: bool,
+    /// A `syntax::THEMES` label, or `syntax::AUTOMATIC`.
+    pub code_theme: String,
 }
 
 impl Default for Preferences {
@@ -60,6 +65,8 @@ impl Default for Preferences {
             default_encoding: TextEncoding::Utf8,
             remember_windows: true,
             interface_scale: 100,
+            dark_documents: true,
+            code_theme: crate::syntax::AUTOMATIC.into(),
         }
     }
 }

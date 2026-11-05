@@ -34,6 +34,8 @@ pub struct MenuEntry {
     pub checked: bool,
     pub enabled: bool,
     checkable: bool,
+    /// Sent while the entry is highlighted, so the window can show it before it is chosen.
+    preview: Option<Command>,
 }
 impl MenuEntry {
     pub fn item(label: &str, shortcut: &str, command: Command) -> Self {
@@ -44,6 +46,7 @@ impl MenuEntry {
             checked: false,
             enabled: true,
             checkable: false,
+            preview: None,
         }
     }
     pub fn separator() -> Self {
@@ -54,11 +57,16 @@ impl MenuEntry {
             checked: false,
             enabled: false,
             checkable: false,
+            preview: None,
         }
     }
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
         self.checkable = true;
+        self
+    }
+    pub fn previewing(mut self, command: Command) -> Self {
+        self.preview = Some(command);
         self
     }
 }
@@ -124,7 +132,11 @@ pub fn menu(
                 }
             })
             .detach();
-            let selection = menu_selection(&entries, None, MenuStep::First);
+            // Start on the checked entry so arrow keys browse from the current choice.
+            let selection = entries
+                .iter()
+                .position(|entry| entry.checked && entry.enabled)
+                .or_else(|| menu_selection(&entries, None, MenuStep::First));
             MenuView {
                 entries,
                 commands,
@@ -139,7 +151,25 @@ pub fn menu(
         super::app::show_error(&error);
     }
 }
+impl Drop for MenuView {
+    fn drop(&mut self) {
+        // A previewing menu always ends its preview; a chosen entry has already been queued.
+        if self.entries.iter().any(|entry| entry.preview.is_some()) {
+            self.commands.borrow_mut().push_back(Command::EndPreview);
+        }
+    }
+}
 impl MenuView {
+    fn select(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        if self.selection == index {
+            return;
+        }
+        self.selection = index;
+        if let Some(preview) = index.and_then(|index| self.entries[index].preview.clone()) {
+            self.commands.borrow_mut().push_back(preview);
+        }
+        cx.notify();
+    }
     fn activate(&self, window: &mut Window) {
         if let Some(entry) = self.selection.and_then(|index| self.entries.get(index))
             && entry.enabled
@@ -150,11 +180,11 @@ impl MenuView {
         }
     }
     fn navigate(&mut self, step: MenuStep, cx: &mut Context<Self>) {
-        self.selection = menu_selection(&self.entries, self.selection, step);
-        if let Some(index) = self.selection {
+        let index = menu_selection(&self.entries, self.selection, step);
+        if let Some(index) = index {
             self.scroll.scroll_to_item(index);
         }
-        cx.notify();
+        self.select(index, cx);
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
@@ -170,7 +200,9 @@ impl MenuView {
     }
 }
 impl Render for MenuView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit components size text in rem; scale it with View > Interface Size.
+        window.set_rem_size(crate::ui::rem_size());
         let c = self.colors;
         div()
             .id("menu")
@@ -268,10 +300,8 @@ impl Render for MenuView {
                             ),
                     )
                     .on_hover(cx.listener(move |this, hovered, _, cx| {
-                        if *hovered && this.entries[index].enabled && this.selection != Some(index)
-                        {
-                            this.selection = Some(index);
-                            cx.notify();
+                        if *hovered && this.entries[index].enabled {
+                            this.select(Some(index), cx);
                         }
                     }))
                     .on_click(move |_, window, _| {
@@ -435,7 +465,9 @@ impl FormView {
     }
 }
 impl Render for FormView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit components size text in rem; scale it with View > Interface Size.
+        window.set_rem_size(crate::ui::rem_size());
         let c = self.colors;
         div()
             .id("form")

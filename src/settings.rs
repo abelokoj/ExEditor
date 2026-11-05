@@ -468,7 +468,9 @@ impl Settings {
 }
 
 impl Render for Settings {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit components size text in rem; scale it with View > Interface Size.
+        window.set_rem_size(crate::ui::rem_size());
         let c = self.colors;
         let tab = self.tab;
         let tabs = [

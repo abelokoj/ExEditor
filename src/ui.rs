@@ -25,6 +25,11 @@ pub fn px(value: f32) -> Pixels {
     gpui_kit::px(value * f32::from(scale_percent()) / 100.)
 }
 
+/// GPUI's 16px rem multiplied by the interface size, for gpui-kit components.
+pub fn rem_size() -> Pixels {
+    px(16.)
+}
+
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub chrome: u32,
@@ -41,7 +46,7 @@ impl Palette {
             Self {
                 chrome: 0x303030,
                 toolbar: 0x383838,
-                paper: 0xffffff,
+                paper: 0x1e1e1e,
                 ink: 0xeeeeee,
                 border: 0x545454,
                 field: 0x474747,

@@ -16,10 +16,29 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use std::{cell::Cell, f32::consts::TAU, path::Path, rc::Rc, sync::Arc};
 
+/// White, for compositing colors; panel surfaces use [`paper`].
 const PAPER: u32 = 0xffffff;
-const INK: u32 = 0x292929;
-const MUTED: u32 = 0x737373;
-const FIELD: u32 = 0xf3f3f3;
+/// Follows the app theme; set at the start of each panel render.
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn tone(light: u32, dark: u32) -> u32 {
+    if DARK.load(std::sync::atomic::Ordering::Relaxed) {
+        dark
+    } else {
+        light
+    }
+}
+fn paper() -> u32 {
+    tone(0xffffff, 0x262626)
+}
+fn ink() -> u32 {
+    tone(0x292929, 0xe8e8e8)
+}
+fn muted() -> u32 {
+    tone(0x737373, 0xa3a3a3)
+}
+fn field() -> u32 {
+    tone(0xf3f3f3, 0x3a3a3a)
+}
 const WHEEL_SIZE: f32 = 190.;
 const CHANNEL_MODELS: [&str; 4] = [
     "RGB Sliders",
@@ -470,9 +489,9 @@ impl ColorsPanel {
             .rounded(px(6.))
             .custom(
                 ButtonCustomVariant::new(cx)
-                    .color(rgb(FIELD).into())
-                    .foreground(rgb(INK).into())
-                    .hover(rgb(0xe8e8e8).into())
+                    .color(rgb(field()).into())
+                    .foreground(rgb(ink()).into())
+                    .hover(rgb(tone(0xe8e8e8, 0x4a4a4a)).into())
                     .shadow(false),
             )
             .h(px(30.))
@@ -508,7 +527,7 @@ impl ColorsPanel {
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.wheel_dragging = false))
                 .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, _| this.wheel_dragging = false))
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    let (mut hue, mut saturation, value) = (this.hue, this.saturation, this.color.hsv().2);
+                    let (mut hue, mut saturation, value) = (this.hue, this.saturation, wheel_value(this.color));
                     let step = if event.keystroke.modifiers.shift { 10. } else { 1. };
                     match event.keystroke.key.as_str() {
                         "left" => hue = (hue - step).rem_euclid(360.), "right" => hue = (hue + step).rem_euclid(360.),
@@ -538,7 +557,7 @@ impl ColorsPanel {
         self.hue = hue;
         self.saturation = saturation;
         self.set_color(
-            Rgba::from_hsv(hue, saturation, self.color.hsv().2, self.color.a),
+            Rgba::from_hsv(hue, saturation, wheel_value(self.color), self.color.a),
             window,
             cx,
         );
@@ -590,7 +609,7 @@ impl ColorsPanel {
                             .justify_between()
                             .text_size(px(12.))
                             .child(*label)
-                            .child(div().text_color(rgb(MUTED)).child(number)),
+                            .child(div().text_color(rgb(muted())).child(number)),
                     )
                     .child(gradient_slider(
                         ("color-channel", index),
@@ -632,7 +651,7 @@ impl ColorsPanel {
                     .when(colors.is_empty(), |list| {
                         list.child(
                             div()
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(muted()))
                                 .child("No matching color names."),
                         )
                     })
@@ -720,7 +739,7 @@ impl ColorsPanel {
                 .child(
                     div()
                         .text_size(px(10.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(muted()))
                         .truncate()
                         .child(image.name.clone()),
                 );
@@ -731,7 +750,7 @@ impl ColorsPanel {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(muted()))
                     .text_size(px(12.))
                     .child("Open an image, then click a pixel to sample its color."),
             );
@@ -821,9 +840,9 @@ impl ColorsPanel {
                             .rounded(px(4.))
                             .border_1()
                             .border_color(rgb(if self.color.rgb() == color.rgb() {
-                                INK
+                                ink()
                             } else {
-                                PAPER
+                                paper()
                             }))
                             .child(
                                 div()
@@ -841,7 +860,7 @@ impl ColorsPanel {
             .child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(muted()))
                     .text_center()
                     .child("Choose a pencil color."),
             )
@@ -849,7 +868,13 @@ impl ColorsPanel {
 }
 
 impl Render for ColorsPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit components size text in rem; scale it with View > Interface Size.
+        window.set_rem_size(crate::ui::rem_size());
+        DARK.store(
+            gpui_kit::component::Theme::global(cx).mode.is_dark(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let color = self.color;
         let accent = action_color(color);
         let mode = self.mode;
@@ -881,13 +906,13 @@ impl Render for ColorsPanel {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(PAPER))
-            .text_color(rgb(INK))
+            .bg(rgb(paper()))
+            .text_color(rgb(ink()))
             .font_family(crate::fonts::INTER_FONT)
             .text_size(px(13.))
             .rounded(px(18.))
             .border_1()
-            .border_color(rgb(0xc5c5c5))
+            .border_color(rgb(tone(0xc5c5c5, 0x505050)))
             .overflow_hidden()
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
@@ -991,20 +1016,27 @@ impl Render for ColorsPanel {
                                     .h(px(44.))
                                     .p(px(6.))
                                     .rounded(px(11.))
-                                    .bg(rgb(if selected { 0xf5f5f5 } else { PAPER }))
+                                    .bg(rgb(if selected {
+                                        tone(0xf5f5f5, 0x3d3d3d)
+                                    } else {
+                                        paper()
+                                    }))
                                     .child(if tab == Mode::Wheel {
                                         img(self.wheel.clone()).size(px(29.)).into_any_element()
                                     } else {
-                                        symbol(
+                                        // Full-color image: `svg()` paints a one-color mask.
+                                        img(Arc::new(Image::from_bytes(
+                                            ImageFormat::Svg,
                                             match tab {
                                                 Mode::Sliders => SLIDERS,
                                                 Mode::Palette => PALETTE,
                                                 Mode::Image => PHOTO,
                                                 Mode::Pencils => PENCILS,
                                                 Mode::Wheel => CROSSHAIR,
-                                            },
-                                            INK,
-                                        )
+                                            }
+                                            .as_bytes()
+                                            .to_vec(),
+                                        )))
                                         .size(px(32.))
                                         .into_any_element()
                                     })
@@ -1019,7 +1051,13 @@ impl Render for ColorsPanel {
                             }),
                     ),
             )
-            .child(div().h(px(1.)).w_full().bg(rgb(0xe7e7e7)).flex_shrink_0())
+            .child(
+                div()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(rgb(tone(0xe7e7e7, 0x3a3a3a)))
+                    .flex_shrink_0(),
+            )
             .child(div().px(px(30.)).h(px(256.)).flex_shrink_0().child(content))
             .child(
                 div()
@@ -1052,7 +1090,7 @@ impl Render for ColorsPanel {
                                     .w(px(73.))
                                     .h(px(33.))
                                     .border_1()
-                                    .border_color(rgb(0xe7e7e7))
+                                    .border_color(rgb(tone(0xe7e7e7, 0x3a3a3a)))
                                     .rounded(px(9.))
                                     .flex()
                                     .items_center()
@@ -1139,7 +1177,7 @@ impl Render for ColorsPanel {
                         div()
                             .px(px(25.))
                             .text_size(px(10.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(muted()))
                             .child("Text formatting blends opacity into its background."),
                     )
                 },
@@ -1149,7 +1187,7 @@ impl Render for ColorsPanel {
                 div()
                     .mx(px(17.))
                     .h(px(1.))
-                    .bg(rgb(0xe0e0e0))
+                    .bg(rgb(tone(0xe0e0e0, 0x444444)))
                     .flex_shrink_0(),
             )
             .child(
@@ -1185,8 +1223,8 @@ impl Render for ColorsPanel {
                                             .right(px(2.))
                                             .size(px(12.))
                                             .rounded(px(3.))
-                                            .bg(rgb(PAPER))
-                                            .child(symbol(PLUS, INK).size(px(12.))),
+                                            .bg(rgb(paper()))
+                                            .child(symbol(PLUS, ink()).size(px(12.))),
                                     ),
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1266,9 +1304,9 @@ impl Render for ColorsPanel {
                                         .rounded(px(3.))
                                         .border_1()
                                         .border_color(rgb(if index == self.selected_swatch {
-                                            0x555555
+                                            tone(0x555555, 0xdddddd)
                                         } else {
-                                            0xbfc0c1
+                                            tone(0xbfc0c1, 0x5a5a5a)
                                         }))
                                         .bg(rgb(swatch.composite(PAPER)))
                                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -1349,7 +1387,7 @@ fn gradient_slider(
                                 .rounded(px(4.))
                                 .overflow_hidden()
                                 .border_1()
-                                .border_color(rgb(0xbcbcbc))
+                                .border_color(rgb(tone(0xbcbcbc, 0x5a5a5a)))
                                 .child(img(gradient).size_full()),
                         )
                         .child(
@@ -1375,6 +1413,12 @@ fn render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
         pixel.0.swap(0, 2);
     }
     Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
+}
+/// Brightness for a wheel pick: like the macOS color panel, choosing on a black
+/// wheel restores full brightness so the hues become visible and selectable.
+fn wheel_value(color: Rgba) -> f32 {
+    let value = color.hsv().2;
+    if value < 0.01 { 1. } else { value }
 }
 fn wheel_image(value: f32) -> Arc<RenderImage> {
     let side = 380;

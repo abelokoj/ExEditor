@@ -129,6 +129,36 @@ pub fn import(path: &Path, format: DocumentFormat) -> Result<Vec<u8>> {
     write_rtf(&document)
 }
 
+/// Renders Markdown (CommonMark with tables, task lists, strikethrough, and
+/// footnotes) as a formatted rich-text document for reading.
+pub fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>> {
+    use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES;
+    // Remote images cannot be shown offline, so their alt text stands in.
+    let mut remote = Vec::new();
+    let events = Parser::new_ext(source, options).filter_map(|event| match event {
+        Event::Start(Tag::Image { ref dest_url, .. }) => {
+            let is_remote = dest_url.contains(':') || dest_url.starts_with('/');
+            remote.push(is_remote);
+            (!is_remote).then_some(event)
+        }
+        Event::End(TagEnd::Image) => (!remote.pop().unwrap_or(false)).then_some(event),
+        Event::TaskListMarker(done) => Some(Event::Text(CowStr::Borrowed(if done {
+            "\u{2611} "
+        } else {
+            "\u{2610} "
+        }))),
+        other => Some(other),
+    });
+    let mut page = String::from("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>");
+    html::push_html(&mut page, events);
+    page.push_str("</body></html>");
+    write_rtf(&read_html(page.as_bytes(), directory)?)
+}
+
 pub fn export(rtf: &[u8], format: DocumentFormat) -> Result<Vec<u8>> {
     let document = read_rtf(rtf)
         .context("Converting the rich-text document; the original file has not been modified")?;
@@ -1889,7 +1919,8 @@ fn html_style(element: ElementRef<'_>, base: &Style, paragraph: &mut Paragraph) 
         "s" | "strike" | "del" => style.strike = true,
         "sup" => style.position = 1,
         "sub" => style.position = -1,
-        "code" | "pre" => style.font = "Menlo".into(),
+        // Menlo is not on Windows; the bundled monospace font is.
+        "code" | "pre" => style.font = crate::fonts::PLAIN_FONT.into(),
         "h1" => {
             style.bold = true;
             style.size = 24.0;
@@ -1902,6 +1933,11 @@ fn html_style(element: ElementRef<'_>, base: &Style, paragraph: &mut Paragraph) 
             style.bold = true;
             style.size = 16.0;
         }
+        "h4" => {
+            style.bold = true;
+            style.size = 14.0;
+        }
+        "h5" | "h6" => style.bold = true,
         _ => {}
     }
     if let Some(font) = element.value().attr("face") {
@@ -1957,6 +1993,9 @@ fn read_html(bytes: &[u8], directory: &Path) -> Result<Document> {
     }
     Ok(document)
 }
+/// Nesting deeper than this is refused instead of overflowing the stack.
+const MAX_HTML_DEPTH: usize = 128;
+
 fn html_blocks(
     element: ElementRef<'_>,
     style: &Style,
@@ -1964,6 +2003,10 @@ fn html_blocks(
     blocks: &mut Vec<Block>,
     list: List,
 ) -> Result<()> {
+    ensure!(
+        element.ancestors().count() <= MAX_HTML_DEPTH,
+        "The HTML document is nested too deeply to import safely."
+    );
     let mut pending = Paragraph {
         list,
         ..Paragraph::default()
@@ -1972,6 +2015,19 @@ fn html_blocks(
         if let Some(child) = ElementRef::wrap(node) {
             match child.value().name() {
                 "script" | "style" | "head" | "noscript" => {}
+                // A list item holding nested lists or paragraphs is a block container.
+                "li" if child.children().filter_map(ElementRef::wrap).any(|inner| {
+                    matches!(
+                        inner.value().name(),
+                        "ul" | "ol" | "table" | "p" | "pre" | "blockquote" | "div"
+                    )
+                }) =>
+                {
+                    if !pending.runs.is_empty() {
+                        blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
+                    }
+                    html_blocks(child, style, directory, blocks, list)?;
+                }
                 "p" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" => {
                     if !pending.runs.is_empty() {
                         blocks.push(Block::Paragraph(std::mem::take(&mut pending)));
@@ -2070,6 +2126,10 @@ fn html_inline(
     directory: &Path,
     paragraph: &mut Paragraph,
 ) -> Result<()> {
+    ensure!(
+        element.ancestors().count() <= MAX_HTML_DEPTH,
+        "The HTML document is nested too deeply to import safely."
+    );
     for node in element.children() {
         if let Some(child) = ElementRef::wrap(node) {
             let mut style = html_style(child, style, paragraph);
@@ -2307,6 +2367,10 @@ fn odt_blocks(
     blocks: &mut Vec<Block>,
     list: List,
 ) -> Result<()> {
+    ensure!(
+        node.ancestors().count() <= MAX_HTML_DEPTH,
+        "The OpenDocument file is nested too deeply to import safely."
+    );
     for element in node.children().filter(Node::is_element) {
         match element.tag_name().name() {
             "p" | "h" => {
@@ -2377,6 +2441,10 @@ fn odt_inline(
     styles: &BTreeMap<String, (Style, Paragraph)>,
     archive: &mut ZipArchive<Cursor<&[u8]>>,
 ) -> Result<()> {
+    ensure!(
+        node.ancestors().count() <= MAX_HTML_DEPTH,
+        "The OpenDocument file is nested too deeply to import safely."
+    );
     for element in node.children() {
         if element.is_text() {
             push_text(paragraph, element.text().unwrap_or(""), style);
@@ -2602,6 +2670,30 @@ fn write_odt(document: &Document) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn markdown_renders_nested_lists_tables_and_tasks() {
+        let source = "# Title
+
+Some **bold** and `code`.
+
+- outer
+  - inner
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+- [x] done
+
+![remote](https://example.com/x.png)
+";
+        let rtf = String::from_utf8(markdown_to_rtf(source, Path::new(".")).expect("renders"))
+            .expect("RTF is ASCII");
+        for expected in ["Title", "bold", "outer", "inner", "done", "remote"] {
+            assert!(rtf.contains(expected), "{expected} missing");
+        }
+        assert!(rtf.contains(r"\b"), "bold run");
+    }
     fn fixture() -> Document {
         let mut paragraph = Paragraph {
             alignment: Alignment::Center,

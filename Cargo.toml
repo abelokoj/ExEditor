@@ -25,6 +25,9 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 roxmltree = "0.21"
 scraper = "0.24"
 rfd = "0.15"
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
+two-face = "0.5.2"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff"] }
 
 [target.'cfg(windows)'.dependencies]

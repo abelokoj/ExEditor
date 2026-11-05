@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-11-05 — Dark documents, code coloring, Markdown, menus that run, closing
+
+- Fixed menus and settings that did nothing (Interface Size among them). A message box's modal loop could run the window's 100 ms poll while the window was busy; that failed update stopped the poll for good, so queued menu commands never ran. The poll now skips that tick and stops only when the window is gone.
+- Interface Size now scales gpui-kit buttons and labels too: every window sets its rem size from the interface scale.
+- Dark mode:
+  - Buttons, tooltips, inputs and scroll bars follow the app's dark appearance (gpui-kit theme sync).
+  - The Colors panel has a dark palette, matching the toolbar.
+  - View > Dark Document Background (on by default) shows documents on dark paper. Automatic text is shown light and still saved as automatic color, so files look right in other apps.
+- Code coloring for about 170 languages (syntect with bat's grammar set via two-face), detected by file name, extension, or first line (shebangs). Coloring is incremental: only edited lines and the lines whose state they change are recolored, without undo steps or a modified mark. Files over 2 MB and lines over 10,000 characters stay uncolored.
+- View > Code Theme: Automatic plus 28 editor themes (Catppuccin, Dracula, GitHub, Gruvbox, Monokai Extended, Nord, One Half, Solarized, Zenburn and more). Hovering or arrowing over a theme previews it on the open code document; clicking or Enter keeps it, and closing the menu any other way returns to the saved theme. The menu opens on the current theme.
+- Changing the font in Settings now shows at once in plain documents and in empty rich documents (rich text that already has styling keeps it, as in TextEdit).
+- Markdown (.md, .markdown) opens formatted: headings, emphasis, code, nested lists, tables, task lists, footnotes; remote images show their alt text. View > Show Markdown Source switches to editable source, and saving always writes the Markdown source.
+- Open shows All Files, Documents (now with Markdown) and Source Code.
+- Closing:
+  - The app quits when its last document window closes, even if helper windows are hidden.
+  - A buffer that cannot be protected now asks whether to close anyway instead of trapping the window open.
+  - Unedited documents no longer write recovery buffers.
+  - Declining "Document changed on disk" no longer asks again every three seconds.
+- Plain documents stay one style, and paste stays plain text. RichEdit itself stays in rich mode so code can be colored.
+- Hardening: HTML and OpenDocument imports refuse nesting deeper than 128 levels instead of overflowing the stack; a lone surrogate in the text no longer blocks saving or closing; HTML list items holding nested lists import as nested lists; Markdown and HTML code use the bundled monospace font.
+- Testing: EXEDITOR_DATA_DIR points preferences and recovery buffers at another folder for isolated test runs.
+- Validation: formatted with rustfmt 1.99.1. Nothing compiled or tested locally; the GitHub build is pending.
+
 ## 2026-11-05 — Startup format error, window dragging, TextEdit shortcuts, interface size (local)
 
 - Fixed "Windows could not apply the character formatting" at startup with plain text as the default. Plain-text RichEdit rejects selection formatting, so font and size now apply to the whole plain document. Character and paragraph styling commands do nothing in plain text, matching TextEdit's disabled items.

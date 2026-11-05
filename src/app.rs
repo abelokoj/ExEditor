@@ -11,6 +11,7 @@ use crate::{
     preferences::{Appearance, Preferences},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
+    syntax::{self, CodeHighlighter},
     ui::{self, Palette, px},
 };
 use anyhow::{Context as _, Result, bail, ensure};
@@ -48,6 +49,7 @@ pub enum MenuKind {
     Spacing,
     Versions,
     InterfaceSize,
+    CodeTheme,
 }
 #[derive(Clone, Debug)]
 pub enum Command {
@@ -84,6 +86,11 @@ pub enum Command {
     ToggleRuler,
     ToggleWrap,
     ToggleReadOnly,
+    ToggleDarkDocuments,
+    CodeTheme(String),
+    PreviewCodeTheme(String),
+    EndPreview,
+    ToggleMarkdown,
     Zoom(i16),
     /// Format > Font > Bigger/Smaller, in points.
     FontStep(f32),
@@ -184,6 +191,94 @@ fn virtual_key(key: &str) -> Option<u32> {
             _ => return None,
         },
     })
+}
+/// Dark-document background and the light stand-in for automatic text.
+const DARK_PAPER: u32 = 0x1e1e1e;
+const DARK_TEXT: u32 = 0xe6e6e5;
+/// Common source extensions for the Open dialog's filter; any file opens with All Files.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs",
+    "c",
+    "h",
+    "cpp",
+    "cc",
+    "cxx",
+    "hpp",
+    "cs",
+    "java",
+    "kt",
+    "kts",
+    "swift",
+    "go",
+    "py",
+    "pyw",
+    "rb",
+    "php",
+    "js",
+    "mjs",
+    "cjs",
+    "jsx",
+    "ts",
+    "tsx",
+    "json",
+    "jsonc",
+    "toml",
+    "yaml",
+    "yml",
+    "xml",
+    "css",
+    "scss",
+    "less",
+    "sql",
+    "sh",
+    "bash",
+    "zsh",
+    "ps1",
+    "psm1",
+    "bat",
+    "cmd",
+    "lua",
+    "pl",
+    "r",
+    "dart",
+    "scala",
+    "hs",
+    "ex",
+    "exs",
+    "erl",
+    "clj",
+    "fs",
+    "vb",
+    "zig",
+    "nim",
+    "jl",
+    "tex",
+    "ini",
+    "cfg",
+    "conf",
+    "log",
+    "diff",
+    "patch",
+    "dockerfile",
+    "makefile",
+    "cmake",
+    "gradle",
+    "vue",
+    "svelte",
+    "graphql",
+    "proto",
+    "tf",
+    "csv",
+];
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdown" | "mkd" | "mkdn"
+            )
+        })
 }
 fn confirm(title: &str, message: &str) -> bool {
     MessageDialog::new()
@@ -310,6 +405,14 @@ struct DocumentTab {
     find_case: bool,
     find_whole: bool,
     last_external_check: Instant,
+    /// Source-code coloring for plain documents whose type is recognized.
+    highlighter: Option<CodeHighlighter>,
+    /// Dark paper and code theme last applied; `None` forces a refresh.
+    look: Option<(bool, String)>,
+    /// The editor's background color.
+    paper: u32,
+    /// Markdown shown formatted (read-only); this is the text that is saved.
+    markdown_source: Option<String>,
 }
 struct EditorWindow {
     doc: DocumentTab,
@@ -319,6 +422,9 @@ struct EditorWindow {
     queue: Commands,
     prefs: Preferences,
     speech: Speech,
+    was_active: bool,
+    /// Code theme shown while browsing the Code Theme menu; `None` shows the saved one.
+    preview_theme: Option<String>,
     _poll: Task<()>,
 }
 
@@ -341,6 +447,8 @@ impl EditorWindow {
             queue: Rc::new(RefCell::new(VecDeque::new())),
             prefs,
             speech: Speech::default(),
+            was_active: false,
+            preview_theme: None,
             _poll: Task::ready(()),
         };
         if let Some(path) = path
@@ -353,6 +461,16 @@ impl EditorWindow {
         }
         let registration = (Window::window_handle(window), cx.entity().downgrade());
         cx.global_mut::<OpenEditors>().0.push(registration);
+        // Hidden helper windows (menus, color panel) must not keep the process alive.
+        let own = cx.entity().entity_id();
+        cx.on_release(move |_, cx| {
+            let editors = &mut cx.global_mut::<OpenEditors>().0;
+            editors.retain(|(_, editor)| editor.entity_id() != own && editor.upgrade().is_some());
+            if editors.is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| this.confirm_close(window, cx))
@@ -362,12 +480,12 @@ impl EditorWindow {
         this._poll = cx.spawn(async move |this, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(100)).await;
-                if handle
-                    .update(cx, |_, window, cx| {
-                        this.update(cx, |this, cx| this.tick(window, cx))
-                    })
-                    .is_err()
-                {
+                // A modal dialog's message loop can run this while the window is busy;
+                // skip that tick instead of stopping, or queued menu commands never run.
+                let _ = handle.update(cx, |_, window, cx| {
+                    this.update(cx, |this, cx| this.tick(window, cx))
+                });
+                if this.upgrade().is_none() {
                     break;
                 }
             }
@@ -380,15 +498,108 @@ impl EditorWindow {
             .clone()
             .context("The native text editor could not be created")
     }
-    fn colors(&self, window: &Window) -> Palette {
-        Palette::new(match self.prefs.appearance {
+    fn is_dark(&self, window: &Window) -> bool {
+        match self.prefs.appearance {
             Appearance::Dark => true,
             Appearance::Light => false,
             Appearance::System => matches!(
                 window.appearance(),
                 WindowAppearance::Dark | WindowAppearance::VibrantDark
             ),
-        })
+        }
+    }
+    fn colors(&self, window: &Window) -> Palette {
+        Palette::new(self.is_dark(window))
+    }
+    /// Applies the document background, text color, and code coloring when the
+    /// appearance, the dark-document preference, or the code theme changed.
+    fn refresh_look(&mut self, window: &Window) -> Result<()> {
+        let dark_paper = self.is_dark(window) && self.prefs.dark_documents;
+        let theme = self
+            .preview_theme
+            .as_ref()
+            .unwrap_or(&self.prefs.code_theme)
+            .clone();
+        let key = (dark_paper, theme.clone());
+        if self.doc.look.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        // Set first so a failure is reported once, not on every tick.
+        self.doc.look = Some(key);
+        let editor = self.editor()?;
+        let syntax = if self.doc.rich || self.doc.markdown_source.is_some() {
+            None
+        } else {
+            self.doc.path.as_deref().and_then(|path| {
+                syntax::detect(path, self.doc.last_text.lines().next().unwrap_or(""))
+            })
+        };
+        if self.doc.highlighter.take().is_some() {
+            editor.clear_spans()?;
+        }
+        self.doc.highlighter =
+            syntax.map(|syntax| CodeHighlighter::new(syntax, &theme, dark_paper));
+        let (paper, text) = match &self.doc.highlighter {
+            Some(highlighter) => {
+                let (background, foreground) = highlighter.colors();
+                (background, Some(foreground))
+            }
+            None if dark_paper => (DARK_PAPER, Some(DARK_TEXT)),
+            None => (0xffffff, None),
+        };
+        editor.set_background(paper);
+        editor.set_text_override(text)?;
+        self.doc.paper = paper;
+        self.highlight(&editor)
+    }
+    /// Colors the lines that changed since the last call.
+    fn highlight(&mut self, editor: &NativeEditor) -> Result<()> {
+        if let Some(highlighter) = &mut self.doc.highlighter
+            && self.doc.last_text.len() <= syntax::MAX_BYTES
+        {
+            editor.apply_spans(&highlighter.update(&self.doc.last_text))?;
+        }
+        Ok(())
+    }
+    /// Shows a Markdown document formatted and read-only, keeping its source for saving.
+    fn show_markdown(&mut self, source: String) -> Result<()> {
+        let directory = self
+            .doc
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        let rtf = crate::formats::markdown_to_rtf(&source, &directory)?;
+        let editor = self.editor()?;
+        let modified = self.doc.dirty;
+        editor.set_plain_text_mode(false)?;
+        editor.set_rtf(&rtf)?;
+        editor.set_read_only(true);
+        editor.mark_saved();
+        self.doc.dirty = modified;
+        self.doc.markdown_source = Some(source);
+        self.doc.last_text = editor.text()?;
+        self.doc.look = None;
+        Ok(())
+    }
+    /// Returns from the formatted Markdown view to its editable source.
+    fn show_markdown_source(&mut self) -> Result<()> {
+        let Some(source) = self.doc.markdown_source.take() else {
+            return Ok(());
+        };
+        let editor = self.editor()?;
+        editor.set_read_only(false);
+        editor.set_plain_text_mode(true)?;
+        // The rendered view's first run may be a heading; source uses the plain-text font.
+        editor.execute(EditCommand::Font(self.prefs.plain_font.clone()))?;
+        editor.execute(EditCommand::FontSize(self.prefs.plain_size))?;
+        editor.set_text(&source)?;
+        editor.set_read_only(self.doc.read_only);
+        editor.mark_saved();
+        self.doc.last_text = source;
+        self.doc.look = None;
+        Ok(())
     }
     fn name(&self) -> String {
         self.doc
@@ -400,7 +611,9 @@ impl EditorWindow {
     }
     fn content(&self) -> Result<DocumentContent> {
         let editor = self.editor()?;
-        if self.doc.rich {
+        if let Some(source) = &self.doc.markdown_source {
+            Ok(DocumentContent::Plain(source.clone()))
+        } else if self.doc.rich {
             Ok(DocumentContent::Rich(editor.rtf()?))
         } else {
             Ok(DocumentContent::Plain(editor.text()?))
@@ -428,6 +641,8 @@ impl EditorWindow {
                 Err(error)
             }
         })?;
+        self.doc.markdown_source = None;
+        self.editor()?.set_read_only(self.doc.read_only);
         self.editor()?
             .set_plain_text_mode(loaded.format.is_plain())?;
         self.load_content(&loaded.content)?;
@@ -445,6 +660,14 @@ impl EditorWindow {
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
+        self.doc.look = None;
+        if let DocumentContent::Plain(source) = loaded.content
+            && is_markdown(path)
+            && let Err(error) = self.show_markdown(source)
+        {
+            show_error(&error.context("The Markdown is shown as source text"));
+            self.show_markdown_source()?;
+        }
         Ok(())
     }
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -462,15 +685,37 @@ impl EditorWindow {
         let Some(editor) = self.doc.native.clone() else {
             return;
         };
+        let active = window.is_window_active();
+        // Another window may have changed a preference.
+        if active
+            && !self.was_active
+            && let Ok(prefs) = Preferences::load()
+        {
+            self.prefs = prefs;
+        }
+        self.was_active = active;
+        let dark = self.is_dark(window);
+        if gpui_kit::component::Theme::global(cx).mode.is_dark() != dark {
+            gpui_kit::component::Theme::change(
+                if dark {
+                    gpui_kit::component::ThemeMode::Dark
+                } else {
+                    gpui_kit::component::ThemeMode::Light
+                },
+                None,
+                cx,
+            );
+        }
         self.doc.dirty = editor.is_modified() || self.doc.dirty;
         self.doc.formatting = editor.formatting();
-        if let Ok(text) = editor.text()
+        if editor.take_text_changed()
+            && let Ok(mut text) = editor.text()
             && text != self.doc.last_text
-            && window.is_window_active()
-            && !self.doc.read_only
         {
             let range = editor.selection();
-            if range.start == range.end
+            if active
+                && !self.doc.read_only
+                && range.start == range.end
                 && text.chars().count() == self.doc.last_text.chars().count() + 1
                 && let Some(change) = services::substitution(
                     &text,
@@ -478,12 +723,24 @@ impl EditorWindow {
                     self.prefs.smart_quotes,
                     self.prefs.smart_dashes,
                 )
-            {
-                let _ = editor
+                && editor
                     .select_range(change.range)
-                    .and_then(|()| editor.replace_current(&change.replacement));
+                    .and_then(|()| editor.replace_current(&change.replacement))
+                    .is_ok()
+            {
+                text = editor.text().unwrap_or(text);
             }
-            self.doc.last_text = editor.text().unwrap_or(text);
+            self.doc.last_text = text;
+            if let Err(error) = self.highlight(&editor) {
+                self.doc.highlighter = None;
+                show_error(&error.context("Code coloring is turned off for this document"));
+            }
+        }
+        if editor.take_pasted() {
+            let _ = editor.adapt_automatic_text();
+        }
+        if let Err(error) = self.refresh_look(window) {
+            show_error(&error);
         }
         let needs_buffer = editor.is_modified()
             || (!self.doc.buffered && (self.doc.dirty || self.doc.path.is_none()))
@@ -507,14 +764,18 @@ impl EditorWindow {
                 && &new != old
             {
                 let path = path.clone();
-                if !self.doc.dirty
-                    && confirm(
+                if !self.doc.dirty {
+                    if confirm(
                         "Document changed on disk",
                         "Reload the changes made by another application?",
-                    )
-                    && let Err(error) = self.read_file(&path)
-                {
-                    show_error(&error);
+                    ) {
+                        if let Err(error) = self.read_file(&path) {
+                            show_error(&error);
+                        }
+                    } else {
+                        // Asked once per outside change, not every few seconds.
+                        self.doc.fingerprint = Some(new);
+                    }
                 }
             }
             self.doc.last_external_check = Instant::now();
@@ -572,6 +833,7 @@ impl EditorWindow {
         let format = DocumentFormat::from_path(&path)?;
         if format.is_plain()
             && self.doc.rich
+            && self.doc.markdown_source.is_none()
             && !confirm(
                 "Save as plain text?",
                 "Plain text removes all formatting, tables, and images. Save a plain-text copy?",
@@ -579,7 +841,9 @@ impl EditorWindow {
         {
             return Ok(false);
         }
-        let content = if format.is_plain() {
+        let content = if let Some(source) = &self.doc.markdown_source {
+            DocumentContent::Plain(source.clone())
+        } else if format.is_plain() {
             DocumentContent::Plain(self.editor()?.text()?)
         } else {
             DocumentContent::Rich(self.editor()?.rtf()?)
@@ -595,7 +859,11 @@ impl EditorWindow {
         self.doc.format = format;
         self.doc.fingerprint = Some(fingerprint);
         self.doc.rich = !format.is_plain();
-        self.editor()?.set_plain_text_mode(format.is_plain())?;
+        if self.doc.markdown_source.is_none() {
+            self.editor()?.set_plain_text_mode(format.is_plain())?;
+        }
+        // A new name can mean a different language.
+        self.doc.look = None;
         self.doc.dirty = false;
         self.editor()?.mark_saved();
         document::remove_recovery(&self.doc.recovery_id)?;
@@ -645,10 +913,12 @@ impl EditorWindow {
         });
         match result {
             Ok(()) => true,
-            Err(error) => {
-                show_error(&error.context("ExEditor must keep this window open because its unsaved buffer could not be protected. Save the affected document or free disk space, then try closing again."));
-                false
-            }
+            Err(error) => confirm(
+                "Unsaved changes could not be protected",
+                &format!(
+                    "{error:#}\n\nClose anyway and lose the unprotected changes? Choose Cancel to keep the window open and save the document."
+                ),
+            ),
         }
     }
     fn switch_tab(&mut self, index: usize) -> Result<()> {
@@ -754,10 +1024,14 @@ impl EditorWindow {
             Command::Open => {
                 if let Some(paths) = FileDialog::new()
                     .set_title("Open")
+                    .add_filter("All Files", &["*"])
                     .add_filter(
                         "Documents",
-                        &["txt", "rtf", "rtfd", "html", "htm", "docx", "odt"],
+                        &[
+                            "txt", "rtf", "rtfd", "html", "htm", "docx", "odt", "md", "markdown",
+                        ],
                     )
+                    .add_filter("Source Code", SOURCE_EXTENSIONS)
                     .pick_files()
                 {
                     for path in paths {
@@ -993,6 +1267,7 @@ impl EditorWindow {
                 cx,
             ),
             Command::ToggleFormat => {
+                self.show_markdown_source()?;
                 if self.doc.rich
                     && !confirm(
                         "Make Plain Text?",
@@ -1011,6 +1286,7 @@ impl EditorWindow {
                 self.doc.path = None;
                 self.doc.fingerprint = None;
                 self.doc.dirty = true;
+                self.doc.look = None;
                 self.editor()?.execute(EditCommand::Font(if self.doc.rich {
                     self.prefs.rich_font.clone()
                 } else {
@@ -1031,7 +1307,28 @@ impl EditorWindow {
             }
             Command::ToggleReadOnly => {
                 self.doc.read_only = !self.doc.read_only;
-                self.editor()?.set_read_only(self.doc.read_only);
+                if self.doc.markdown_source.is_none() {
+                    self.editor()?.set_read_only(self.doc.read_only);
+                }
+            }
+            Command::ToggleDarkDocuments => {
+                self.prefs.dark_documents = !self.prefs.dark_documents;
+                self.prefs.save()?;
+            }
+            Command::CodeTheme(name) => {
+                self.preview_theme = None;
+                self.prefs.code_theme = name;
+                self.prefs.save()?;
+            }
+            Command::PreviewCodeTheme(name) => self.preview_theme = Some(name),
+            Command::EndPreview => self.preview_theme = None,
+            Command::ToggleMarkdown => {
+                if self.doc.markdown_source.is_some() {
+                    self.show_markdown_source()?;
+                } else {
+                    let source = self.editor()?.text()?;
+                    self.show_markdown(source)?;
+                }
             }
             Command::Zoom(delta) => {
                 self.doc.zoom = if delta == 0 {
@@ -1058,6 +1355,7 @@ impl EditorWindow {
                 self.prefs.interface_scale = percent;
                 self.prefs.save()?;
                 cx.refresh_windows();
+                window.refresh();
             }
             Command::CustomInterfaceScale => self.show_form(
                 FormKind::InterfaceScale,
@@ -1249,6 +1547,14 @@ impl EditorWindow {
                 self.prefs.save()?;
             }
             Command::Edit(edit) => {
+                ensure!(
+                    self.doc.markdown_source.is_none()
+                        || matches!(
+                            edit,
+                            EditCommand::Copy | EditCommand::SelectAll | EditCommand::CopyStyle
+                        ),
+                    "This is the formatted view of a Markdown file. Choose View > Show Markdown Source to edit it."
+                );
                 if self.doc.read_only
                     && !matches!(
                         edit,
@@ -1468,6 +1774,24 @@ impl EditorWindow {
                 }
                 prefs.save()?;
                 self.prefs = prefs;
+                // Show a new default font now where it can't overwrite chosen styling:
+                // plain text has one font, and an empty rich document has none yet.
+                let editor = self.editor()?;
+                if self.doc.markdown_source.is_none()
+                    && (!self.doc.rich || self.doc.last_text.is_empty())
+                {
+                    let (font, size) = if self.doc.rich {
+                        (self.prefs.rich_font.clone(), self.prefs.rich_size)
+                    } else {
+                        (self.prefs.plain_font.clone(), self.prefs.plain_size)
+                    };
+                    let dirty = self.doc.dirty || editor.is_modified();
+                    editor.execute(EditCommand::Font(font))?;
+                    editor.execute(EditCommand::FontSize(size))?;
+                    if !dirty {
+                        editor.mark_saved();
+                    }
+                }
                 self.editor()?.set_auto_links(self.prefs.automatic_links);
                 self.editor()?.set_spellcheck(self.prefs.spellcheck);
             }
@@ -1748,12 +2072,43 @@ impl EditorWindow {
                     C::ToggleRuler,
                 ),
                 sep(),
+                item("Dark Document Background", "", C::ToggleDarkDocuments)
+                    .checked(self.prefs.dark_documents),
+                item("Code Theme", "›", C::Menu(M::CodeTheme)),
+            ]
+            .into_iter()
+            .chain(
+                (self.doc.markdown_source.is_some()
+                    || (!self.doc.rich && self.doc.path.as_deref().is_some_and(is_markdown)))
+                .then(|| {
+                    item(
+                        if self.doc.markdown_source.is_some() {
+                            "Show Markdown Source"
+                        } else {
+                            "Show Formatted Markdown"
+                        },
+                        "",
+                        C::ToggleMarkdown,
+                    )
+                }),
+            )
+            .chain([
+                sep(),
                 item("Actual Size", "Ctrl+0", C::Zoom(0)),
                 item("Zoom In", "Ctrl+Shift+.", C::Zoom(10)),
                 item("Zoom Out", "Ctrl+Shift+,", C::Zoom(-10)),
                 sep(),
                 item("Interface Size", "›", C::Menu(M::InterfaceSize)),
-            ],
+            ])
+            .collect(),
+            M::CodeTheme => std::iter::once(syntax::AUTOMATIC)
+                .chain(syntax::THEMES.iter().map(|&(name, _)| name))
+                .map(|name| {
+                    item(name, "", C::CodeTheme(name.into()))
+                        .checked(self.prefs.code_theme == name)
+                        .previewing(C::PreviewCodeTheme(name.into()))
+                })
+                .collect(),
             M::InterfaceSize => [75, 90, 100, 110, 125, 150, 175, 200]
                 .into_iter()
                 .map(|percent| {
@@ -2023,6 +2378,8 @@ impl Global for OpenEditors {}
 
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // gpui-kit components size text in rem; scale it with View > Interface Size.
+        window.set_rem_size(ui::rem_size());
         let c = self.colors(window);
         let dirty = self.doc.dirty;
         let name = self.name();
@@ -2208,7 +2565,7 @@ impl Render for EditorWindow {
                     .flex_1()
                     .min_h(px(1.))
                     .w_full()
-                    .bg(rgb(if wrap_page { c.chrome } else { c.paper }))
+                    .bg(rgb(if wrap_page { c.chrome } else { self.doc.paper }))
                     .child(
                         canvas(
                             move |bounds, window, _| {
@@ -2231,7 +2588,6 @@ impl Render for EditorWindow {
                                     (width * scale).round() as i32,
                                     (height * scale).round() as i32,
                                 );
-                                editor.set_background(0xffffff);
                                 editor.set_margins(6, 6);
                             },
                             |_, _, _, _| {},
@@ -2328,6 +2684,10 @@ impl DocumentTab {
             replace_text: String::new(),
             find_case: false,
             find_whole: false,
+            highlighter: None,
+            look: None,
+            paper: 0xffffff,
+            markdown_source: None,
         }
     }
     fn restore(prefs: &Preferences, parent: isize, buffer: RestoredBuffer) -> Result<Self> {
@@ -2364,12 +2724,13 @@ impl DocumentTab {
         if !self.retain_buffer {
             return Ok(());
         }
-        let editor = self
-            .native
-            .as_ref()
-            .context("The native editor cannot protect this buffer")?;
+        // Without an editor there is no text to protect.
+        let Some(editor) = self.native.as_ref() else {
+            return Ok(());
+        };
         self.dirty |= editor.is_modified();
-        if !self.dirty && self.path.is_some() {
+        // An unedited document has nothing to recover.
+        if !self.dirty {
             return Ok(());
         }
         if self.buffer_lease.is_none() {
@@ -2379,7 +2740,9 @@ impl DocumentTab {
             self.buffer_lease.is_some(),
             "Another ExEditor instance owns this unsaved buffer; save a copy before closing."
         );
-        let content = if self.rich {
+        let content = if let Some(source) = &self.markdown_source {
+            DocumentContent::Plain(source.clone())
+        } else if self.rich {
             DocumentContent::Rich(editor.rtf()?)
         } else {
             DocumentContent::Plain(editor.text()?)

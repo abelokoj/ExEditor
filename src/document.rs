@@ -378,9 +378,14 @@ fn content_as_rtf(content: &DocumentContent) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn data_dir() -> Result<PathBuf> {
-    let project = ProjectDirs::from("com", "ExEditor", "ExEditor")
-        .context("The operating system did not provide a local application-data folder")?;
-    let path = project.data_local_dir().to_path_buf();
+    // EXEDITOR_DATA_DIR isolates test runs from the user's preferences and recovery buffers.
+    let path = match std::env::var_os("EXEDITOR_DATA_DIR") {
+        Some(path) if !path.is_empty() => PathBuf::from(path),
+        _ => ProjectDirs::from("com", "ExEditor", "ExEditor")
+            .context("The operating system did not provide a local application-data folder")?
+            .data_local_dir()
+            .to_path_buf(),
+    };
     fs::create_dir_all(&path).with_context(|| format!("Creating {}", path.display()))?;
     Ok(path)
 }
