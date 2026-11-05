@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-05T16:58:10-05:00 — GitHub installer validation (recording time)
+
+- GitHub run [42115720539](https://github.com/abelokoj/ExEditor/actions/runs/42115720539) validated committed application source f40961777f2f97d97e24c9d6f9f75af030aea8ba: formatting and strict Clippy passed, all 97 regression tests passed, and the release executable, portable package and installer were built and uploaded successfully.
+- [Installer artifact](https://github.com/abelokoj/ExEditor/actions/runs/42115720539/artifacts/13457326222) includes numbered unsaved titles and their configurable prefix, recovered title metadata, VS Code-style editing commands, stable emoji metrics, and the document-safety fixes recorded above. The installer was downloaded locally without launching it.
+- This entry records the completed build/test/package steps; GitHub cache cleanup was still running at recording time. No local compilation or interactive/visual testing was performed. Interactive testing belongs to the user. Multiple cursors and VS Code workspace/debugger features remain unsupported.
+- This documentation-only follow-up does not change the installer source; its commit skips a redundant build. Personal dev_notes remain ignored and unpublished.
+
 ## 2026-11-05T16:46:07-05:00 — Atomic rich line-edit undo (local/uncommitted)
 
 - Kept rich fragment imports inside the caller-owned undo collection; nested stream collections had prematurely ended grouping, so one Undo only reversed the last fragment. Normal standalone rich insertions retain their own collection.
