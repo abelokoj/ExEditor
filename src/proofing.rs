@@ -671,9 +671,19 @@ impl Divvun {
                 );
             }
         }
-        let archive = divvun_fst::archive::open(source.path()).map_err(|error| {
-            anyhow::anyhow!("The Divvun dictionary could not be opened: {error}")
-        })?;
+        // Dictionaries are size-bounded here; the regular mmap loader avoids upstream
+        // chunk-boundary indexing failures in small and single-page THFST dictionaries.
+        let archive: Arc<dyn SpellerArchive + Send + Sync> = if extension == "bhfst" {
+            Arc::new(
+                divvun_fst::archive::boxf::ThfstBoxSpellerArchive::open(source.path()).map_err(
+                    |error| anyhow::anyhow!("The Divvun dictionary could not be opened: {error}"),
+                )?,
+            )
+        } else {
+            divvun_fst::archive::open(source.path()).map_err(|error| {
+                anyhow::anyhow!("The Divvun dictionary could not be opened: {error}")
+            })?
+        };
         let mut config = archive
             .bundled_config()
             .cloned()

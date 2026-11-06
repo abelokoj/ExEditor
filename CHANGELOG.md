@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-05T19:02:01-05:00 — Regression-driven link and dictionary fixes (local/uncommitted)
+
+- GitHub strict checks passed and 117/120 tests passed. Fixed strict top-level HTML anchor validation; nested links were already validated and preview-only links still retain inactive labels.
+- Selected Divvun's regular memory-mapped BHFST loader for bounded dictionaries, avoiding its chunked reader's demonstrated end-of-page panic while retaining the same spelling engine and real fixture test.
+- Normalized the bundled Voikko DLL's absolute path/separators before restricted loading. Added runtime file/provenance evidence and native DLLs to the GitHub records so any remaining missing dependency can be identified precisely.
+- The previously failing native style/undo marks, real Noto emoji and Harper/Hunspell tests all passed. This correction awaits GitHub rerun; no local compilation or ExEditor launch occurred.
+
 ## 2026-11-05T18:52:13-05:00 — Strict lint corrections and earlier build logs (local/uncommitted)
 
 - GitHub type-checked the app and identified only strict lint errors in fixed-size pixel loops and single-range test slices. Used typed four-byte chunks and an explicit one-range slice without changing behavior.

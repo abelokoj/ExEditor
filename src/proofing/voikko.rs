@@ -34,7 +34,8 @@ impl Voikko {
         let runtime = executable
             .parent()
             .context("ExEditor has no application folder")?
-            .join("proofing/libvoikko-1.dll");
+            .join("proofing")
+            .join("libvoikko-1.dll");
         ensure!(
             runtime.is_file(),
             "The packaged Voikko runtime is missing. Reinstall the complete ExEditor package; the proofing folder must remain beside ExEditor.exe."
@@ -158,11 +159,14 @@ impl Drop for SuggestionArray {
 
 #[cfg(windows)]
 fn load_runtime(path: &Path) -> Result<Library> {
+    // Normalize separators before the Windows loader sees an extended-length path.
+    let path = std::fs::canonicalize(path)
+        .with_context(|| format!("Locating the packaged Voikko runtime at {}", path.display()))?;
     // SAFETY: the absolute library path is supplied by this app, never by a document.
     // DLL_LOAD_DIR | DEFAULT_DIRS restrict dependency loading to the packaged DLL's
     // directory and normal system/application locations, excluding the working directory.
     let library = unsafe {
-        libloading::os::windows::Library::load_with_flags(path, 0x0000_0100 | 0x0000_1000)
+        libloading::os::windows::Library::load_with_flags(&path, 0x0000_0100 | 0x0000_1000)
     }
     .context("Loading the packaged Voikko runtime and its dependencies")?;
     Ok(library.into())
@@ -184,7 +188,8 @@ mod tests {
         let runtime = executable
             .parent()
             .expect("test folder")
-            .join("proofing/libvoikko-1.dll");
+            .join("proofing")
+            .join("libvoikko-1.dll");
         let library = load_runtime(&runtime).expect("GitHub-built packaged Voikko runtime");
         type GetVersion = unsafe extern "C" fn() -> *const c_char;
         // SAFETY: the signatures are the stable libvoikko 4.3.3 C ABI. The DLL

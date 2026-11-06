@@ -112,6 +112,8 @@ jobs:
           $testRuntime = Join-Path $PWD 'target/debug/deps/proofing'
           New-Item -ItemType Directory -Path $testRuntime -Force | Out-Null
           Copy-Item -Path (Join-Path $runtime '*.dll') -Destination $testRuntime
+          Copy-Item -LiteralPath (Join-Path $runtime 'provenance.json') -Destination logs/native-proofing.json
+          Get-ChildItem -LiteralPath $testRuntime -Filter '*.dll' | Select-Object Name,Length | ConvertTo-Json | Tee-Object -FilePath logs/test-runtime-files.json
           cargo test --locked --all-targets 2>&1 | Tee-Object -FilePath logs/tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -165,6 +167,7 @@ jobs:
           path: |
             logs/
             Cargo.lock
+            artifacts/proofing/*.dll
           if-no-files-found: warn
           retention-days: 14
 

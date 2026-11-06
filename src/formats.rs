@@ -2162,7 +2162,12 @@ fn html_blocks(
                     blocks.push(Block::Table(rows));
                 }
                 _ => {
-                    let style = html_style(child, style, &mut pending);
+                    let mut style = html_style(child, style, &mut pending);
+                    if child.value().name() == "a"
+                        && let Some(link) = child.value().attr("href")
+                    {
+                        style.link = links.read(link)?;
+                    }
                     html_inline(child, &style, directory, &mut pending, links)?;
                 }
             }
