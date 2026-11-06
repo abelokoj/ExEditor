@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-06T02:15:26-05:00 — GPUI Fast, file-manager tabs and window moves ready for testing (recording time)
+
+- GitHub run [42177182056](https://github.com/abelokoj/ExEditor/actions/runs/42177182056) completed formatting, strict diagnostics, all 134 regression tests, release application packaging and installer integration checks for committed application source a1116098da00476ecf4c384c7e971f53d9bf4455. The preceding batch entries retain their original pre-commit/pending status; those source changes are now committed and validated by this run.
+- Downloaded the installer, portable ZIP/app and build records under dist/ExEditor-2026-11-6.1. Verified the source commit and all 44 packaged file checksums. This documentation-only follow-up does not change the tested executable.
+- Ran only that downloaded portable app with synthetic files and separate application data. Three subsequent client launches exited successfully while the original process and document window remained in use. A Unicode/spaced path opened correctly, reopening it selected the same live native editor, and a two-file batch selected its last document. Source fixture hashes remained unchanged. The running main window class was GpuiFast::Window, confirming the selected backend in the executable.
+- The initial smoke driver incorrectly counted only visible document surfaces as all tabs; the corrected check used window identity, selected text and native-editor reuse. The screen-capture safeguard refused capture because the target was not foreground, so no visual screenshot result is claimed. No typing or window-menu interactions were automated; those remain for user testing. All compilation and unit tests ran on GitHub, never locally.
+- Window moves operate within one running session; close earlier builds before testing the new handoff behavior. The application remains Windows-only with its existing RichEdit document engine. NSH/editor-port work remains deferred. Personal notes, isolated test data, downloads and diagnostic artifacts stay ignored and unpublished.
+
 ## 2026-11-06T01:51:33-05:00 — Retry regression follows named-pipe readiness (local/uncommitted test correction)
 
 - GitHub run 42176180950 passed formatting and strict diagnostics, then passed 133 of 134 tests. Native rich-text/selection/undo transfer, tab-order/buffer identity, canonical-file reuse, simultaneous launch election, concurrent batches, shutdown/re-election and queue bounds all passed.
