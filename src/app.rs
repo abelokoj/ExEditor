@@ -3594,7 +3594,7 @@ impl Render for EditorWindow {
                     crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {}
                 }
                 cx.stop_propagation();
-                cx.prevent_default();
+                window.prevent_default();
             }))
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 for path in &paths.0 {

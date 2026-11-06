@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-06T17:09:44-05:00 - GPUI Fast shortcut cancellation API (local/uncommitted correction)
+
+- GitHub run 42301600686 passed formatting, then reported that prevent_default belongs to Window, not Context, in the selected GPUI Fast API. Corrected the document-window and menu keyboard handlers to call the Window method. The shortcut feature set is unchanged.
+- Local source formatting only; compilation, strict diagnostics, regression execution and packaging remain pending on GitHub. No local compilation or unit-test execution. ExEditor retains its native GPUI Fast/RichEdit architecture; no web editor is being introduced.
+
 ## 2026-11-06T17:02:39-05:00 - Keyboard routing and VS Code editing bindings (local/uncommitted source)
 
 - Consolidated 95 key combinations, aliases, menu labels and help into one catalog shared by the native document, GPUI window and menus. Added tracked window focus and document-focus restoration after toolbar/native-dialog interactions. Native shortcuts now dispatch synchronously before subsequent typing; busy modal updates retain the existing queued fallback. Callback state survives a shortcut closing its own tab/window, and transfers route to the new owner.

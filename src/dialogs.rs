@@ -223,7 +223,7 @@ impl MenuView {
             }
         }
         cx.stop_propagation();
-        cx.prevent_default();
+        window.prevent_default();
     }
     fn navigation_key(
         &mut self,
