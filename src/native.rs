@@ -26,7 +26,14 @@ use windows_sys::Win32::{
         SetViewportOrgEx, WHITE_BRUSH,
     },
     Storage::Xps::{AbortDoc, DOCINFOW, EndDoc, EndPage, StartDocW, StartPage},
-    System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
+    System::{
+        DataExchange::{
+            CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+            RegisterClipboardFormatW,
+        },
+        LibraryLoader::{GetModuleHandleW, LoadLibraryW},
+        Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+    },
     UI::{
         Controls::{
             Dialogs::{
@@ -361,6 +368,7 @@ struct NativeState {
     /// Plain documents keep one style and paste text only; RichEdit itself
     /// stays in rich mode so source code can be colored.
     plain: Cell<bool>,
+    read_only: Cell<bool>,
     /// Set by a paste so rich text pasted into a dark document can be adapted.
     pasted: Cell<bool>,
     /// Document background, behind the color emoji drawn over RichEdit's glyphs.
@@ -425,7 +433,6 @@ impl NativeState {
 pub struct NativeEditor {
     hwnd: HWND,
     state: Rc<NativeState>,
-    read_only: Cell<bool>,
     /// Light color standing in for automatic text on a dark document.
     text_override: Cell<Option<u32>>,
     syntax_active: Cell<bool>,
@@ -508,6 +515,7 @@ impl NativeEditor {
             visible: Cell::new(true),
             focus_on_show: Cell::new(false),
             plain: Cell::new(false),
+            read_only: Cell::new(false),
             pasted: Cell::new(false),
             paper: Cell::new(0xffffff),
             emoji: Cell::new(None),
@@ -534,7 +542,6 @@ impl NativeEditor {
         let editor = Self {
             hwnd,
             state,
-            read_only: Cell::new(false),
             text_override: Cell::new(None),
             syntax_active: Cell::new(false),
             proofing_active: Cell::new(false),
@@ -701,7 +708,7 @@ impl NativeEditor {
         let value = wide(&text.replace("\r\n", "\r").replace('\n', "\r"));
         // EM_REPLACESEL, unlike WM_SETTEXT, never parses text that starts with
         // `{\rtf`, and the new text keeps a plain document's single style.
-        let read_only = self.read_only.get();
+        let read_only = self.state.read_only.get();
         if read_only {
             self.send(EM_SETREADONLY, 0, 0);
         }
@@ -712,6 +719,59 @@ impl NativeEditor {
             self.send(EM_SETREADONLY, 1, 0);
         }
         self.send(EM_EMPTYUNDOBUFFER, 0, 0);
+        Ok(())
+    }
+    pub fn paste_html(&self) -> Result<()> {
+        ensure!(self.state.alive.get(), "the document window has closed");
+        ensure!(
+            !self.state.plain.get(),
+            "Formatted HTML requires rich-text mode."
+        );
+        ensure!(!self.state.read_only.get(), "the document is locked");
+        let rtf = read_html_clipboard(self.state.owner.get())?;
+        self.insert_html_rtf(&rtf)
+    }
+    fn insert_html_rtf(&self, rtf: &[u8]) -> Result<()> {
+        ensure!(
+            !self.state.plain.get(),
+            "Formatted HTML requires rich-text mode."
+        );
+        ensure!(!self.state.read_only.get(), "the document is locked");
+        ensure!(
+            rtf.starts_with(b"{\\rtf"),
+            "The HTML conversion did not produce RTF."
+        );
+        let selection = self.selection();
+        let previous_modified = self.is_modified();
+        let remaining = self.text_length() - selection.len();
+        ensure!(
+            rtf.len() <= MAX_DOCUMENT_BYTES / 2 && remaining <= MAX_DOCUMENT_BYTES / 2 - rtf.len(),
+            "The formatted paste would exceed the document size limit."
+        );
+        let original = (!selection.is_empty())
+            .then(|| self.rtf_range(selection.clone()))
+            .transpose()?;
+        self.select_range(selection.clone())?;
+        let _group = self.begin_collection()?;
+        self.send(EM_STOPGROUPTYPING, 0, 0);
+        if let Err(error) = self.read_rtf(rtf, true) {
+            let end = selection.start + self.text_length().saturating_sub(remaining);
+            self.select_range(selection.start..end)?;
+            if let Some(original) = original {
+                self.read_rtf(&original, true)
+                    .context("Restoring the selection after HTML paste failed")?;
+            } else {
+                self.replace_current("")
+                    .context("Removing an incomplete HTML paste")?;
+            }
+            self.select_range(selection)?;
+            if !previous_modified {
+                self.mark_saved();
+            }
+            return Err(error);
+        }
+        self.mark_modified();
+        self.send(EM_STOPGROUPTYPING, 0, 0);
         Ok(())
     }
     pub fn rtf(&self) -> Result<Vec<u8>> {
@@ -771,7 +831,7 @@ impl NativeEditor {
     }
     pub fn set_read_only(&self, read_only: bool) {
         self.send(EM_SETREADONLY, usize::from(read_only), 0);
-        self.read_only.set(read_only);
+        self.state.read_only.set(read_only);
     }
     pub fn selection(&self) -> Range<usize> {
         let range = self.native_selection();
@@ -807,7 +867,9 @@ impl NativeEditor {
         )))
     }
     pub fn execute(&self, command: EditCommand) -> Result<()> {
-        if self.read_only.get() && !matches!(command, EditCommand::Copy | EditCommand::SelectAll) {
+        if self.state.read_only.get()
+            && !matches!(command, EditCommand::Copy | EditCommand::SelectAll)
+        {
             bail!("the document is locked");
         }
         match command {
@@ -1054,7 +1116,7 @@ impl NativeEditor {
         Ok(false)
     }
     pub fn replace_current(&self, text: &str) -> Result<()> {
-        ensure!(!self.read_only.get(), "the document is locked");
+        ensure!(!self.state.read_only.get(), "the document is locked");
         ensure!(
             !text.contains('\0'),
             "the replacement contains a NUL character"
@@ -1069,7 +1131,7 @@ impl NativeEditor {
     }
     pub fn edit_lines(&self, edit: crate::editing::TextEdit) -> Result<()> {
         use crate::editing::EditPiece;
-        ensure!(!self.read_only.get(), "the document is locked");
+        ensure!(!self.state.read_only.get(), "the document is locked");
         let previous_selection = self.selection();
         let previous_modified = self.is_modified();
         let original_length = self.text_length();
@@ -1166,7 +1228,7 @@ impl NativeEditor {
         match_case: bool,
         whole_word: bool,
     ) -> Result<usize> {
-        ensure!(!self.read_only.get(), "the document is locked");
+        ensure!(!self.state.read_only.get(), "the document is locked");
         ensure!(
             !needle.contains('\0') && !replacement.contains('\0'),
             "find and replace text cannot contain NUL characters"
@@ -1916,7 +1978,7 @@ impl NativeEditor {
     // A caller-owned undo collection must span every fragment without nested end calls.
     fn read_rtf(&self, bytes: &[u8], selection: bool) -> Result<()> {
         ensure!(
-            !selection || !self.read_only.get(),
+            !selection || !self.state.read_only.get(),
             "the document is locked"
         );
         ensure!(
@@ -2231,10 +2293,12 @@ unsafe extern "system" fn editor_subclass(
             }
         }
         return result;
-    } else if message == WM_CONTEXTMENU {
+    } else if message == WM_CONTEXTMENU
+        && let Some(state) = &state
+    {
         // SAFETY: the helper uses only synchronous calls on this live window.
         unsafe {
-            context_menu(hwnd, lparam);
+            context_menu(hwnd, lparam, state);
         }
         return 0;
     }
@@ -2254,7 +2318,7 @@ pub fn shortcut(key: u32, shift: bool) -> Option<&'static str> {
         false,
     )
 }
-unsafe fn context_menu(hwnd: HWND, location: isize) {
+unsafe fn context_menu(hwnd: HWND, location: isize, state: &NativeState) {
     // SAFETY: this menu is used synchronously and destroyed before return.
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
@@ -2266,6 +2330,7 @@ unsafe fn context_menu(hwnd: HWND, location: isize) {
         (2, "Cut"),
         (3, "Copy"),
         (4, "Paste"),
+        (7, "Paste Formatted HTML"),
         (5, "Delete"),
         (0, ""),
         (6, "Select All"),
@@ -2274,6 +2339,9 @@ unsafe fn context_menu(hwnd: HWND, location: isize) {
         let mut flags = if id == 0 { MF_SEPARATOR } else { MF_STRING };
         // SAFETY: hwnd is the currently subclassed live RichEdit control.
         if id == 1 && unsafe { SendMessageW(hwnd, EM_CANUNDO, 0, 0) } == 0 {
+            flags |= MF_GRAYED;
+        }
+        if id == 7 && (state.plain.get() || state.read_only.get()) {
             flags |= MF_GRAYED;
         }
         let label = wide(label);
@@ -2309,6 +2377,12 @@ unsafe fn context_menu(hwnd: HWND, location: isize) {
     unsafe {
         DestroyMenu(menu);
     }
+    if command == 7 {
+        if !dispatch_shortcut(state.owner.get(), "paste-html") && state.alive.get() {
+            state.shortcuts.borrow_mut().push_back("paste-html".into());
+        }
+        return;
+    }
     let message = match command {
         1 => WM_UNDO,
         2 => WM_CUT,
@@ -2329,6 +2403,96 @@ unsafe fn context_menu(hwnd: HWND, location: isize) {
         unsafe {
             SendMessageW(hwnd, message, 0, 0);
         }
+    }
+}
+struct OpenClipboardGuard;
+impl Drop for OpenClipboardGuard {
+    fn drop(&mut self) {
+        // SAFETY: constructed only after this thread successfully opens the clipboard.
+        unsafe {
+            CloseClipboard();
+        }
+    }
+}
+fn clipboard_bytes(format: u32) -> Result<Vec<u8>> {
+    // SAFETY: the calling thread owns an open clipboard until copying completes.
+    let handle = unsafe { GetClipboardData(format) };
+    ensure!(
+        !handle.is_null(),
+        "Windows could not read the clipboard content."
+    );
+    // SAFETY: text clipboard formats use HGLOBAL memory owned by the open clipboard.
+    let length = unsafe { GlobalSize(handle) };
+    ensure!(
+        (1..=crate::clipboard_html::MAX_BYTES).contains(&length),
+        "Clipboard HTML is empty or exceeds the paste size limit."
+    );
+    // SAFETY: GlobalLock pins the allocation until it has been copied.
+    let data = unsafe { GlobalLock(handle) };
+    ensure!(
+        !data.is_null(),
+        "Windows could not lock the clipboard content."
+    );
+    // SAFETY: GlobalSize supplied the exact allocation size while the clipboard is held open.
+    let bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), length).to_vec() };
+    // SAFETY: all bytes have been copied; the clipboard retains ownership of the allocation.
+    unsafe {
+        GlobalUnlock(handle);
+    }
+    Ok(bytes)
+}
+fn clipboard_markup(bytes: &[u8]) -> Result<String> {
+    ensure!(
+        bytes.len() <= crate::clipboard_html::MAX_BYTES && bytes.len().is_multiple_of(2),
+        "Clipboard HTML text has an invalid size."
+    );
+    let units: Vec<_> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let end = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .context("Clipboard HTML text is not terminated.")?;
+    let text = String::from_utf16(&units[..end])
+        .context("Clipboard HTML text contains invalid Unicode.")?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned();
+    ensure!(
+        text.trim_start().starts_with('<'),
+        "The clipboard has no formatted HTML or HTML markup. Use Paste for ordinary text."
+    );
+    Ok(text)
+}
+fn read_html_clipboard(owner: HWND) -> Result<Vec<u8>> {
+    let (bytes, cf_html) = {
+        // SAFETY: owner is this thread's live native document window.
+        ensure!(
+            unsafe { OpenClipboard(owner) } != 0,
+            "The clipboard is busy. Try Paste Formatted HTML again."
+        );
+        let _clipboard = OpenClipboardGuard;
+        let name = wide("HTML Format");
+        // SAFETY: the registered format name is terminated and lives through the call.
+        let html = unsafe { RegisterClipboardFormatW(name.as_ptr()) };
+        ensure!(
+            html != 0,
+            "Windows could not register the HTML clipboard format."
+        );
+        // SAFETY: these queries read available formats without changing clipboard content.
+        if unsafe { IsClipboardFormatAvailable(html) } != 0 {
+            (clipboard_bytes(html)?, true)
+        } else {
+            ensure!(
+                unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT as u32) } != 0,
+                "The clipboard has no formatted HTML or HTML markup."
+            );
+            (clipboard_bytes(CF_UNICODETEXT as u32)?, false)
+        }
+    };
+    if cf_html {
+        crate::formats::clipboard_html_to_rtf(&bytes)
+    } else {
+        crate::formats::clipboard_markup_to_rtf(&clipboard_markup(&bytes)?)
     }
 }
 struct PrintResources {
@@ -2518,7 +2682,7 @@ impl<'a> QuietEdit<'a> {
             editor,
             document,
         };
-        if editor.read_only.get() {
+        if editor.state.read_only.get() {
             editor.send(EM_SETREADONLY, 0, 0);
         }
         Ok(quiet)
@@ -2528,7 +2692,7 @@ impl Drop for QuietEdit<'_> {
     fn drop(&mut self) {
         let editor = self.editor;
         editor.set_selection(self.selection);
-        if editor.read_only.get() {
+        if editor.state.read_only.get() {
             editor.send(EM_SETREADONLY, 1, 0);
         }
         editor.send(EM_SETMODIFY, usize::from(self.modified), 0);
@@ -2881,7 +3045,9 @@ mod tests {
             )
             .expect("selection fits exported text")
             .expect("comment edit");
-            let expected = edit.replacement.clone();
+            let mut expected: Vec<_> = text.encode_utf16().collect();
+            expected.splice(edit.range.clone(), edit.replacement.encode_utf16());
+            let expected = String::from_utf16(&expected).expect("planned text");
             editor
                 .edit_lines(edit)
                 .unwrap_or_else(|error| panic!("comment selected lines for {text:?}: {error:#}"));
@@ -2917,6 +3083,198 @@ mod tests {
             editor.execute(EditCommand::Undo).expect("undo insertion");
             assert_eq!(editor.text().expect("empty after undo"), "", "{action:?}");
         }
+    }
+    #[test]
+    fn formatted_html_paste_reads_real_windows_clipboard_formats() {
+        // This test may replace clipboard contents only on an ephemeral GitHub runner.
+        if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+            return;
+        }
+        use windows_sys::Win32::System::{
+            DataExchange::{EmptyClipboard, SetClipboardData},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc},
+        };
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        let set = |format, bytes: &[u8]| {
+            let mut opened = false;
+            for _ in 0..30 {
+                // SAFETY: a private hidden owner created on this test thread.
+                if unsafe { OpenClipboard(editor.owner() as HWND) } != 0 {
+                    opened = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(opened, "GitHub test clipboard available");
+            let _clipboard = OpenClipboardGuard;
+            // SAFETY: this ephemeral CI test owns the clipboard until the guard closes it.
+            assert_ne!(unsafe { EmptyClipboard() }, 0);
+            // SAFETY: allocate exactly the checked fixture size using clipboard-compatible storage.
+            let memory = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) };
+            assert!(!memory.is_null());
+            // SAFETY: lock our allocation before writing the fixture bytes.
+            let data = unsafe { GlobalLock(memory) };
+            assert!(!data.is_null());
+            // SAFETY: allocation capacity is bytes.len(), and source and destination do not overlap.
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), data.cast::<u8>(), bytes.len());
+                GlobalUnlock(memory);
+            }
+            // SAFETY: transfer the allocation to Windows only after the fixture is fully written.
+            let transferred = unsafe { SetClipboardData(format, memory) };
+            if transferred.is_null() {
+                // SAFETY: ownership did not transfer, so this test must free the allocation.
+                unsafe {
+                    GlobalFree(memory);
+                }
+                panic!("setting the GitHub clipboard fixture failed");
+            }
+        };
+        let template = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n";
+        let before = "<html><body>";
+        let fragment = "<b>caf\u{e9} \u{1f600}</b>";
+        let after = "</body></html>";
+        let start = template.len();
+        let fragment_start = start + before.len();
+        let fragment_end = fragment_start + fragment.len();
+        let end = fragment_end + after.len();
+        let payload = format!(
+            "Version:1.0\r\nStartHTML:{start:010}\r\nEndHTML:{end:010}\r\nStartFragment:{fragment_start:010}\r\nEndFragment:{fragment_end:010}\r\n{before}{fragment}{after}\0"
+        );
+        let name = wide("HTML Format");
+        // SAFETY: valid terminated format name for the Windows clipboard registry.
+        let html_format = unsafe { RegisterClipboardFormatW(name.as_ptr()) };
+        assert_ne!(html_format, 0);
+        set(html_format, payload.as_bytes());
+        editor.paste_html().expect("paste CF_HTML");
+        assert!(
+            editor
+                .text()
+                .expect("Unicode text")
+                .contains("caf\u{e9} \u{1f600}")
+        );
+        editor.select_range(0..4).expect("formatted text");
+        assert!(editor.formatting().bold);
+        let markup: Vec<_> = wide("<i>raw markup</i>")
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        set(CF_UNICODETEXT as u32, &markup);
+        editor.set_text("").expect("empty document");
+        editor
+            .paste_html()
+            .expect("paste explicit Unicode HTML markup");
+        assert!(editor.text().expect("markup text").contains("raw markup"));
+        editor.select_range(0..3).expect("italic text");
+        assert!(editor.formatting().italic);
+    }
+    #[test]
+    fn formatted_html_paste_keeps_rich_styles_and_is_one_undo_step() {
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        editor
+            .set_rtf(br"{\rtf1\ansi\b alpha\b0  beta}")
+            .expect("rich document");
+        editor.select_range(0..5).expect("selection to replace");
+        let rtf = crate::formats::clipboard_markup_to_rtf(
+            "<span style=\"color:#123456\"><b><i>caf&#233;</i></b></span>",
+        )
+        .expect("converted HTML");
+        editor.insert_html_rtf(&rtf).expect("formatted paste");
+        let text = editor.text().expect("pasted text");
+        assert!(
+            text.contains("caf\u{e9}") && text.ends_with(" beta"),
+            "{text:?}"
+        );
+        editor.select_range(0..4).expect("pasted run");
+        let style = editor.formatting();
+        assert!(style.bold && style.italic);
+        assert_eq!(style.foreground, 0x123456);
+        editor.execute(EditCommand::Undo).expect("single undo");
+        assert_eq!(editor.text().expect("original text"), "alpha beta");
+        editor.select_range(0..5).expect("original run");
+        assert!(editor.formatting().bold);
+    }
+    #[test]
+    fn formatted_html_paste_preserves_earlier_undo_and_supports_an_empty_document() {
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        editor.set_text("before original after").expect("document");
+        editor.select_range(7..15).expect("first edit range");
+        editor.replace_current("prior").expect("earlier edit");
+        editor.select_range(7..12).expect("paste range");
+        let rtf = crate::formats::clipboard_markup_to_rtf("<b>pasted</b>").expect("HTML");
+        editor.insert_html_rtf(&rtf).expect("HTML paste");
+        editor.execute(EditCommand::Undo).expect("undo paste");
+        assert_eq!(
+            editor.text().expect("earlier edit remains"),
+            "before prior after"
+        );
+        editor
+            .execute(EditCommand::Undo)
+            .expect("undo earlier edit");
+        assert_eq!(
+            editor.text().expect("original document"),
+            "before original after"
+        );
+        editor.set_text("").expect("empty document");
+        editor
+            .insert_html_rtf(&rtf)
+            .expect("paste in empty document");
+        assert!(editor.text().expect("content").contains("pasted"));
+        editor
+            .execute(EditCommand::Undo)
+            .expect("undo empty-document paste");
+        assert_eq!(editor.text().expect("empty again"), "");
+    }
+    #[test]
+    fn formatted_html_paste_rejects_plain_locked_and_invalid_content_without_changes() {
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        let rtf = crate::formats::clipboard_markup_to_rtf("<b>formatted</b>").expect("HTML");
+        for plain in [false, true] {
+            editor.set_plain_text_mode(plain).expect("document mode");
+            editor.set_text("keep this").expect("text");
+            editor.select_range(2..5).expect("selection");
+            editor.mark_saved();
+            let before = editor.rtf().expect("original RTF");
+            if plain {
+                assert!(editor.insert_html_rtf(&rtf).is_err());
+                assert!(editor.paste_html().is_err());
+            } else {
+                editor.set_read_only(true);
+                assert!(editor.insert_html_rtf(&rtf).is_err());
+                assert!(editor.paste_html().is_err());
+                editor.set_read_only(false);
+                assert!(editor.insert_html_rtf(b"not RTF").is_err());
+            }
+            assert_eq!(editor.rtf().expect("unchanged RTF"), before);
+            assert_eq!(editor.selection(), 2..5);
+            assert!(!editor.is_modified());
+        }
+    }
+    #[test]
+    fn clipboard_markup_requires_bounded_terminated_unicode_html() {
+        let encode = |text: &str| {
+            text.encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            clipboard_markup(&encode("<b>caf\u{e9} \u{1f600}</b>")).expect("UTF-16 HTML"),
+            "<b>caf\u{e9} \u{1f600}</b>"
+        );
+        assert!(clipboard_markup(&[0x3c]).is_err());
+        assert!(clipboard_markup(&[0x3c, 0]).is_err());
+        assert!(clipboard_markup(&[0x00, 0xd8, 0, 0]).is_err());
+        assert_eq!(
+            clipboard_markup(&encode("\u{feff}<b>HTML</b>")).expect("BOM HTML"),
+            "<b>HTML</b>"
+        );
+        assert!(clipboard_markup(&encode("ordinary text")).is_err());
+        assert!(clipboard_markup(&vec![0; crate::clipboard_html::MAX_BYTES + 2]).is_err());
     }
     #[test]
     fn native_shortcuts_fallback_once_and_follow_transferred_documents() {

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod clipboard_html;
 mod color;
 mod color_picker;
 mod dialogs;

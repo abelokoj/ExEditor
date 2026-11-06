@@ -178,6 +178,44 @@ pub fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>> {
     write_rtf(&document)
 }
 
+/// Converts a validated Windows HTML clipboard fragment to native RichEdit RTF.
+///
+/// # Errors
+/// Rejects malformed clipboard data and fragments the importer cannot represent.
+pub fn clipboard_html_to_rtf(bytes: &[u8]) -> Result<Vec<u8>> {
+    clipboard_markup_to_rtf(&crate::clipboard_html::decode(bytes)?)
+}
+
+/// Converts explicitly pasted HTML markup without opening files or fetching media.
+///
+/// # Errors
+/// Rejects oversized, empty, excessively nested, or unsupported document structures.
+pub fn clipboard_markup_to_rtf(source: &str) -> Result<Vec<u8>> {
+    ensure!(
+        source.len() <= crate::clipboard_html::MAX_BYTES,
+        "Clipboard HTML exceeds the 16 MiB safety limit."
+    );
+    ensure!(
+        !source.contains('\0'),
+        "Clipboard HTML contains an embedded NUL."
+    );
+    let document = parse_html(source.as_bytes(), Path::new("."), HtmlLinks::Clipboard)?;
+    ensure!(
+        document.blocks.iter().any(|block| match block {
+            Block::Paragraph(paragraph) => paragraph.runs.iter().any(|run| {
+                run.picture.is_some()
+                    || run
+                        .text
+                        .chars()
+                        .any(|character| !character.is_whitespace() || character == '\n')
+            }),
+            Block::Table(rows) => rows.iter().any(|row| !row.is_empty()),
+        }),
+        "Clipboard HTML contains no text, line breaks, tables, or supported images."
+    );
+    write_rtf(&document)
+}
+
 pub fn export(rtf: &[u8], format: DocumentFormat) -> Result<Vec<u8>> {
     let document = read_rtf(rtf)
         .context("Converting the rich-text document; the original file has not been modified")?;
@@ -1991,13 +2029,14 @@ fn html_style(element: ElementRef<'_>, base: &Style, paragraph: &mut Paragraph) 
 enum HtmlLinks {
     Strict,
     Preview,
+    Clipboard,
 }
 impl HtmlLinks {
     fn read(self, link: &str) -> Result<Option<String>> {
         match safe_link(link) {
             Ok(link) => Ok(Some(link)),
             // Preview retains the source; an inactive label must not reject the document.
-            Err(_) if matches!(self, Self::Preview) => Ok(None),
+            Err(_) if matches!(self, Self::Preview | Self::Clipboard) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -2021,6 +2060,14 @@ fn parse_html(bytes: &[u8], directory: &Path, links: HtmlLinks) -> Result<Docume
         "The HTML document is not valid Unicode; reopen it using its original encoding."
     );
     let html = Html::parse_document(&text);
+    if matches!(links, HtmlLinks::Clipboard) {
+        ensure!(
+            html.tree
+                .nodes()
+                .all(|node| node.ancestors().take(MAX_HTML_DEPTH + 1).count() <= MAX_HTML_DEPTH),
+            "Clipboard HTML is nested too deeply to paste safely."
+        );
+    }
     let selector = scraper::Selector::parse("body").expect("constant selector");
     let body = html
         .select(&selector)
@@ -2055,6 +2102,13 @@ fn html_blocks(
         element.ancestors().count() <= MAX_HTML_DEPTH,
         "The HTML document is nested too deeply to import safely."
     );
+    let mut inherited = Paragraph::default();
+    let inherited_style = html_style(element, style, &mut inherited);
+    let style = if matches!(links, HtmlLinks::Clipboard) {
+        &inherited_style
+    } else {
+        style
+    };
     // Nested lists step in; the outermost list keeps the left margin.
     let depth = std::iter::once(element)
         .chain(element.ancestors().filter_map(ElementRef::wrap))
@@ -2068,12 +2122,23 @@ fn html_blocks(
     let mut pending = Paragraph {
         list,
         left,
-        ..Paragraph::default()
+        ..if matches!(links, HtmlLinks::Clipboard) {
+            inherited
+        } else {
+            Paragraph::default()
+        }
     };
     for node in element.children() {
         if let Some(child) = ElementRef::wrap(node) {
             match child.value().name() {
                 "script" | "style" | "head" | "noscript" => {}
+                "template" if matches!(links, HtmlLinks::Clipboard) => {}
+                "img" if matches!(links, HtmlLinks::Clipboard) => {
+                    html_image(child, style, directory, &mut pending, links)?
+                }
+                "br" if matches!(links, HtmlLinks::Clipboard) => {
+                    push_text(&mut pending, "\n", style)
+                }
                 // A list item holding nested lists or paragraphs is a block container.
                 "li" if child.children().filter_map(ElementRef::wrap).any(|inner| {
                     matches!(
@@ -2082,11 +2147,11 @@ fn html_blocks(
                     )
                 }) =>
                 {
-                    flush(&mut pending, blocks);
+                    flush(&mut pending, blocks, links);
                     html_blocks(child, style, directory, blocks, list, links)?;
                 }
                 "p" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" => {
-                    flush(&mut pending, blocks);
+                    flush(&mut pending, blocks, links);
                     let mut paragraph = Paragraph {
                         list,
                         left,
@@ -2097,13 +2162,13 @@ fn html_blocks(
                     blocks.push(Block::Paragraph(paragraph));
                 }
                 "div" | "section" | "article" | "main" | "blockquote" => {
-                    flush(&mut pending, blocks);
+                    flush(&mut pending, blocks, links);
                     let mut paragraph = Paragraph::default();
                     let style = html_style(child, style, &mut paragraph);
                     html_blocks(child, &style, directory, blocks, list, links)?;
                 }
                 "ul" | "ol" => {
-                    flush(&mut pending, blocks);
+                    flush(&mut pending, blocks, links);
                     html_blocks(
                         child,
                         style,
@@ -2118,10 +2183,20 @@ fn html_blocks(
                     )?;
                 }
                 "table" => {
-                    flush(&mut pending, blocks);
+                    flush(&mut pending, blocks, links);
+                    let table_style = if matches!(links, HtmlLinks::Clipboard) {
+                        html_style(child, style, &mut Paragraph::default())
+                    } else {
+                        style.clone()
+                    };
                     let mut rows = Vec::new();
                     let row_selector = scraper::Selector::parse("tr").expect("constant selector");
                     for row in child.select(&row_selector) {
+                        let row_style = if matches!(links, HtmlLinks::Clipboard) {
+                            html_style(row, &table_style, &mut Paragraph::default())
+                        } else {
+                            table_style.clone()
+                        };
                         let mut cells = Vec::new();
                         for cell in row
                             .children()
@@ -2134,7 +2209,7 @@ fn html_blocks(
                                 "Merged HTML table cells cannot be imported without changing their layout."
                             );
                             let mut content = Vec::new();
-                            let mut cell_style = style.clone();
+                            let mut cell_style = row_style.clone();
                             if cell.value().name() == "th" {
                                 cell_style.bold = true;
                             }
@@ -2178,16 +2253,23 @@ fn html_blocks(
             }
         }
     }
-    flush(&mut pending, blocks);
+    flush(&mut pending, blocks, links);
     Ok(())
 }
 /// Ends the paragraph collected so far, keeping its list placement for the text after it.
 /// Whitespace before a nested block is source formatting, not a blank line.
-fn flush(pending: &mut Paragraph, blocks: &mut Vec<Block>) {
+fn flush(pending: &mut Paragraph, blocks: &mut Vec<Block>, links: HtmlLinks) {
     if let Some(last) = pending.runs.last_mut()
         && last.picture.is_none()
     {
-        last.text.truncate(last.text.trim_end().len());
+        let end = if matches!(links, HtmlLinks::Clipboard) {
+            last.text
+                .trim_end_matches(|character: char| character.is_whitespace() && character != '\n')
+                .len()
+        } else {
+            last.text.trim_end().len()
+        };
+        last.text.truncate(end);
     }
     pending
         .runs
@@ -2217,6 +2299,7 @@ fn html_inline(
             let mut style = html_style(child, style, paragraph);
             match child.value().name() {
                 "script" | "style" | "noscript" => {}
+                "template" if matches!(links, HtmlLinks::Clipboard) => {}
                 "br" => push_text(paragraph, "\n", &style),
                 "a" => {
                     if let Some(link) = child.value().attr("href") {
@@ -2224,75 +2307,7 @@ fn html_inline(
                     }
                     html_inline(child, &style, directory, paragraph, links)?;
                 }
-                "img" => {
-                    let source = child
-                        .value()
-                        .attr("src")
-                        .context("An HTML image has no source")?;
-                    let bytes = if let Some(data) = source.strip_prefix("data:") {
-                        let (mime, encoded) = data
-                            .split_once(",")
-                            .context("Invalid embedded HTML image")?;
-                        ensure!(
-                            encoded.len() as u64 <= MAX_PART * 4 / 3 + 8,
-                            "An embedded image exceeds the safety limit."
-                        );
-                        ensure!(
-                            mime.ends_with(";base64"),
-                            "Only base64-encoded embedded HTML images are supported."
-                        );
-                        STANDARD.decode(encoded.trim())?
-                    } else {
-                        ensure!(
-                            !source.contains(':') && !source.starts_with('/'),
-                            "Remote HTML images cannot be imported offline. Embed the image in the document first."
-                        );
-                        ensure!(
-                            Path::new(source)
-                                .components()
-                                .all(|component| matches!(component, Component::Normal(_))),
-                            "An HTML image points outside its document folder."
-                        );
-                        let root = fs::canonicalize(directory)?;
-                        let target = fs::canonicalize(directory.join(source))?;
-                        ensure!(
-                            target.starts_with(&root),
-                            "An HTML image points outside its document folder."
-                        );
-                        ensure!(
-                            fs::metadata(&target)?.len() <= MAX_PART,
-                            "An HTML image exceeds the safety limit."
-                        );
-                        fs::read(target)?
-                    };
-                    ensure!(
-                        bytes.len() as u64 <= MAX_PART,
-                        "An embedded image exceeds the safety limit."
-                    );
-                    let mut geometry = Paragraph::default();
-                    let mut image_style = Style::default();
-                    if let Some(css) = child.value().attr("style") {
-                        apply_css(css, &mut image_style, &mut geometry);
-                    }
-                    let dimension = |name: &str| {
-                        child.value().attr(name).and_then(length_twips).or_else(|| {
-                            child.value().attr("style").and_then(|css| {
-                                css.split(';')
-                                    .filter_map(|declaration| declaration.split_once(':'))
-                                    .find(|(key, _)| key.trim() == name)
-                                    .and_then(|(_, value)| length_twips(value))
-                            })
-                        })
-                    };
-                    let width = dimension("width").unwrap_or(2880);
-                    let height = dimension("height").unwrap_or(2160);
-                    let picture = package_image(bytes, source, width, height)?;
-                    paragraph.runs.push(Run {
-                        text: String::new(),
-                        style,
-                        picture: Some(picture),
-                    });
-                }
+                "img" => html_image(child, &style, directory, paragraph, links)?,
                 "ul" | "ol" | "table" => bail!(
                     "A nested HTML list or table cannot be imported into an inline paragraph without changing its structure."
                 ),
@@ -2303,6 +2318,114 @@ fn html_inline(
         }
     }
     Ok(())
+}
+
+fn html_image(
+    child: ElementRef<'_>,
+    style: &Style,
+    directory: &Path,
+    paragraph: &mut Paragraph,
+    links: HtmlLinks,
+) -> Result<()> {
+    match html_picture(child, directory, links) {
+        Ok(picture) => paragraph.runs.push(Run {
+            text: String::new(),
+            style: style.clone(),
+            picture: Some(picture),
+        }),
+        Err(_) if matches!(links, HtmlLinks::Clipboard) => {
+            push_text(paragraph, child.value().attr("alt").unwrap_or(""), style);
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn html_picture(child: ElementRef<'_>, directory: &Path, links: HtmlLinks) -> Result<Picture> {
+    let source = child
+        .value()
+        .attr("src")
+        .context("An HTML image has no source")?;
+    let clipboard = matches!(links, HtmlLinks::Clipboard);
+    ensure!(
+        !clipboard
+            || source
+                .get(..5)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:")),
+        "Clipboard images must be embedded data images."
+    );
+    let data = if clipboard {
+        Some(&source[5..])
+    } else {
+        source.strip_prefix("data:")
+    };
+    let bytes = if let Some(data) = data {
+        let (mime, encoded) = data
+            .split_once(",")
+            .context("Invalid embedded HTML image")?;
+        ensure!(
+            encoded.len() as u64 <= MAX_PART * 4 / 3 + 8,
+            "An embedded image exceeds the safety limit."
+        );
+        ensure!(
+            mime.ends_with(";base64"),
+            "Only base64-encoded embedded HTML images are supported."
+        );
+        if clipboard {
+            let media_type = mime.split(';').next().unwrap_or("");
+            ensure!(
+                ["image/png", "image/jpeg", "image/bmp", "image/x-ms-bmp"]
+                    .iter()
+                    .any(|supported| media_type.eq_ignore_ascii_case(supported)),
+                "This clipboard image format is unsupported."
+            );
+        }
+        STANDARD.decode(encoded.trim())?
+    } else {
+        ensure!(
+            !source.contains(':') && !source.starts_with('/'),
+            "Remote HTML images cannot be imported offline. Embed the image in the document first."
+        );
+        ensure!(
+            Path::new(source)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+            "An HTML image points outside its document folder."
+        );
+        let root = fs::canonicalize(directory)?;
+        let target = fs::canonicalize(directory.join(source))?;
+        ensure!(
+            target.starts_with(&root),
+            "An HTML image points outside its document folder."
+        );
+        ensure!(
+            fs::metadata(&target)?.len() <= MAX_PART,
+            "An HTML image exceeds the safety limit."
+        );
+        fs::read(target)?
+    };
+    ensure!(
+        bytes.len() as u64 <= MAX_PART,
+        "An embedded image exceeds the safety limit."
+    );
+    let mut geometry = Paragraph::default();
+    let mut image_style = Style::default();
+    if let Some(css) = child.value().attr("style") {
+        apply_css(css, &mut image_style, &mut geometry);
+    }
+    let dimension = |name: &str| {
+        child.value().attr(name).and_then(length_twips).or_else(|| {
+            child.value().attr("style").and_then(|css| {
+                css.split(';')
+                    .filter_map(|declaration| declaration.split_once(':'))
+                    .find(|(key, _)| key.trim() == name)
+                    .and_then(|(_, value)| length_twips(value))
+            })
+        })
+    };
+    let width = dimension("width").unwrap_or(2880);
+    let height = dimension("height").unwrap_or(2160);
+    package_image(bytes, source, width, height)
 }
 
 fn odt_style(properties: Node<'_, '_>, style: &mut Style, paragraph: &mut Paragraph) {
@@ -2752,6 +2875,139 @@ fn write_odt(document: &Document) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const CLIPBOARD_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+
+    #[test]
+    fn clipboard_html_retains_supported_formatting_lists_and_tables() {
+        let source = "<div style='font-family:Arial;font-size:18pt;color:#123456'><p><b>bold</b> <i>italic</i> <u>underlined</u> <s>struck</s> <span style='background-color:#abcdef'>café 😀</span> <a href='https://example.com'>web</a></p><ul><li>bullet</li></ul><ol><li>number</li></ol><table><tr><td>cell one</td><td>cell two</td></tr></table></div>";
+        let rtf = String::from_utf8(clipboard_markup_to_rtf(source).expect("formatted HTML"))
+            .expect("ASCII RTF");
+        for expected in [
+            "Arial",
+            r"\fs36",
+            r"\red18\green52\blue86",
+            r"\red171\green205\blue239",
+            r"\b",
+            r"\i",
+            r"\ul",
+            r"\strike",
+            "HYPERLINK",
+            "https://example.com",
+            "bullet",
+            "number",
+            r"\trowd",
+            "cell one",
+            "cell two",
+        ] {
+            assert!(rtf.contains(expected), "missing {expected}: {rtf}");
+        }
+        let document = read_rtf(rtf.as_bytes()).expect("clipboard RTF round trip");
+        assert!(
+            all_paragraphs(&document)
+                .into_iter()
+                .flat_map(|paragraph| &paragraph.runs)
+                .any(|run| run.text.contains("café 😀"))
+        );
+    }
+
+    #[test]
+    fn clipboard_unsafe_links_are_labels_and_scripts_are_ignored() {
+        let source = "<p><a href='javascript:alert(1)'>script link</a> <a href='file:///C:/private.txt'>local link</a> <a href='custom:open'>custom link</a><script>hidden script</script><style>hidden style</style><template>hidden template</template><a href='HTTPS://example.com'>web</a></p>";
+        let document = read_rtf(&clipboard_markup_to_rtf(source).expect("inactive link labels"))
+            .expect("clipboard RTF");
+        let runs: Vec<_> = all_paragraphs(&document)
+            .into_iter()
+            .flat_map(|paragraph| &paragraph.runs)
+            .collect();
+        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+        for label in ["script link", "local link", "custom link", "web"] {
+            assert!(text.contains(label), "missing {label}");
+        }
+        assert!(!text.contains("hidden"));
+        assert_eq!(
+            runs.iter()
+                .filter_map(|run| run.style.link.as_deref())
+                .collect::<Vec<_>>(),
+            ["HTTPS://example.com"]
+        );
+    }
+
+    #[test]
+    fn clipboard_media_never_opens_files_and_keeps_unsupported_alt_text() {
+        let directory = tempfile::tempdir().expect("image folder");
+        let png = STANDARD.decode(CLIPBOARD_PNG).expect("PNG fixture");
+        fs::write(directory.path().join("image.png"), &png).expect("local image fixture");
+        let source = format!(
+            "<p><img src='image.png' alt='local image'><img src='file:///C:/private.png' alt='file image'><img src='https://example.com/image.png' alt='remote image'><img src='data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' alt='vector image'><img src='data:image/png;base64,broken' alt='broken image'><img alt='missing image'><img src='data:image/png;base64,{CLIPBOARD_PNG}'></p>"
+        );
+        let document = parse_html(source.as_bytes(), directory.path(), HtmlLinks::Clipboard)
+            .expect("safe media policy");
+        let runs: Vec<_> = all_paragraphs(&document)
+            .into_iter()
+            .flat_map(|paragraph| &paragraph.runs)
+            .collect();
+        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+        for alt in [
+            "local image",
+            "file image",
+            "remote image",
+            "vector image",
+            "broken image",
+            "missing image",
+        ] {
+            assert!(text.contains(alt), "missing {alt}");
+        }
+        assert_eq!(runs.iter().filter(|run| run.picture.is_some()).count(), 1);
+        assert_eq!(
+            runs.iter()
+                .find_map(|run| run.picture.as_ref())
+                .expect("embedded PNG")
+                .bytes,
+            png
+        );
+        assert!(read_html(b"<p><img src='image.png'></p>", directory.path()).is_ok());
+        assert!(
+            read_html(
+                b"<p><img src='https://example.com/image.png'></p>",
+                directory.path()
+            )
+            .is_err()
+        );
+        assert!(clipboard_markup_to_rtf("<img src='image.png' alt='top-level image'>").is_ok());
+    }
+
+    #[test]
+    fn clipboard_rejects_excessive_fragment_nesting_before_conversion() {
+        let source = format!(
+            "{}selected{}",
+            "<div>".repeat(MAX_HTML_DEPTH + 1),
+            "</div>".repeat(MAX_HTML_DEPTH + 1)
+        );
+        assert!(clipboard_markup_to_rtf(&source).is_err());
+    }
+
+    #[test]
+    fn clipboard_empty_and_inert_content_is_rejected_but_breaks_and_tables_survive() {
+        for source in [
+            "",
+            "   ",
+            "<script>hidden</script>",
+            "<p></p>",
+            "<img src='file:///private.png'>",
+        ] {
+            assert!(
+                clipboard_markup_to_rtf(source).is_err(),
+                "accepted empty {source:?}"
+            );
+        }
+        for source in ["<br>", "<p><br></p>", "<table><tr><td></td></tr></table>"] {
+            assert!(
+                clipboard_markup_to_rtf(source).is_ok(),
+                "rejected intentional structure {source:?}"
+            );
+        }
+    }
+
     #[test]
     fn markdown_preview_keeps_relative_and_unsupported_link_labels() {
         let source = "# Linked document\n\n[Relative](notes/next.md) and [Parent](../README.md).\n\n[Local](file:///C:/notes/example.md) and [Custom](obsidian://open?vault=notes).\n\n<a href=\"javascript:alert(1)\">Raw HTML label</a> and [Script](javascript:alert%281%29).\n\n[Web](HTTPS://example.com/page) and [Anchor](#linked-document).\n\nAfter the links, **bold text** and emoji 😀 remain.";

@@ -84,6 +84,17 @@ the earlier blank writing area was addressed by hosting RichEdit above GPUI; cur
 interactive behavior still needs user feedback. Unsaved-buffer snapshots are atomic and flushed, but an
 abrupt crash can still lose edits made since the most recent editing checkpoint.
 
+## Pasting formatted HTML
+
+In a rich-text document, choose **Edit > Paste Formatted HTML** or the same option
+in the document's right-click menu. It accepts formatted HTML copied from a browser
+and HTML markup copied as text, converts it locally to native RTF, and replaces the
+selection in one undo step. Plain-text and locked documents disable this option.
+
+Supported inline styles, links, lists and tables follow the existing HTML importer.
+Full browser CSS/layout fidelity and external images are not imported; no web editor,
+network fetching or local image-file reads are used for clipboard HTML.
+
 ## Tabs and windows
 
 Opening files through **Open with ExEditor** or **Edit with ExEditor** hands them to

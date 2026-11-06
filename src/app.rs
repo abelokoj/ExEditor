@@ -123,6 +123,7 @@ pub enum Command {
     CopyPath,
     RevealFile,
     PasteOrPreview,
+    PasteHtml,
     BlockComment,
     Fullscreen,
     ReopenClosed,
@@ -202,6 +203,7 @@ pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
         "copy" => Command::Edit(EditCommand::Copy),
         "cut" => Command::Edit(EditCommand::Cut),
         "paste" => Command::Edit(EditCommand::Paste),
+        "paste-html" => Command::PasteHtml,
         "select-all" => Command::Edit(EditCommand::SelectAll),
         "select-line" => Command::SelectLine,
         "matching-bracket" => Command::MatchingBracket,
@@ -1754,6 +1756,15 @@ impl EditorWindow {
                     .arg(format!("/select,{}", path.display()))
                     .spawn()?;
             }
+            Command::PasteHtml => {
+                ensure!(
+                    self.doc.rich && self.doc.markdown_source.is_none(),
+                    "Paste Formatted HTML requires a rich-text document."
+                );
+                self.editor()?.paste_html()?;
+                self.doc.dirty = true;
+                self.doc.queue_buffer()?;
+            }
             Command::PasteOrPreview => {
                 if self.doc.markdown_source.is_some()
                     || self.doc.path.as_deref().is_some_and(is_markdown)
@@ -2888,6 +2899,12 @@ impl EditorWindow {
                 e("Cut", crate::keyboard::label("cut"), EditCommand::Cut),
                 e("Copy", crate::keyboard::label("copy"), EditCommand::Copy),
                 e("Paste", crate::keyboard::label("paste"), EditCommand::Paste),
+                {
+                    let mut entry = item("Paste Formatted HTML", "", C::PasteHtml);
+                    entry.enabled =
+                        self.doc.rich && !self.doc.read_only && self.doc.markdown_source.is_none();
+                    entry
+                },
                 e("Paste and Match Style", "", EditCommand::PastePlain),
                 e("Delete", "", EditCommand::Delete),
                 e(
