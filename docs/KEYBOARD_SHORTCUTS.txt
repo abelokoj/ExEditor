@@ -1,6 +1,9 @@
 ExEditor keyboard shortcuts (Windows)
 =====================================
 
+Help > Keyboard Shortcuts opens a searchable native command/keybinding panel.
+This complete reference is also bundled as KEYBOARD_SHORTCUTS.txt.
+
 These bindings apply in a document window. A command can be unavailable when
 the document has no selection, no saved path, no matching text, or no suitable
 rich-text context. Dialogs and search fields retain their own text-input keys.

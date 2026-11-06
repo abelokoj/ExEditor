@@ -112,7 +112,8 @@ the original file on disk remains intact and can be opened again.
 ExEditor supports familiar VS Code editing shortcuts, including moving/copying lines,
 indent/outdent, line and block comments, bracket navigation, scrolling, Find/Replace,
 Save All, reopening closed saved files, Markdown source/preview, and the searchable
-Command Palette (F1 or Ctrl+Shift+P). **Help > Keyboard Shortcuts** lists the bindings.
+Command Palette (F1 or Ctrl+Shift+P). **Help > Keyboard Shortcuts** opens a searchable native binding list. The full
+reference, including aliases and chord instructions, ships as KEYBOARD_SHORTCUTS.txt.
 Ctrl+P searches open and recent files; Ctrl+O opens the file picker. Ctrl+R opens
 recent files, Ctrl+Space shows word completion, and Ctrl+Shift+PageUp/PageDown move
 the current tab left/right. Ctrl+K starts a three-second chord; Escape cancels it.

@@ -44,6 +44,16 @@ pub fn open_files(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, 
         cx,
     );
 }
+pub fn open_shortcuts(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, cx: &mut App) {
+    open_with_title(
+        entries,
+        commands,
+        colors,
+        "Keyboard Shortcuts",
+        "Search commands or keybindings...",
+        cx,
+    );
+}
 fn open_with_title(
     entries: Vec<MenuEntry>,
     commands: Commands,
@@ -222,8 +232,10 @@ fn filtered(entries: &[MenuEntry], query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            (entry.enabled && entry.command.is_some() && matches_query(&entry.label, query))
-                .then_some(index)
+            (entry.enabled
+                && entry.command.is_some()
+                && matches_query(&format!("{} {}", entry.label, entry.shortcut), query))
+            .then_some(index)
         })
         .collect()
 }
@@ -237,7 +249,18 @@ fn matches_query(label: &str, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::matches_query;
+    use super::{filtered, matches_query};
+    #[test]
+    fn palette_search_matches_command_names_and_keybindings_together() {
+        use crate::{app::Command, dialogs::MenuEntry};
+        let entries = [
+            MenuEntry::item("New window", "Ctrl+Shift+N", Command::New),
+            MenuEntry::item("New tab", "Ctrl+N", Command::NewTab),
+        ];
+        assert_eq!(filtered(&entries, "ctrl+shift+n"), [0]);
+        assert_eq!(filtered(&entries, "new ctrl+n"), [1]);
+        assert!(filtered(&entries, "missing").is_empty());
+    }
     #[test]
     fn command_search_matches_case_insensitive_words_and_ignores_extra_spaces() {
         assert!(matches_query(

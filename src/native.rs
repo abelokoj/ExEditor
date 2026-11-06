@@ -1075,7 +1075,10 @@ impl NativeEditor {
         let original_length = self.text_length();
         let expected_length = original_length - (edit.range.end - edit.range.start)
             + edit.replacement.encode_utf16().count();
-        let original = self.rtf_range(edit.range.clone())?;
+        // An empty insertion range has no rich fragment for RichEdit to stream out.
+        let original = (!edit.range.is_empty())
+            .then(|| self.rtf_range(edit.range.clone()))
+            .transpose()?;
         let pieces: Vec<_> = edit
             .pieces
             .into_iter()
@@ -1113,8 +1116,13 @@ impl NativeEditor {
             let unchanged = original_length - (edit.range.end - edit.range.start);
             let current_end = edit.range.start + self.text_length().saturating_sub(unchanged);
             self.select_range(edit.range.start..current_end)?;
-            self.read_rtf(&original, true)
-                .context("Restoring the document after the line edit failed")?;
+            if let Some(original) = original {
+                self.read_rtf(&original, true)
+                    .context("Restoring the document after the line edit failed")?;
+            } else {
+                self.replace_current("")
+                    .context("Removing the failed insertion from the document")?;
+            }
             self.select_range(previous_selection)?;
             if !previous_modified {
                 self.mark_saved();
@@ -2874,10 +2882,40 @@ mod tests {
             .expect("selection fits exported text")
             .expect("comment edit");
             let expected = edit.replacement.clone();
-            editor.edit_lines(edit).expect("comment selected lines");
+            editor
+                .edit_lines(edit)
+                .unwrap_or_else(|error| panic!("comment selected lines for {text:?}: {error:#}"));
             assert_eq!(editor.text().expect("commented text"), expected);
             editor.execute(EditCommand::Undo).expect("undo comments");
             assert_eq!(editor.text().expect("original text"), text);
+        }
+    }
+    #[test]
+    fn line_insertion_and_indentation_work_in_empty_documents_and_undo_once() {
+        use crate::editing::LineAction;
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        for action in [
+            LineAction::InsertAbove,
+            LineAction::InsertBelow,
+            LineAction::Indent,
+            LineAction::AddComment,
+        ] {
+            editor.set_text("").expect("empty document");
+            let edit = crate::editing::plan("", 0..0, action, "//")
+                .expect("plan")
+                .expect("insertion");
+            let expected = edit.replacement.clone();
+            editor
+                .edit_lines(edit)
+                .unwrap_or_else(|error| panic!("{action:?}: {error:#}"));
+            assert_eq!(
+                editor.text().expect("inserted text"),
+                expected,
+                "{action:?}"
+            );
+            editor.execute(EditCommand::Undo).expect("undo insertion");
+            assert_eq!(editor.text().expect("empty after undo"), "", "{action:?}");
         }
     }
     #[test]

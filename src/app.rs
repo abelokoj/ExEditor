@@ -260,6 +260,26 @@ pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
         _ => return None,
     })
 }
+fn shortcut_entries() -> Vec<MenuEntry> {
+    crate::keyboard::BINDINGS
+        .iter()
+        .filter_map(|binding| {
+            if binding.label.is_empty() {
+                return None;
+            }
+            let command = shortcut_command(binding.action)?;
+            let mut label = match binding.action {
+                "new" => "New window".into(),
+                "paste-or-preview" => "Paste plain text / Markdown preview".into(),
+                _ => binding.action.replace('-', " "),
+            };
+            if let Some(first) = label.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            Some(MenuEntry::item(&label, binding.label, command))
+        })
+        .collect()
+}
 /// Dark-document background and the light stand-in for automatic text.
 const DARK_PAPER: u32 = 0x1e1e1e;
 const DARK_TEXT: u32 = 0xe6e6e5;
@@ -1874,10 +1894,12 @@ impl EditorWindow {
                 crate::palette::open(entries, self.queue.clone(), self.colors(window), cx);
             }
             Command::KeyboardHelp => {
-                MessageDialog::new()
-                    .set_title("ExEditor Keyboard Shortcuts")
-                    .set_description(include_str!("../docs/KEYBOARD_SHORTCUTS.txt"))
-                    .show();
+                crate::palette::open_shortcuts(
+                    shortcut_entries(),
+                    self.queue.clone(),
+                    self.colors(window),
+                    cx,
+                );
             }
             Command::New => open_document(None, cx),
             Command::NewTab => self.new_tab(window, cx)?,
@@ -4039,6 +4061,23 @@ mod window_tests {
                     "{binding:?}"
                 );
             }
+        }
+    }
+    #[test]
+    fn shortcut_reference_has_every_canonical_command_and_its_current_binding() {
+        let entries = super::shortcut_entries();
+        for binding in crate::keyboard::BINDINGS
+            .iter()
+            .filter(|binding| !binding.label.is_empty() && binding.action != "chord")
+        {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.shortcut == binding.label)
+                .expect("canonical binding is visible");
+            assert_eq!(
+                format!("{:?}", entry.command),
+                format!("{:?}", super::shortcut_command(binding.action))
+            );
         }
     }
     #[test]

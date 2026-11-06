@@ -61,6 +61,8 @@ foreach ($documentName in @('README.md', 'LICENSE', 'CHANGELOG.md', 'Cargo.lock'
 }
 
 
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/KEYBOARD_SHORTCUTS.txt') -Destination $packageRoot
+
 foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter', 'noto-color-emoji')) {
     $licenseSource = Join-Path $projectRoot "assets\fonts\$family\OFL.txt"
     if (-not (Test-Path -LiteralPath $licenseSource -PathType Leaf)) {

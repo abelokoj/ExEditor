@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-06T17:32:33-05:00 - Empty-document line shortcuts and searchable native keyboard reference (local/uncommitted)
+
+- GitHub run 42303795942 passed formatting, strict diagnostics and 151 of 152 tests. The prior Select All/fast typing, undo/redo, bold/italic/underline, navigation, chord, AltGr/focus/composition, owner-transfer and all-binding dispatch checks now pass. The remaining new line-edit test exposed RichEdit returning no rich fragment for an empty insertion range.
+- Line transactions now skip an absent empty-range backup and remove the attempted insertion on rollback. Added empty-document insert-above/below, indentation, comment and single-undo regressions; selected-text and existing-fragment safeguards remain in place.
+- Replaced the oversized shortcut message box with the existing searchable native GPUI panel. It lists canonical command bindings, searches both command names and keys, and keeps the existing keyboard navigation. The full alias/chord reference is bundled as KEYBOARD_SHORTCUTS.txt in installer/portable packages. Added reference/catalog and combined search regressions. No web editor or webview dependency.
+- Local validation for this batch is source formatting and whitespace only. Combined GitHub regressions, packaging and installer checks remain pending; no local compilation or unit tests. Physical keyboard interaction and every international layout are not claimed as verified.
+
 ## 2026-11-06T17:19:12-05:00 - Select All excludes RichEdit's implicit paragraph from text operations (local/uncommitted fix)
 
 - GitHub run 42302577247 passed formatting and strict diagnostics, and 149 of 151 tests. Every catalog binding passed through the real native message handler. Immediate Select All and Ctrl+Shift+End checks exposed that RichEdit reports its implicit final paragraph at text length + 1; passing that raw range to line-editing planners could reject valid selections.
