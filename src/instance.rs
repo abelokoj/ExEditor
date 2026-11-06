@@ -634,7 +634,9 @@ mod windows {
                 "Invalid instance path length"
             );
             let units: Vec<_> = take(&mut input, length * 2)?
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect();
             ensure!(
@@ -691,7 +693,7 @@ mod windows {
             );
             let relative = PathBuf::from("a folder/文書.txt");
             assert_eq!(
-                decode(&encode(&[relative.clone()], [1; 16]).unwrap())
+                decode(&encode(std::slice::from_ref(&relative), [1; 16]).unwrap())
                     .unwrap()
                     .1,
                 vec![std::path::absolute(relative).unwrap()],

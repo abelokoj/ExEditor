@@ -3616,13 +3616,13 @@ impl DocumentTab {
             .context("The document editor is unavailable")?;
         let previous = native.owner();
         native.reparent(owner)?;
-        if let Some(source) = &self.markdown_source {
-            if let Err(error) = source.reparent(owner) {
-                if let Err(rollback) = native.reparent(previous) {
-                    show_error(&rollback);
-                }
-                return Err(error);
+        if let Some(source) = &self.markdown_source
+            && let Err(error) = source.reparent(owner)
+        {
+            if let Err(rollback) = native.reparent(previous) {
+                show_error(&rollback);
             }
+            return Err(error);
         }
         Ok(())
     }

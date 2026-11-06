@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-06T01:42:01-05:00 — Strict checks for file handoff and window transfers (local/uncommitted correction)
+
+- GitHub run 42175392691 reached both application and test source and reported three strict lint errors: nested transfer rollback conditions, fixed-size UTF-16 byte chunks and a cloned test slice. Applied the suggested equivalent forms without changing behavior.
+- Local validation for this correction is source formatting and whitespace only. GitHub regression tests and the combined installer remain pending; no local compilation or unit-test execution. The GPUI Fast baseline run remains successful.
+
 ## 2026-11-06T01:33:11-05:00 — File-manager tabs and cross-window tab moves (local/uncommitted source)
 
 - File-manager launches now elect or contact one ExEditor process per user/application-data folder and forward a bounded batch of absolute UTF-16 paths over a user-restricted local named pipe. Retry identities prevent duplicate delivery; an empty launch activates the existing editor. Normal last-window/quit paths check both queued and staged requests before closing.
