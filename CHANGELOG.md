@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-06T01:51:33-05:00 — Retry regression follows named-pipe readiness (local/uncommitted test correction)
+
+- GitHub run 42176180950 passed formatting and strict diagnostics, then passed 133 of 134 tests. Native rich-text/selection/undo transfer, tab-order/buffer identity, canonical-file reuse, simultaneous launch election, concurrent batches, shutdown/re-election and queue bounds all passed.
+- The remaining retry/malformed-message test called the one-attempt transport helper back-to-back and mistook its documented busy/reconnect RETRY response for the final protocol acknowledgement. The test now uses the same bounded readiness/retry behavior as production and still requires accepted duplicates to queue only once and malformed payloads to be rejected. Production IPC behavior is unchanged.
+- Source formatting and whitespace checks only for this correction; GitHub rerun and combined installer remain pending. No local compilation or unit-test execution.
+
 ## 2026-11-06T01:42:01-05:00 — Strict checks for file handoff and window transfers (local/uncommitted correction)
 
 - GitHub run 42175392691 reached both application and test source and reported three strict lint errors: nested transfer rollback conditions, fixed-size UTF-16 byte chunks and a cloned test slice. Applied the suggested equivalent forms without changing behavior.

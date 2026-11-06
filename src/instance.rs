@@ -953,18 +953,26 @@ mod windows {
             let sid = process_sid(unsafe { GetCurrentProcess() }).unwrap();
             let name = pipe_name(&lock, &sid).unwrap();
             let payload = encode(&[PathBuf::from(r"C:\once.txt")], [42; 16]).unwrap();
+            // Reconnect readiness is distinct from a protocol response, as in start_in's retry loop.
+            let request = |payload: &[u8]| {
+                let deadline = Instant::now() + START_TIMEOUT;
+                loop {
+                    let response = forward(&name, &sid, payload).expect("handoff response");
+                    if response != RETRY {
+                        break response;
+                    }
+                    assert!(Instant::now() < deadline, "handoff did not become ready");
+                    thread::sleep(RETRY_DELAY);
+                }
+            };
+            assert_eq!(request(&payload), ACCEPTED, "first request must queue");
             assert_eq!(
-                forward(&name, &sid, &payload).unwrap(),
-                ACCEPTED,
-                "first request must queue"
-            );
-            assert_eq!(
-                forward(&name, &sid, &payload).unwrap(),
+                request(&payload),
                 ACCEPTED,
                 "retry must acknowledge existing request"
             );
             assert_eq!(
-                forward(&name, &sid, b"bad payload").unwrap(),
+                request(b"bad payload"),
                 INVALID,
                 "malformed request must be rejected"
             );
