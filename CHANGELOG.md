@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-06T18:19:29-05:00 - Fixed-size clipboard UTF-16 chunks (local/uncommitted correction)
+
+- GitHub run 42310089491 passed formatting and reported one strict lint: the pinned Rust toolchain prefers fixed-size as_chunks over chunks_exact for clipboard UTF-16 pairs. Applied that equivalent array-based decoding form; clipboard validation and behavior are unchanged.
+- Local source formatting only. The combined shortcut/HTML regressions, release and installer remain pending on GitHub; no local compilation or unit tests.
+
 ## 2026-11-06T18:10:41-05:00 - Native formatted HTML paste in rich-text mode (local/uncommitted source)
 
 - Added Edit and native document context-menu Paste Formatted HTML. The option is enabled for editable rich-text documents and converts either Windows CF_HTML selections or explicitly copied Unicode HTML markup into native RTF. Ordinary Paste retains its current behavior. No web editor, webview or external office converter is added.
