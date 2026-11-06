@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-06T17:19:12-05:00 - Select All excludes RichEdit's implicit paragraph from text operations (local/uncommitted fix)
+
+- GitHub run 42302577247 passed formatting and strict diagnostics, and 149 of 151 tests. Every catalog binding passed through the real native message handler. Immediate Select All and Ctrl+Shift+End checks exposed that RichEdit reports its implicit final paragraph at text length + 1; passing that raw range to line-editing planners could reject valid selections.
+- Clamp exported selections to actual text length, retain raw native ranges for formatting/printing internals, and exclude the implicit marker from selected plain text. Added empty, Unicode/emoji and trailing-newline regressions exercising Select All, selected text, line comments and undo.
+- Local validation is source formatting and whitespace only. The corrected selection/typing/navigation regressions and combined installer remain pending on GitHub; no local compilation or unit-test execution.
+
 ## 2026-11-06T17:09:44-05:00 - GPUI Fast shortcut cancellation API (local/uncommitted correction)
 
 - GitHub run 42301600686 passed formatting, then reported that prevent_default belongs to Window, not Context, in the selected GPUI Fast API. Corrected the document-window and menu keyboard handlers to call the Window method. The shortcut feature set is unchanged.

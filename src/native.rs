@@ -775,7 +775,9 @@ impl NativeEditor {
     }
     pub fn selection(&self) -> Range<usize> {
         let range = self.native_selection();
-        range.min.max(0) as usize..range.max.max(0) as usize
+        let length = self.text_length();
+        // RichEdit can select its implicit final paragraph marker, beyond the exported text.
+        (range.min.max(0) as usize).min(length)..(range.max.max(0) as usize).min(length)
     }
     pub fn select_range(&self, range: Range<usize>) -> Result<()> {
         ensure!(
@@ -797,8 +799,11 @@ impl NativeEditor {
             copied >= 0 && copied as usize <= len,
             "Windows could not read the selected text"
         );
+        let content_length = self
+            .text_length()
+            .saturating_sub(selection.min.max(0) as usize);
         Ok(normalize_newlines(&String::from_utf16_lossy(
-            &buffer[..copied as usize],
+            &buffer[..(copied as usize).min(content_length)],
         )))
     }
     pub fn execute(&self, command: EditCommand) -> Result<()> {
@@ -2846,6 +2851,34 @@ mod tests {
             },
         );
         assert_eq!(editor.selection(), 0..7);
+    }
+    #[test]
+    fn select_all_exports_only_user_text_and_supports_line_editing() {
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        for text in ["", "original", "caf\u{e9} \u{1f600}", "one\ntwo\n"] {
+            editor.set_text(text).expect("fixture text");
+            editor.execute(EditCommand::SelectAll).expect("select all");
+            assert_eq!(
+                editor.selection(),
+                0..text.encode_utf16().count(),
+                "{text:?}"
+            );
+            assert_eq!(editor.selected_text().expect("selected text"), text);
+            let edit = crate::editing::plan(
+                text,
+                editor.selection(),
+                crate::editing::LineAction::AddComment,
+                "//",
+            )
+            .expect("selection fits exported text")
+            .expect("comment edit");
+            let expected = edit.replacement.clone();
+            editor.edit_lines(edit).expect("comment selected lines");
+            assert_eq!(editor.text().expect("commented text"), expected);
+            editor.execute(EditCommand::Undo).expect("undo comments");
+            assert_eq!(editor.text().expect("original text"), text);
+        }
     }
     #[test]
     fn native_shortcuts_fallback_once_and_follow_transferred_documents() {
