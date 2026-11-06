@@ -122,8 +122,8 @@ pub fn decode(bytes: &[u8]) -> Result<String> {
         text.is_char_boundary(start) && text.is_char_boundary(end),
         "Clipboard HTML splits a UTF-8 character."
     );
-    match (headers.get("StartSelection"), headers.get("EndSelection")) {
-        (None, None) => {}
+    let selection = match (headers.get("StartSelection"), headers.get("EndSelection")) {
+        (None, None) => None,
         (Some(selection_start), Some(selection_end)) => {
             let selection_start = offset(selection_start)?;
             let selection_end = offset(selection_end)?;
@@ -135,12 +135,15 @@ pub fn decode(bytes: &[u8]) -> Result<String> {
                     && text.is_char_boundary(selection_end),
                 "Clipboard HTML has an invalid selection range."
             );
+            Some((selection_start, selection_end))
         }
         _ => anyhow::bail!("Clipboard HTML has an incomplete selection range."),
-    }
-    let fragment = &text[start..end];
+    };
+    let (selected_start, selected_end) = selection.unwrap_or((start, end));
+    let fragment = &text[selected_start..selected_end];
     match (field("StartHTML")?, field("EndHTML")?) {
-        ("-1", "-1") => Ok(fragment.into()),
+        ("-1", "-1") if selected_start == start => Ok(fragment.into()),
+        ("-1", "-1") => with_ancestors(&text[start..selected_start], fragment),
         ("-1", _) | (_, "-1") => anyhow::bail!("Clipboard HTML has an incomplete context range."),
         (html_start, html_end) => {
             let html_start = offset(html_start)?;
@@ -154,7 +157,7 @@ pub fn decode(bytes: &[u8]) -> Result<String> {
                     && text.is_char_boundary(html_end),
                 "Clipboard HTML has an invalid context range."
             );
-            with_ancestors(&text[html_start..start], fragment)
+            with_ancestors(&text[html_start..selected_start], fragment)
         }
     }
 }
@@ -377,6 +380,33 @@ mod tests {
         assert!(decode(&vec![b'x'; MAX_BYTES + 1]).is_err());
     }
 
+    #[test]
+    fn optional_selection_limits_paste_to_exact_copied_text_with_formatting() {
+        for context in [true, false] {
+            let template = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\nStartSelection:0000000000\r\nEndSelection:0000000000\r\n";
+            let body = "<p>outside <b>selected \u{1f600}</b> outside</p>";
+            let start = template.len();
+            let end = start + body.len();
+            let selection_start = start + body.find("selected").expect("selection");
+            let selection_end = selection_start + "selected \u{1f600}".len();
+            let html_start = if context {
+                format!("{start:010}")
+            } else {
+                format!("{:>10}", "-1")
+            };
+            let html_end = if context {
+                format!("{end:010}")
+            } else {
+                format!("{:>10}", "-1")
+            };
+            let payload = format!(
+                "Version:1.0\r\nStartHTML:{html_start}\r\nEndHTML:{html_end}\r\nStartFragment:{start:010}\r\nEndFragment:{end:010}\r\nStartSelection:{selection_start:010}\r\nEndSelection:{selection_end:010}\r\n{body}"
+            );
+            let html = decode(payload.as_bytes()).expect("precise selection");
+            assert!(html.contains("<b>selected \u{1f600}</b>"), "{html}");
+            assert!(!html.contains("outside"), "{html}");
+        }
+    }
     #[test]
     fn offsets_do_not_fall_back_to_fragment_comments() {
         let data = payload(

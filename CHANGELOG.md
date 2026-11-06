@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-06T18:26:20-05:00 - Exact selections inside HTML clipboard fragments (local/uncommitted safeguard)
+
+- Honor optional StartSelection/EndSelection offsets when a clipboard producer supplies a larger valid HTML fragment around the actual copied selection. Preserve ancestor formatting while excluding surrounding fragment text, including fragments without a separate HTML context. Added a Unicode/formatting regression for both context shapes.
+- GitHub run 42311137986 passed formatting, strict diagnostics and its full regression step, including real Windows HTML/Unicode clipboard formats, native paste styles/undo and the completed shortcut fixes. Its release is superseded by this final selection-boundary safeguard; no release result is claimed for it here. Local source formatting/whitespace only for this correction. The final combined GitHub regression/build/installer remains pending; no local compilation or unit tests.
+
 ## 2026-11-06T18:19:29-05:00 - Fixed-size clipboard UTF-16 chunks (local/uncommitted correction)
 
 - GitHub run 42310089491 passed formatting and reported one strict lint: the pinned Rust toolchain prefers fixed-size as_chunks over chunks_exact for clipboard UTF-16 pairs. Applied that equivalent array-based decoding form; clipboard validation and behavior are unchanged.
