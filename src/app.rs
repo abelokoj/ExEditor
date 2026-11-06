@@ -43,6 +43,7 @@ pub enum MenuKind {
     Lists,
     View,
     Window,
+    MoveTabs(TransferScope),
     Help,
     Fonts,
     Sizes,
@@ -52,6 +53,11 @@ pub enum MenuKind {
     InterfaceSize,
     CodeTheme,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferScope {
+    CurrentTab,
+    AllTabs,
+}
 #[derive(Clone, Debug)]
 pub enum Command {
     New,
@@ -60,6 +66,10 @@ pub enum Command {
     NextTab(bool),
     ToggleTabs,
     CloseWindow,
+    MoveTabs {
+        target: EntityId,
+        scope: TransferScope,
+    },
     Open,
     OpenBundle,
     OpenPath(PathBuf),
@@ -378,6 +388,16 @@ fn confirm(title: &str, message: &str) -> bool {
         == MessageDialogResult::Ok
 }
 
+fn native_parent(window: &Window) -> Result<isize> {
+    match HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("Native window handle: {error:?}"))?
+        .as_raw()
+    {
+        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
+        _ => bail!("A Windows document window is required"),
+    }
+}
+
 pub fn open_document(path: Option<PathBuf>, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
@@ -394,6 +414,122 @@ pub fn open_document(path: Option<PathBuf>, cx: &mut App) {
     if let Err(error) = result {
         show_error(&error);
     }
+}
+
+/// Routes launch requests into existing document windows instead of starting more windows.
+pub fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
+    let editors = cx
+        .try_global::<OpenEditors>()
+        .map(|open| open.0.clone())
+        .unwrap_or_default();
+    if paths.is_empty() {
+        if let Some((handle, editor)) = editors
+            .iter()
+            .rev()
+            .find(|(_, editor)| editor.upgrade().is_some())
+        {
+            let _ = handle.update(cx, |_, window, cx| {
+                window.activate_window();
+                let _ = editor.update(cx, |view, _| {
+                    if let Some(native) = &view.doc.native {
+                        native.focus();
+                    }
+                });
+            });
+            cx.activate(true);
+        } else {
+            open_document(None, cx);
+        }
+        return;
+    }
+    for path in paths {
+        let editors = cx
+            .try_global::<OpenEditors>()
+            .map(|open| open.0.clone())
+            .unwrap_or_default();
+        let existing = editors.iter().find_map(|(handle, editor)| {
+            let view = editor.upgrade()?;
+            let index = view.read(cx).tab_for_path(&path)?;
+            Some((*handle, editor.clone(), index))
+        });
+        if let Some((handle, editor, index)) = existing {
+            let result = handle.update(cx, |_, window, cx| {
+                editor.update(cx, |view, cx| {
+                    view.switch_tab(index)?;
+                    window.activate_window();
+                    cx.notify();
+                    Ok::<_, anyhow::Error>(())
+                })?
+            });
+            if let Err(error) = result.and_then(|result| result) {
+                show_error(&error);
+            }
+        } else if let Some((handle, editor)) = editors
+            .iter()
+            .rev()
+            .find(|(_, editor)| editor.upgrade().is_some())
+        {
+            let result = handle.update(cx, |_, window, cx| {
+                editor.update(cx, |view, cx| {
+                    view.open_file_tab(&path, window, cx)?;
+                    window.activate_window();
+                    cx.notify();
+                    Ok::<_, anyhow::Error>(())
+                })?
+            });
+            if let Err(error) = result.and_then(|result| result) {
+                show_error(&error);
+            }
+        } else {
+            open_document(Some(path), cx);
+        }
+    }
+    cx.activate(true);
+}
+
+struct FileRequests {
+    instance: Rc<crate::instance::Instance>,
+    pending: Vec<Vec<PathBuf>>,
+}
+impl Global for FileRequests {}
+
+pub fn listen_for_files(instance: Rc<crate::instance::Instance>, cx: &mut App) {
+    cx.set_global(FileRequests {
+        instance,
+        pending: Vec::new(),
+    });
+}
+fn dispatch_file_requests(cx: &mut App) {
+    let pending = std::mem::take(&mut cx.global_mut::<FileRequests>().pending);
+    for paths in pending {
+        open_paths(paths, cx);
+    }
+}
+fn prepare_instance_exit(cx: &mut App) -> bool {
+    let Some(instance) = cx
+        .try_global::<FileRequests>()
+        .map(|requests| requests.instance.clone())
+    else {
+        return true;
+    };
+    let received = instance.stop_accepting();
+    let requests = cx.global_mut::<FileRequests>();
+    requests.pending.extend(received);
+    if requests.pending.is_empty() {
+        return true;
+    }
+    instance.resume_accepting();
+    cx.defer(dispatch_file_requests);
+    false
+}
+fn last_document_window(cx: &App) -> bool {
+    cx.try_global::<OpenEditors>().is_none_or(|open| {
+        open.0
+            .iter()
+            .filter(|(_, editor)| editor.upgrade().is_some())
+            .count()
+            <= 1
+    })
 }
 
 /// Restores protected buffers automatically, even when startup also opens files.
@@ -730,19 +866,26 @@ impl EditorWindow {
         editor.mark_modified();
         Ok(())
     }
-    fn read_file(&mut self, path: &Path) -> Result<()> {
+    fn load_file(&self, path: &Path) -> Result<document::LoadedDocument> {
         let format = DocumentFormat::from_path(path)?;
         ensure!(
             document::supports_format(format),
             "This document format is not supported. Save it as RTF or DOCX in the originating application."
         );
-        let loaded = document::load(path).or_else(|error| {
+        document::load(path).or_else(|error| {
             if format.is_plain() && self.prefs.default_encoding != TextEncoding::Utf8 {
                 document::load_with_encoding(path, self.prefs.default_encoding)
             } else {
                 Err(error)
             }
-        })?;
+        })
+    }
+    fn read_file(&mut self, path: &Path) -> Result<()> {
+        let loaded = self.load_file(path)?;
+        self.load_document(loaded)
+    }
+    fn load_document(&mut self, loaded: document::LoadedDocument) -> Result<()> {
+        let markdown = is_markdown(&loaded.path);
         self.doc.markdown_source = None;
         self.editor()?.set_read_only(self.doc.read_only);
         self.editor()?
@@ -772,7 +915,7 @@ impl EditorWindow {
         self.doc.proofing.invalidate();
         self.doc.look = None;
         if let DocumentContent::Plain(source) = loaded.content
-            && is_markdown(path)
+            && markdown
             && let Err(error) = self.show_markdown(source)
         {
             show_error(&error.context("The Markdown is shown as source text"));
@@ -781,6 +924,14 @@ impl EditorWindow {
         Ok(())
     }
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(requests) = cx.try_global::<FileRequests>() {
+            let pending = requests.instance.take_requests();
+            if !pending.is_empty() {
+                // Keep staged requests visible to the close guard until the entity update ends.
+                cx.global_mut::<FileRequests>().pending.extend(pending);
+                App::defer(cx, dispatch_file_requests);
+            }
+        }
         while let Some(command) = { self.queue.borrow_mut().pop_front() } {
             self.command(command, window, cx);
         }
@@ -796,6 +947,17 @@ impl EditorWindow {
             return;
         };
         let active = window.is_window_active();
+        if active && !self.was_active {
+            let own = cx.entity().entity_id();
+            let editors = &mut cx.global_mut::<OpenEditors>().0;
+            if let Some(index) = editors
+                .iter()
+                .position(|(_, editor)| editor.entity_id() == own)
+            {
+                let entry = editors.remove(index);
+                editors.push(entry);
+            }
+        }
         // Another window may have changed a preference.
         if active
             && !self.was_active
@@ -1156,7 +1318,7 @@ impl EditorWindow {
         }
         Ok(saved)
     }
-    fn confirm_close(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+    fn confirm_close(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         let result = self.doc.persist_buffer().and_then(|()| {
             for tab in self.tabs.iter_mut().flatten() {
                 tab.persist_buffer()?;
@@ -1164,13 +1326,15 @@ impl EditorWindow {
             Ok(())
         });
         match result {
-            Ok(()) => true,
-            Err(error) => confirm(
-                "Unsaved changes could not be protected",
-                &format!(
-                    "{error:#}\n\nClose anyway and lose the unprotected changes? Choose Cancel to keep the window open and save the document."
-                ),
-            ),
+            Ok(()) => !last_document_window(cx) || prepare_instance_exit(cx),
+            Err(error) => {
+                confirm(
+                    "Unsaved changes could not be protected",
+                    &format!(
+                        "{error:#}\n\nClose anyway and lose the unprotected changes? Choose Cancel to keep the window open and save the document."
+                    ),
+                ) && (!last_document_window(cx) || prepare_instance_exit(cx))
+            }
         }
     }
     fn switch_tab(&mut self, index: usize) -> Result<()> {
@@ -1199,13 +1363,7 @@ impl EditorWindow {
         Ok(())
     }
     fn new_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
-        let hwnd = match HasWindowHandle::window_handle(window)
-            .map_err(|error| anyhow::anyhow!("Native window handle: {error:?}"))?
-            .as_raw()
-        {
-            RawWindowHandle::Win32(handle) => handle.hwnd.get(),
-            _ => bail!("A Windows document window is required"),
-        };
+        let hwnd = native_parent(window)?;
         let doc = DocumentTab::new(&self.prefs, hwnd);
         if let Some(editor) = &doc.native {
             editor.set_visible(false);
@@ -1213,6 +1371,152 @@ impl EditorWindow {
         self.tabs.push(Some(doc));
         self.show_tabs = true;
         self.switch_tab(self.tabs.len() - 1)
+    }
+    fn tab_for_path(&self, path: &Path) -> Option<usize> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        self.tabs.iter().enumerate().find_map(|(index, tab)| {
+            let tab = if index == self.active_tab {
+                &self.doc
+            } else {
+                tab.as_ref()?
+            };
+            (tab.path
+                .as_ref()
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .as_ref()
+                == Some(&canonical))
+            .then_some(index)
+        })
+    }
+    fn open_file_tab(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if let Some(index) = self.tab_for_path(path) {
+            return self.switch_tab(index);
+        }
+        // Verify that the path can be read before creating a new tab or touching existing text.
+        let loaded = self.load_file(path)?;
+        self.new_tab(window, cx)?;
+        self.load_document(loaded)
+    }
+    fn take_transfer(&mut self, scope: TransferScope) -> (Vec<DocumentTab>, usize) {
+        if scope == TransferScope::AllTabs || self.tabs.len() == 1 {
+            let current = std::mem::replace(&mut self.doc, DocumentTab::vacant(&self.prefs));
+            let active = self.active_tab;
+            self.tabs[active] = Some(current);
+            let tabs = std::mem::replace(&mut self.tabs, vec![None]);
+            self.active_tab = 0;
+            return (tabs.into_iter().flatten().collect(), active);
+        }
+        let next = if self.active_tab == 0 {
+            1
+        } else {
+            self.active_tab - 1
+        };
+        let replacement = self.tabs[next]
+            .take()
+            .expect("inactive tabs own their documents");
+        let moved = std::mem::replace(&mut self.doc, replacement);
+        let old = self.active_tab;
+        self.tabs.remove(old);
+        self.active_tab = if next > old { next - 1 } else { next };
+        if let Some(editor) = &self.doc.native {
+            editor.set_visible(true);
+            editor.focus();
+        }
+        (vec![moved], 0)
+    }
+    fn receive_transfer(&mut self, mut incoming: Vec<DocumentTab>, active: usize) {
+        let next = incoming.remove(active);
+        if let Some(editor) = &self.doc.native {
+            editor.set_visible(false);
+        }
+        let previous = std::mem::replace(&mut self.doc, next);
+        self.tabs[self.active_tab] = Some(previous);
+        self.active_tab = self.tabs.len() + active;
+        for (index, tab) in incoming.into_iter().enumerate() {
+            if index == active {
+                self.tabs.push(None);
+            }
+            self.tabs.push(Some(tab));
+        }
+        if self.tabs.len() == self.active_tab {
+            self.tabs.push(None);
+        }
+        self.show_tabs = true;
+        self.tab_scroll.scroll_to_item(self.active_tab);
+        if let Some(editor) = &self.doc.native {
+            editor.set_visible(true);
+            editor.focus();
+        }
+    }
+    fn move_tabs(
+        &mut self,
+        target: EntityId,
+        scope: TransferScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        ensure!(
+            target != cx.entity().entity_id(),
+            "Choose another document window"
+        );
+        let (handle, destination) = cx
+            .global::<OpenEditors>()
+            .0
+            .iter()
+            .find(|(_, editor)| editor.entity_id() == target && editor.upgrade().is_some())
+            .cloned()
+            .context("The destination window has closed; your documents have not moved")?;
+        let source_owner = native_parent(window)?;
+        let close_source = scope == TransferScope::AllTabs || self.tabs.len() == 1;
+        handle.update(cx, |_, target_window, cx| {
+            destination.update(cx, |destination, cx| {
+                destination.doc.queue_buffer()?;
+                let owner = native_parent(target_window)?;
+                let moving: Vec<_> = if scope == TransferScope::AllTabs {
+                    self.tabs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, tab)| {
+                            if index == self.active_tab {
+                                &self.doc
+                            } else {
+                                tab.as_ref().expect("inactive tab")
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![&self.doc]
+                };
+                let mut moved: Vec<&DocumentTab> = Vec::new();
+                for tab in moving {
+                    if let Err(error) = tab.reparent(owner) {
+                        for previous in moved {
+                            if let Err(rollback) = previous.reparent(source_owner) {
+                                show_error(&rollback);
+                            }
+                        }
+                        return Err(error);
+                    }
+                    moved.push(tab);
+                }
+                drop(moved);
+                let (incoming, active) = self.take_transfer(scope);
+                destination.receive_transfer(incoming, active);
+                target_window.activate_window();
+                cx.notify();
+                Ok::<_, anyhow::Error>(())
+            })?
+        })??;
+        if close_source {
+            window.remove_window();
+        }
+        cx.activate(true);
+        Ok(())
     }
     fn close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         if !self.confirm_current()? {
@@ -1226,7 +1530,9 @@ impl EditorWindow {
             }
         }
         if self.tabs.len() == 1 {
-            window.remove_window();
+            if !last_document_window(cx) || prepare_instance_exit(cx) {
+                window.remove_window();
+            }
             return Ok(());
         }
         let next = if self.active_tab == 0 {
@@ -1265,7 +1571,7 @@ impl EditorWindow {
         match command {
             Command::ReopenClosed => {
                 if let Some(path) = cx.global_mut::<RecentlyClosed>().0.pop() {
-                    open_document(Some(path), cx);
+                    self.open_file_tab(&path, window, cx)?;
                 }
             }
             Command::Fullscreen => window.toggle_fullscreen(),
@@ -1419,7 +1725,7 @@ impl EditorWindow {
                     MenuKind::View,
                     MenuKind::Window,
                 ] {
-                    entries.extend(self.menu_entries(menu)?.into_iter().filter(|entry| {
+                    entries.extend(self.menu_entries(menu, cx)?.into_iter().filter(|entry| {
                         entry.enabled
                             && entry
                                 .command
@@ -1491,6 +1797,7 @@ impl EditorWindow {
                 self.switch_tab(index)?;
             }
             Command::ToggleTabs => self.show_tabs = !self.show_tabs,
+            Command::MoveTabs { target, scope } => self.move_tabs(target, scope, window, cx)?,
             Command::CloseWindow => {
                 if self.confirm_close(window, cx) {
                     window.remove_window();
@@ -1510,7 +1817,7 @@ impl EditorWindow {
                     .pick_files()
                 {
                     for path in paths {
-                        open_document(Some(path), cx);
+                        self.open_file_tab(&path, window, cx)?;
                     }
                 }
             }
@@ -1519,10 +1826,10 @@ impl EditorWindow {
                     .set_title("Open Rich Text with Attachments")
                     .pick_folder()
                 {
-                    open_document(Some(path), cx);
+                    self.open_file_tab(&path, window, cx)?;
                 }
             }
-            Command::OpenPath(path) => open_document(Some(path), cx),
+            Command::OpenPath(path) => self.open_file_tab(&path, window, cx)?,
             Command::Save => {
                 self.save(false)?;
             }
@@ -1630,7 +1937,9 @@ impl EditorWindow {
                         return Ok(());
                     }
                 }
-                cx.quit();
+                if prepare_instance_exit(cx) {
+                    cx.quit();
+                }
             }
             Command::Print => self.editor()?.print(&self.doc.page)?,
             Command::Pdf => {
@@ -2106,7 +2415,7 @@ impl EditorWindow {
                 }
             }
             Command::Menu(kind) => {
-                let entries = self.menu_entries(kind)?;
+                let entries = self.menu_entries(kind, cx)?;
                 self.show_menu(entries, window, cx);
             }
             Command::Submit(kind, values) => self.submit(kind, values, window, cx)?,
@@ -2361,7 +2670,7 @@ impl EditorWindow {
         self.editor()?.focus();
         Ok(())
     }
-    fn menu_entries(&self, kind: MenuKind) -> Result<Vec<MenuEntry>> {
+    fn menu_entries(&self, kind: MenuKind, cx: &Context<Self>) -> Result<Vec<MenuEntry>> {
         use Command as C;
         use MenuKind as M;
         let item = MenuEntry::item;
@@ -2644,9 +2953,49 @@ impl EditorWindow {
                 .collect(),
             M::Window => vec![
                 item("New Window", "Ctrl+Shift+N", C::New),
+                item(
+                    "Move Tab to Window",
+                    "›",
+                    C::Menu(M::MoveTabs(TransferScope::CurrentTab)),
+                ),
+                item(
+                    "Move All Tabs to Window",
+                    "›",
+                    C::Menu(M::MoveTabs(TransferScope::AllTabs)),
+                ),
                 sep(),
                 item(&self.name(), "", C::GoToSelection),
             ],
+            M::MoveTabs(scope) => {
+                let own = cx.entity().entity_id();
+                let mut entries: Vec<_> = cx
+                    .global::<OpenEditors>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, (_, editor))| {
+                        if editor.entity_id() == own {
+                            return None;
+                        }
+                        let target = editor.upgrade()?;
+                        let view = target.read(cx);
+                        Some(item(
+                            &format!("{} — Window {}", view.name(), index + 1),
+                            "",
+                            C::MoveTabs {
+                                target: editor.entity_id(),
+                                scope,
+                            },
+                        ))
+                    })
+                    .collect();
+                if entries.is_empty() {
+                    let mut entry = item("No other document windows", "", C::GoToSelection);
+                    entry.enabled = false;
+                    entries.push(entry);
+                }
+                entries
+            }
             M::Help => vec![
                 item("Command Palette…", "F1 / Ctrl+Shift+P", C::Palette),
                 item("Keyboard Shortcuts…", "Ctrl+K Ctrl+S", C::KeyboardHelp),
@@ -3208,6 +3557,17 @@ impl DocumentTab {
         };
         Self {
             native,
+            recovery_id,
+            buffer_lease: buffer_lease.map(std::sync::Arc::new),
+            untitled_name: crate::names::next_name(&prefs.untitled_prefix),
+            retain_buffer: true,
+            ..Self::vacant(prefs)
+        }
+    }
+    // An emptied transfer source is removed before rendering; this owns no native control or buffer.
+    fn vacant(prefs: &Preferences) -> Self {
+        Self {
+            native: None,
             path: None,
             format: if prefs.rich_text {
                 DocumentFormat::Rtf
@@ -3224,15 +3584,15 @@ impl DocumentTab {
             ruler: prefs.show_ruler,
             wrap_page: prefs.wrap_to_page,
             word_wrap: true,
-            untitled_name: crate::names::next_name(&prefs.untitled_prefix),
+            untitled_name: String::new(),
             zoom: 100,
             formatting: FormatState::default(),
             page: PageSettings::default(),
-            recovery_id,
-            buffer_lease: buffer_lease.map(std::sync::Arc::new),
+            recovery_id: String::new(),
+            buffer_lease: None,
             pending_buffer: None,
             buffered: false,
-            retain_buffer: true,
+            retain_buffer: false,
             buffer_error_reported: false,
             restored_buffer: false,
             last_recovery: Instant::now(),
@@ -3248,6 +3608,23 @@ impl DocumentTab {
             markdown_source: None,
             proofing: crate::language_tools::CheckState::default(),
         }
+    }
+    fn reparent(&self, owner: isize) -> Result<()> {
+        let native = self
+            .native
+            .as_ref()
+            .context("The document editor is unavailable")?;
+        let previous = native.owner();
+        native.reparent(owner)?;
+        if let Some(source) = &self.markdown_source {
+            if let Err(error) = source.reparent(owner) {
+                if let Err(rollback) = native.reparent(previous) {
+                    show_error(&rollback);
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
     }
     fn restore(prefs: &Preferences, parent: isize, buffer: RestoredBuffer) -> Result<Self> {
         let mut tab = Self::new(prefs, parent);
@@ -3395,5 +3772,128 @@ impl DocumentTab {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.untitled_name.clone())
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::{DocumentTab, EditorWindow, TransferScope};
+    use crate::{preferences::Preferences, services::Speech};
+    use gpui_kit::{ScrollHandle, Task};
+
+    fn window_with_tabs(names: &[&str], active: usize) -> EditorWindow {
+        let prefs = Preferences::default();
+        let mut tabs: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let mut tab = DocumentTab::vacant(&prefs);
+                tab.untitled_name = (*name).into();
+                tab.recovery_id = (*name).into();
+                tab.last_text = format!("unsaved {name} café 😀");
+                tab.dirty = true;
+                Some(tab)
+            })
+            .collect();
+        let doc = tabs[active].take().expect("active document");
+        EditorWindow {
+            doc,
+            tabs,
+            active_tab: active,
+            show_tabs: true,
+            queue: Default::default(),
+            prefs,
+            speech: Speech::default(),
+            was_active: false,
+            preview_theme: None,
+            tab_scroll: ScrollHandle::new(),
+            chord: None,
+            _poll: Task::ready(()),
+        }
+    }
+    fn names(window: &EditorWindow) -> Vec<String> {
+        assert_eq!(window.tabs.iter().filter(|tab| tab.is_none()).count(), 1);
+        window
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                if index == window.active_tab {
+                    &window.doc
+                } else {
+                    tab.as_ref().expect("inactive document")
+                }
+                .recovery_id
+                .clone()
+            })
+            .collect()
+    }
+    #[test]
+    fn moving_current_tab_keeps_other_documents_and_buffer_identity() {
+        for active in 0..3 {
+            let mut source = window_with_tabs(&["one", "two", "three"], active);
+            let mut target = window_with_tabs(&["target one", "target two"], 1);
+            let original = source.doc.last_text.clone();
+            let id = source.doc.recovery_id.clone();
+            let (moved, index) = source.take_transfer(TransferScope::CurrentTab);
+            target.receive_transfer(moved, index);
+            let remaining: Vec<_> = ["one", "two", "three"]
+                .into_iter()
+                .filter(|name| *name != id)
+                .map(String::from)
+                .collect();
+            assert_eq!(names(&source), remaining);
+            assert_eq!(
+                names(&target),
+                vec!["target one".to_owned(), "target two".to_owned(), id]
+            );
+            assert_eq!(target.doc.last_text, original);
+            assert!(target.doc.dirty);
+            assert_eq!(target.active_tab, 2);
+        }
+    }
+    #[test]
+    fn moving_whole_window_preserves_tab_order_and_selected_document() {
+        for active in 0..3 {
+            let mut source = window_with_tabs(&["one", "two", "three"], active);
+            let mut target = window_with_tabs(&["target"], 0);
+            let (moved, selected) = source.take_transfer(TransferScope::AllTabs);
+            target.receive_transfer(moved, selected);
+            assert_eq!(names(&target), ["target", "one", "two", "three"]);
+            assert_eq!(target.active_tab, active + 1);
+            assert!(source.doc.native.is_none());
+            assert!(!source.doc.retain_buffer);
+            assert!(source.doc.recovery_id.is_empty());
+        }
+    }
+    #[test]
+    fn moving_last_tab_leaves_only_an_inert_source_placeholder() {
+        let mut source = window_with_tabs(&["only"], 0);
+        let (moved, selected) = source.take_transfer(TransferScope::CurrentTab);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].recovery_id, "only");
+        assert_eq!(selected, 0);
+        assert!(!source.doc.retain_buffer);
+        assert_eq!(source.tabs.len(), 1);
+        assert!(source.tabs[0].is_none());
+    }
+    #[test]
+    fn reopening_same_canonical_file_selects_its_existing_dirty_tab() {
+        let directory = tempfile::tempdir().expect("isolated directory");
+        let file = directory.path().join("notes café.md");
+        std::fs::write(&file, "original on disk").expect("file");
+        let mut window = window_with_tabs(&["first", "edited file"], 0);
+        let edited = window.tabs[1].as_mut().expect("inactive file");
+        edited.path = Some(file.clone());
+        let original = edited.last_text.clone();
+        assert_eq!(
+            window.tab_for_path(&directory.path().join(".").join("notes café.md")),
+            Some(1)
+        );
+        assert_eq!(
+            window.tabs[1].as_ref().expect("existing buffer").last_text,
+            original
+        );
+        assert!(window.tabs[1].as_ref().expect("existing buffer").dirty);
+        assert_eq!(window.tabs.len(), 2);
     }
 }

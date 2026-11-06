@@ -84,6 +84,29 @@ the earlier blank writing area was addressed by hosting RichEdit above GPUI; cur
 interactive behavior still needs user feedback. Unsaved-buffer snapshots are atomic and flushed, but an
 abrupt crash can still lose edits made since the most recent editing checkpoint.
 
+## Tabs and windows
+
+Opening files through **Open with ExEditor** or **Edit with ExEditor** hands them to
+an already running ExEditor and opens them as tabs in its most recently active
+document window. Selecting multiple files opens them together. Reopening a file
+already present in any document window selects its existing tab and preserves its
+unsaved edits. File > Open, recent files and RTFD folder opens also use tabs.
+
+Use **Window > New Window** when a separate document window is wanted. Under
+**Window > Move Tab to Window**, choose another open document window to move the
+current tab there. **Window > Move All Tabs to Window** moves the current window's
+whole tab group into the chosen window, preserving its order and selected document.
+An emptied source window closes. Moves keep the live native document controls,
+including undo history, selection, formatting, unsaved changes and recovery ownership.
+The commands apply to document windows in the same running ExEditor session.
+
+The file-open handoff is scoped to the current Windows user and application-data
+folder; a separate EXEDITOR_DATA_DIR creates an independent session for testing.
+It uses a restricted local named pipe, bounded Unicode requests and retry IDs.
+Normal shutdown defers closing when accepted file requests still need handling.
+An abrupt process crash after acknowledging a request can interrupt that handoff;
+the original file on disk remains intact and can be opened again.
+
 ## Editing shortcuts and document names
 
 ExEditor supports familiar VS Code editing shortcuts, including moving/copying lines,

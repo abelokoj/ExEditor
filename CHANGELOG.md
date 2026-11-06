@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-06T01:33:11-05:00 — File-manager tabs and cross-window tab moves (local/uncommitted source)
+
+- File-manager launches now elect or contact one ExEditor process per user/application-data folder and forward a bounded batch of absolute UTF-16 paths over a user-restricted local named pipe. Retry identities prevent duplicate delivery; an empty launch activates the existing editor. Normal last-window/quit paths check both queued and staged requests before closing.
+- External opens target the most recently active document window, and reopening an existing canonical file selects its current tab without reloading unsaved edits. Ordinary Open, recent-file and RTFD folder commands also open tabs; explicit New Window retains its separate-window behavior.
+- Added Window > Move Tab to Window and Move All Tabs to Window destination pickers using stable window identities. Transfers keep each live native document, Markdown source/preview pair, selection, undo history, queued recovery work and recovery lease. Tab order/selection are preserved and an emptied source window closes. Failed owner attachment retains the source and rolls back earlier attachments.
+- Added regression source for native rich-text/selection/undo survival after the original owner closes, rejected transfers, logical tab order/buffer identity, canonical-file reuse, concurrent launches, Unicode/unpaired-surrogate payloads, malformed messages, queue bounds, shutdown/re-election and retry deduplication.
+- The preceding GPUI Fast migration is committed as ba0748daafcacbbea23579a04c34d69ed7a926fd and GitHub run [42170660470](https://github.com/abelokoj/ExEditor/actions/runs/42170660470) completed successfully: formatting, strict diagnostics, regression tests, release packaging and installer integration checks passed. These additional tab/window changes have source formatting, manifest-resolution and whitespace checks only so far; their GitHub build/tests are pending. No local compilation or unit tests.
+- Scope remains the current Windows application. NSH/editor-port work is deferred. Moves apply within one running session; earlier binaries without the handoff protocol cannot join it. A primary crash after IPC acknowledgement can interrupt a queued open request; original files are not modified by forwarding.
+
 ## 2026-11-06T00:45:43-05:00 — GPUI Fast throughout the existing interface (local/uncommitted)
 
 - Enabled GPUI Kit's built-in gpui-fast dependency feature. Kit selects the Fast core and platform and propagates the same backend to Base, Component and bundled assets; all existing application imports already use Kit's facade.

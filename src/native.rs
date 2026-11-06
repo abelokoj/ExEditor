@@ -19,7 +19,7 @@ use windows::{
     core::{IUnknown, Interface},
 };
 use windows_sys::Win32::{
-    Foundation::{GlobalFree, HWND, POINT, RECT},
+    Foundation::{GetLastError, GlobalFree, HWND, POINT, RECT, SetLastError},
     Graphics::Gdi::{
         ClientToScreen, DeleteDC, GetDeviceCaps, GetStockObject, HDC, InvalidateRect, LOGPIXELSX,
         LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH,
@@ -305,7 +305,7 @@ struct NativeState {
     shortcuts: RefCell<VecDeque<String>>,
     alive: Cell<bool>,
     /// GPUI window that owns the document host.
-    owner: HWND,
+    owner: Cell<HWND>,
     /// Borderless owned popup that contains the RichEdit control.
     host: HWND,
     /// Editor rectangle in the owner's client pixels.
@@ -339,11 +339,12 @@ impl NativeState {
         let mut origin = POINT { x, y };
         // SAFETY: owner and host are live windows on this UI thread; origin is writable.
         unsafe {
-            if ClientToScreen(self.owner, &mut origin) == 0 {
+            if ClientToScreen(self.owner.get(), &mut origin) == 0 {
                 return;
             }
-            let shown =
-                self.visible.get() && IsWindowVisible(self.owner) != 0 && IsIconic(self.owner) == 0;
+            let shown = self.visible.get()
+                && IsWindowVisible(self.owner.get()) != 0
+                && IsIconic(self.owner.get()) == 0;
             let was_shown = IsWindowVisible(host) != 0;
             // Owned popups do not follow an owner that is hidden without minimizing.
             let flags = SWP_NOACTIVATE
@@ -455,7 +456,7 @@ impl NativeEditor {
         let state = Box::new(NativeState {
             shortcuts: RefCell::default(),
             alive: Cell::new(true),
-            owner,
+            owner: Cell::new(owner),
             host,
             bounds: Cell::new(None),
             visible: Cell::new(true),
@@ -515,6 +516,53 @@ impl NativeEditor {
         Ok(editor)
     }
     /// Places the editor over a rectangle given in the owner's client pixels.
+    pub fn owner(&self) -> isize {
+        self.state.owner.get() as isize
+    }
+    /// Moves the live control without replacing its document, selection or undo history.
+    pub fn reparent(&self, parent: isize) -> Result<()> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GWLP_HWNDPARENT, IsWindow, SetWindowLongPtrW,
+        };
+        let owner = parent as HWND;
+        let previous = self.state.owner.get();
+        // SAFETY: only queries the handles; mutation remains on this control's UI thread.
+        ensure!(
+            self.state.alive.get() && !owner.is_null() && unsafe { IsWindow(owner) } != 0,
+            "The destination document window is no longer available"
+        );
+        if owner == previous {
+            return Ok(());
+        }
+        let data = (&*self.state as *const NativeState) as usize;
+        // Install the new hook before releasing the old one, so failure leaves ownership intact.
+        // SAFETY: the stable boxed state and both windows belong to this UI thread.
+        unsafe {
+            ensure!(
+                SetWindowSubclass(owner, Some(owner_subclass), data, data) != 0,
+                "The destination window could not attach the document"
+            );
+            let visible = self.state.visible.get();
+            self.set_visible(false);
+            SetLastError(0);
+            let old_owner = SetWindowLongPtrW(self.state.host, GWLP_HWNDPARENT, parent);
+            let error = GetLastError();
+            if old_owner == 0 && error != 0 {
+                RemoveWindowSubclass(owner, Some(owner_subclass), data);
+                self.set_visible(visible);
+                bail!(
+                    "Moving the document window: {}",
+                    std::io::Error::from_raw_os_error(error as i32)
+                );
+            }
+            RemoveWindowSubclass(previous, Some(owner_subclass), data);
+            self.state.owner.set(owner);
+            // The destination's next layout supplies bounds in its own coordinate system.
+            self.state.bounds.set(None);
+            self.state.visible.set(visible);
+        }
+        Ok(())
+    }
     pub fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) {
         let next = (x, y, width.max(0), height.max(0));
         if self.state.alive.get() && self.state.bounds.get() != Some(next) {
@@ -1342,7 +1390,7 @@ impl NativeEditor {
     }
     /// Creates an independent, read-only view without disturbing this editor's undo state.
     pub fn preview(&self, rtf: &[u8]) -> Result<Self> {
-        let preview = Self::new(self.state.owner as isize)?;
+        let preview = Self::new(self.state.owner.get() as isize)?;
         preview.set_visible(false);
         preview.set_rtf(rtf)?;
         preview.set_read_only(true);
@@ -1456,7 +1504,7 @@ impl NativeEditor {
             editor: self.hwnd,
             dialog: PRINTDLGW {
                 lStructSize: size_of::<PRINTDLGW>() as u32,
-                hwndOwner: self.state.owner,
+                hwndOwner: self.state.owner.get(),
                 Flags: PD_RETURNDC | PD_USEDEVMODECOPIESANDCOLLATE,
                 nFromPage: 1,
                 nToPage: 1,
@@ -1835,7 +1883,7 @@ impl Drop for NativeEditor {
         // hook removes itself on WM_NCDESTROY, so removing it again is a no-op.
         // alive is cleared by WM_NCDESTROY if the owner destroyed the host first.
         unsafe {
-            RemoveWindowSubclass(self.state.owner, Some(owner_subclass), data);
+            RemoveWindowSubclass(self.state.owner.get(), Some(owner_subclass), data);
             if self.state.alive.get() {
                 RemoveWindowSubclass(self.hwnd, Some(editor_subclass), SUBCLASS_ID);
                 DestroyWindow(self.state.host);
@@ -2515,6 +2563,49 @@ mod tests {
             editor,
             _owner: owner,
         }
+    }
+    #[test]
+    fn moving_live_editor_preserves_rtf_selection_dirty_state_and_undo() {
+        let mut source = hidden_editor();
+        let destination = hidden_editor();
+        let editor = &source.editor;
+        editor
+            .set_rtf(br"{\rtf1\ansi\b alpha\b0}")
+            .expect("rich source");
+        editor.mark_saved();
+        editor.select_range(5..5).expect("caret");
+        editor.replace_current(" changed").expect("unsaved edit");
+        editor.select_range(1..4).expect("selection");
+        let before = editor.rtf().expect("canonical document");
+        editor
+            .reparent(destination._owner.0 as isize)
+            .expect("transfer");
+        assert_eq!(editor.rtf().expect("moved document"), before);
+        assert_eq!(editor.selection(), 1..4);
+        assert!(editor.is_modified());
+        // The source window can close without destroying the transferred document host.
+        unsafe {
+            DestroyWindow(source._owner.0);
+        }
+        source._owner.0 = ptr::null_mut();
+        assert_eq!(editor.text().expect("live document"), "alpha changed");
+        editor.execute(EditCommand::Undo).expect("undo after move");
+        assert_eq!(editor.text().expect("undone document"), "alpha");
+        editor.select_range(0..1).expect("original rich run");
+        assert!(editor.formatting().bold);
+        editor.execute(EditCommand::Redo).expect("redo after move");
+        assert_eq!(editor.text().expect("redone document"), "alpha changed");
+    }
+    #[test]
+    fn rejected_window_transfer_keeps_the_original_document() {
+        let source = hidden_editor();
+        source.editor.set_text("keep this buffer").expect("source");
+        assert!(source.editor.reparent(0).is_err());
+        assert_eq!(
+            source.editor.text().expect("unchanged source"),
+            "keep this buffer"
+        );
+        assert_eq!(source.editor.state.owner.get(), source._owner.0);
     }
     #[test]
     fn display_colors_do_not_change_rtf_or_explicit_color_identity() {
