@@ -2,7 +2,10 @@
 
 ExEditor is a Windows desktop document editor written in Rust with GPUI Kit. Its
 interface and editing workflows aim to replicate macOS TextEdit. GPUI Kit owns
-the desktop interface, and Windows RichEdit provides the native rich-text engine.
+the desktop interface, with its `gpui-fast` feature selecting GPUI Fast for the
+core, platform, components and assets. Existing `gpui_kit` imports use that
+backend throughout the application. Windows RichEdit provides the native
+rich-text engine.
 Document handling stays within the application and the operating system; no
 separate office suite or document-converter installation is required.
 

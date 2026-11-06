@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-06T00:45:43-05:00 — GPUI Fast throughout the existing interface (local/uncommitted)
+
+- Enabled GPUI Kit's built-in gpui-fast dependency feature. Kit selects the Fast core and platform and propagates the same backend to Base, Component and bundled assets; all existing application imports already use Kit's facade.
+- Kept the existing interface and Windows RichEdit document engine. This batch changes the rendering backend; it does not integrate NSH or implement the deferred cross-platform editor.
+- Locked the Fast crate family to 0.1.13 and aligned its required shared taffy 0.15.0 and unicode-properties 0.1.3 versions. Other existing dependency versions were retained. Local dependency metadata confirms Fast is enabled in Kit, Base, Component and assets, including the Windows platform. Source whitespace checks passed; GitHub compilation, strict diagnostics, regression tests and installer checks are pending. No local compilation or unit-test execution.
+
 ## 2026-11-05T19:20:24-05:00 — Current Windows build ready for user testing (recording time)
 
 - GitHub run [42133920727](https://github.com/abelokoj/ExEditor/actions/runs/42133920727) completed successfully for committed application source c5a7ac4295629e5efa60dd39123423d92db0d477. Formatting, strict Clippy, all 120 regression tests, release packaging and actual installer integration checks passed. The preceding batch entries describe their pre-commit state; those source changes are now committed and validated by this run.
