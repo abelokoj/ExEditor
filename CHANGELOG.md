@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-05T19:20:24-05:00 — Current Windows build ready for user testing (recording time)
+
+- GitHub run [42133920727](https://github.com/abelokoj/ExEditor/actions/runs/42133920727) completed successfully for committed application source c5a7ac4295629e5efa60dd39123423d92db0d477. Formatting, strict Clippy, all 120 regression tests, release packaging and actual installer integration checks passed. The preceding batch entries describe their pre-commit state; those source changes are now committed and validated by this run.
+- Downloaded installer, portable app and build records into dist/ExEditor-2026-11-5.7. Verified all 44 packaged file checksums and the recorded source commit. This documentation-only follow-up does not alter the tested application source.
+- Ran the GitHub-built portable app locally with separate synthetic test data. Markdown containing relative/local/custom links opened without the previous error dialog, preserving heading/bold/italic presentation. Noto color faces, skin tone, heart, flag and crab were visible; the keycap sequence still showed a rendering artifact in the captured sample.
+- Interactive typing/new-tab checks were not exercised: the automation safeguard refused input because the intended app was not foreground. Unchanged before/after text is not evidence of a successful input test. No local compilation or unit-test execution occurred. Full interactive assessment is left to the user's current-build testing.
+- Parley is selected for the later shared cross-platform editor. That migration remains deferred until feedback on this Windows build; macOS/Linux applications are not delivered by this installer. Personal notes, downloaded binaries and smoke-test evidence remain ignored and unpublished.
+
 ## 2026-11-05T19:02:01-05:00 — Regression-driven link and dictionary fixes (local/uncommitted)
 
 - GitHub strict checks passed and 117/120 tests passed. Fixed strict top-level HTML anchor validation; nested links were already validated and preview-only links still retain inactive labels.
