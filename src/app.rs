@@ -64,6 +64,8 @@ pub enum Command {
     NewTab,
     SwitchTab(usize),
     NextTab(bool),
+    MoveTab(bool),
+    QuickOpen,
     ToggleTabs,
     CloseWindow,
     MoveTabs {
@@ -167,7 +169,7 @@ pub fn show_error(error: &anyhow::Error) {
         .show();
 }
 /// The command behind a `native::shortcut` name, shared by the document and window key paths.
-fn shortcut_command(name: &str) -> Option<Command> {
+pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
     Some(match name {
         "command-palette" => Command::Palette,
         "block-comment" => Command::BlockComment,
@@ -176,6 +178,17 @@ fn shortcut_command(name: &str) -> Option<Command> {
         "keyboard-help" => Command::KeyboardHelp,
         "new" => Command::New,
         "open" => Command::Open,
+        "quick-open" => Command::QuickOpen,
+        "recent-files" => Command::Menu(MenuKind::Recent),
+        "complete" => Command::Complete,
+        "move-tab-left" => Command::MoveTab(true),
+        "move-tab-right" => Command::MoveTab(false),
+        "file-menu" => Command::Menu(MenuKind::File),
+        "edit-menu" => Command::Menu(MenuKind::Edit),
+        "format-menu" => Command::Menu(MenuKind::Format),
+        "view-menu" => Command::Menu(MenuKind::View),
+        "window-menu" => Command::Menu(MenuKind::Window),
+        "help-menu" => Command::Menu(MenuKind::Help),
         "save" => Command::Save,
         "save-as" => Command::SaveAs,
         "save-all" => Command::SaveAll,
@@ -245,34 +258,6 @@ fn shortcut_command(name: &str) -> Option<Command> {
         "bigger" => Command::FontStep(1.),
         "smaller" => Command::FontStep(-1.),
         _ => return None,
-    })
-}
-/// Windows virtual-key code for a GPUI key name, for shortcuts typed while the window has focus.
-fn virtual_key(key: &str) -> Option<u32> {
-    Some(match key {
-        "tab" => 0x09,
-        "enter" => 0x0d,
-        "up" => 0x26,
-        "down" => 0x28,
-        "pageup" => 0x21,
-        "pagedown" => 0x22,
-        "f1" => 0x70,
-        "f3" => 0x72,
-        "f4" => 0x73,
-        "f11" => 0x7a,
-        "/" | "?" => 0xbf,
-        "," | "<" => 0xbc,
-        "." | ">" => 0xbe,
-        "=" | "+" => 0xbb,
-        "-" | "_" => 0xbd,
-        ";" | ":" => 0xba,
-        "[" | "{" => 0xdb,
-        "\\" | "|" => 0xdc,
-        "]" | "}" => 0xdd,
-        _ => match key.as_bytes() {
-            [c @ (b'a'..=b'z' | b'0'..=b'9')] => u32::from(c.to_ascii_uppercase()),
-            _ => return None,
-        },
     })
 }
 /// Dark-document background and the light stand-in for automatic text.
@@ -657,7 +642,9 @@ struct EditorWindow {
     preview_theme: Option<String>,
     /// Horizontal scroll of the document tab strip.
     tab_scroll: ScrollHandle,
-    chord: Option<Instant>,
+    chord: crate::keyboard::State,
+    focus: Option<FocusHandle>,
+    _shortcuts: Option<crate::native::ShortcutRegistration>,
     _poll: Task<()>,
 }
 
@@ -683,7 +670,9 @@ impl EditorWindow {
             was_active: false,
             preview_theme: None,
             tab_scroll: ScrollHandle::new(),
-            chord: None,
+            chord: crate::keyboard::State::default(),
+            focus: None,
+            _shortcuts: None,
             _poll: Task::ready(()),
         };
         if let Some(path) = path
@@ -714,7 +703,26 @@ impl EditorWindow {
             weak.update(cx, |this, cx| this.confirm_close(window, cx))
                 .unwrap_or(true)
         });
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        this.focus = Some(focus);
+        if let Some(editor) = &this.doc.native {
+            editor.focus();
+        }
         let handle = Window::window_handle(window);
+        let weak = cx.entity().downgrade();
+        let context = cx.to_async();
+        this._shortcuts = Some(crate::native::register_shortcuts(hwnd, move |action| {
+            let Some(command) = shortcut_command(action) else {
+                return false;
+            };
+            matches!(
+                handle.update(&mut context.clone(), |_, window, cx| {
+                    weak.update(cx, |this, cx| this.command(command, window, cx))
+                }),
+                Ok(Ok(()))
+            )
+        }));
         this._poll = cx.spawn(async move |this, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(100)).await;
@@ -966,6 +974,11 @@ impl EditorWindow {
             self.prefs = prefs;
         }
         self.was_active = active;
+        if active {
+            editor.restore_focus();
+        } else {
+            self.chord.reset();
+        }
         let dark = self.is_dark(window);
         if gpui_kit::component::Theme::global(cx).mode.is_dark() != dark {
             gpui_kit::component::Theme::change(
@@ -1556,9 +1569,26 @@ impl EditorWindow {
         }
         Ok(())
     }
+    fn reorder_tab(&mut self, left: bool) {
+        let target = if left {
+            self.active_tab.checked_sub(1)
+        } else {
+            self.active_tab
+                .checked_add(1)
+                .filter(|index| *index < self.tabs.len())
+        };
+        if let Some(target) = target {
+            self.tabs.swap(self.active_tab, target);
+            self.active_tab = target;
+            self.tab_scroll.scroll_to_item(target);
+        }
+    }
     fn command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = self.try_command(command, window, cx) {
             show_error(&error);
+        }
+        if let Some(editor) = &self.doc.native {
+            editor.restore_focus();
         }
         cx.notify();
     }
@@ -1713,6 +1743,35 @@ impl EditorWindow {
                     self.editor()?.execute(EditCommand::PastePlain)?;
                 }
             }
+            Command::QuickOpen => {
+                let mut entries = Vec::new();
+                let mut open_paths = Vec::new();
+                for (index, tab) in self.tabs.iter().enumerate() {
+                    let doc = tab.as_ref().unwrap_or(&self.doc);
+                    let label = doc.path.as_ref().map_or_else(
+                        || doc.untitled_name.clone(),
+                        |path| path.to_string_lossy().into_owned(),
+                    );
+                    if let Some(path) = &doc.path {
+                        open_paths.push(path);
+                    }
+                    entries.push(MenuEntry::item(&label, "", Command::SwitchTab(index)));
+                }
+                entries.extend(
+                    self.prefs
+                        .recent_files
+                        .iter()
+                        .filter(|path| !open_paths.contains(path))
+                        .map(|path| {
+                            MenuEntry::item(
+                                &path.to_string_lossy(),
+                                "",
+                                Command::OpenPath(path.clone()),
+                            )
+                        }),
+                );
+                crate::palette::open_files(entries, self.queue.clone(), self.colors(window), cx);
+            }
             Command::Palette => {
                 let mut entries = Vec::new();
                 for menu in [
@@ -1734,23 +1793,59 @@ impl EditorWindow {
                     }));
                 }
                 for (label, shortcut, action) in [
-                    ("Move Line Up", "Alt+Up", LineAction::MoveUp),
-                    ("Move Line Down", "Alt+Down", LineAction::MoveDown),
-                    ("Copy Line Up", "Shift+Alt+Up", LineAction::CopyUp),
-                    ("Copy Line Down", "Shift+Alt+Down", LineAction::CopyDown),
-                    ("Delete Line", "Ctrl+Shift+K", LineAction::Delete),
+                    (
+                        "Move Line Up",
+                        crate::keyboard::label("move-line-up"),
+                        LineAction::MoveUp,
+                    ),
+                    (
+                        "Move Line Down",
+                        crate::keyboard::label("move-line-down"),
+                        LineAction::MoveDown,
+                    ),
+                    (
+                        "Copy Line Up",
+                        crate::keyboard::label("copy-line-up"),
+                        LineAction::CopyUp,
+                    ),
+                    (
+                        "Copy Line Down",
+                        crate::keyboard::label("copy-line-down"),
+                        LineAction::CopyDown,
+                    ),
+                    (
+                        "Delete Line",
+                        crate::keyboard::label("delete-line"),
+                        LineAction::Delete,
+                    ),
                     (
                         "Insert Line Above",
-                        "Ctrl+Shift+Enter",
+                        crate::keyboard::label("insert-line-above"),
                         LineAction::InsertAbove,
                     ),
-                    ("Insert Line Below", "Ctrl+Enter", LineAction::InsertBelow),
-                    ("Indent Line", "Ctrl+]", LineAction::Indent),
-                    ("Outdent Line", "Ctrl+[", LineAction::Outdent),
-                    ("Toggle Line Comment", "Ctrl+/", LineAction::ToggleComment),
+                    (
+                        "Insert Line Below",
+                        crate::keyboard::label("insert-line-below"),
+                        LineAction::InsertBelow,
+                    ),
+                    (
+                        "Indent Line",
+                        crate::keyboard::label("indent-line"),
+                        LineAction::Indent,
+                    ),
+                    (
+                        "Outdent Line",
+                        crate::keyboard::label("outdent-line"),
+                        LineAction::Outdent,
+                    ),
+                    (
+                        "Toggle Line Comment",
+                        crate::keyboard::label("toggle-comment"),
+                        LineAction::ToggleComment,
+                    ),
                     (
                         "Trim Trailing Whitespace",
-                        "Ctrl+K Ctrl+X",
+                        crate::keyboard::label("trim-whitespace"),
                         LineAction::TrimTrailingWhitespace,
                     ),
                 ] {
@@ -1758,22 +1853,22 @@ impl EditorWindow {
                 }
                 entries.push(MenuEntry::item(
                     "Toggle Block Comment",
-                    "Shift+Alt+A",
+                    crate::keyboard::label("block-comment"),
                     Command::BlockComment,
                 ));
                 entries.push(MenuEntry::item(
                     "Toggle Full Screen",
-                    "F11",
+                    crate::keyboard::label("fullscreen"),
                     Command::Fullscreen,
                 ));
                 entries.push(MenuEntry::item(
                     "Keyboard Shortcuts",
-                    "Ctrl+K Ctrl+S",
+                    crate::keyboard::label("keyboard-help"),
                     Command::KeyboardHelp,
                 ));
                 entries.push(MenuEntry::item(
                     "Toggle Word Wrap",
-                    "Alt+Z",
+                    crate::keyboard::label("word-wrap"),
                     Command::ToggleWordWrap,
                 ));
                 crate::palette::open(entries, self.queue.clone(), self.colors(window), cx);
@@ -1796,6 +1891,7 @@ impl EditorWindow {
                 };
                 self.switch_tab(index)?;
             }
+            Command::MoveTab(left) => self.reorder_tab(left),
             Command::ToggleTabs => self.show_tabs = !self.show_tabs,
             Command::MoveTabs { target, scope } => self.move_tabs(target, scope, window, cx)?,
             Command::CloseWindow => {
@@ -2681,22 +2777,39 @@ impl EditorWindow {
             M::App => vec![
                 item("About ExEditor", "", C::About),
                 sep(),
-                item("Settings…", "Ctrl+,", C::Preferences),
+                item(
+                    "Settings…",
+                    crate::keyboard::label("preferences"),
+                    C::Preferences,
+                ),
                 sep(),
-                item("Quit ExEditor", "Ctrl+Q", C::Quit),
+                item("Quit ExEditor", crate::keyboard::label("quit"), C::Quit),
             ],
             M::File => vec![
-                item("New Window", "Ctrl+Shift+N", C::New),
-                item("New Tab", "Ctrl+N", C::NewTab),
-                item("Reopen Closed File", "Ctrl+Shift+T", C::ReopenClosed),
-                item("Save All", "Ctrl+K S", C::SaveAll),
-                item("Open…", "Ctrl+O", C::Open),
+                item("New Window", crate::keyboard::label("new"), C::New),
+                item("New Tab", crate::keyboard::label("new-tab"), C::NewTab),
+                item(
+                    "Reopen Closed File",
+                    crate::keyboard::label("reopen-closed"),
+                    C::ReopenClosed,
+                ),
+                item("Save All", crate::keyboard::label("save-all"), C::SaveAll),
+                item("Open…", crate::keyboard::label("open"), C::Open),
+                item(
+                    "Quick Open…",
+                    crate::keyboard::label("quick-open"),
+                    C::QuickOpen,
+                ),
                 item("Open RTFD Folder…", "", C::OpenBundle),
-                item("Open Recent", "›", C::Menu(M::Recent)),
+                item(
+                    "Open Recent",
+                    crate::keyboard::label("recent-files"),
+                    C::Menu(M::Recent),
+                ),
                 sep(),
-                item("Close", "Ctrl+W", C::Close),
-                item("Save…", "Ctrl+S", C::Save),
-                item("Save As…", "Ctrl+Shift+S", C::SaveAs),
+                item("Close", crate::keyboard::label("close"), C::Close),
+                item("Save…", crate::keyboard::label("save"), C::Save),
+                item("Save As…", crate::keyboard::label("save-as"), C::SaveAs),
                 item("Duplicate", "", C::Duplicate),
                 item("Rename…", "", C::Rename),
                 item("Move To…", "", C::Move),
@@ -2706,8 +2819,12 @@ impl EditorWindow {
                 item("Export as PDF…", "", C::Pdf),
                 item("Show Properties", "", C::Properties),
                 sep(),
-                item("Page Setup…", "", C::PageSetup),
-                item("Print…", "", C::Print),
+                item(
+                    "Page Setup…",
+                    crate::keyboard::label("page-setup"),
+                    C::PageSetup,
+                ),
+                item("Print…", crate::keyboard::label("print"), C::Print),
             ],
             M::Recent => {
                 let mut items = self
@@ -2743,15 +2860,19 @@ impl EditorWindow {
                 }
             }
             M::Edit => vec![
-                e("Undo", "Ctrl+Z", EditCommand::Undo),
-                e("Redo", "Ctrl+Shift+Z", EditCommand::Redo),
+                e("Undo", crate::keyboard::label("undo"), EditCommand::Undo),
+                e("Redo", crate::keyboard::label("redo"), EditCommand::Redo),
                 sep(),
-                e("Cut", "Ctrl+X", EditCommand::Cut),
-                e("Copy", "Ctrl+C", EditCommand::Copy),
-                e("Paste", "Ctrl+V", EditCommand::Paste),
+                e("Cut", crate::keyboard::label("cut"), EditCommand::Cut),
+                e("Copy", crate::keyboard::label("copy"), EditCommand::Copy),
+                e("Paste", crate::keyboard::label("paste"), EditCommand::Paste),
                 e("Paste and Match Style", "", EditCommand::PastePlain),
                 e("Delete", "", EditCommand::Delete),
-                e("Select All", "Ctrl+A", EditCommand::SelectAll),
+                e(
+                    "Select All",
+                    crate::keyboard::label("select-all"),
+                    EditCommand::SelectAll,
+                ),
                 sep(),
                 item("Find", "›", C::Menu(M::Find)),
                 item("Spelling and Grammar", "›", C::Menu(M::Spelling)),
@@ -2760,24 +2881,52 @@ impl EditorWindow {
                 sep(),
                 item("Start Speaking", "", C::Speak),
                 item("Stop Speaking", "", C::StopSpeaking),
-                item("Complete", "", C::Complete),
+                item("Complete", crate::keyboard::label("complete"), C::Complete),
             ],
             M::Find => vec![
-                item("Find…", "Ctrl+F", C::Find),
-                item("Find and Replace…", "Ctrl+H", C::Replace),
-                item("Find Next", "F3", C::FindNext),
-                item("Find Previous", "Shift+F3", C::FindPrevious),
-                item("Use Selection for Find", "Ctrl+E", C::UseSelection),
-                item("Jump to Selection", "Ctrl+J", C::GoToSelection),
-                item("Go to Line…", "Ctrl+G", C::GoToLine),
+                item("Find…", crate::keyboard::label("find"), C::Find),
+                item(
+                    "Find and Replace…",
+                    crate::keyboard::label("replace"),
+                    C::Replace,
+                ),
+                item(
+                    "Find Next",
+                    crate::keyboard::label("find-next"),
+                    C::FindNext,
+                ),
+                item(
+                    "Find Previous",
+                    crate::keyboard::label("find-previous"),
+                    C::FindPrevious,
+                ),
+                item(
+                    "Use Selection for Find",
+                    crate::keyboard::label("use-selection"),
+                    C::UseSelection,
+                ),
+                item(
+                    "Jump to Selection",
+                    crate::keyboard::label("jump-to-selection"),
+                    C::GoToSelection,
+                ),
+                item(
+                    "Go to Line…",
+                    crate::keyboard::label("go-to-line"),
+                    C::GoToLine,
+                ),
             ],
             M::Spelling => vec![
                 item(
                     "Show Spelling and Grammar…",
-                    "Ctrl+Shift+;",
+                    crate::keyboard::label("show-spelling"),
                     C::CheckSpelling,
                 ),
-                item("Check Document Now", "Ctrl+;", C::CheckSpelling),
+                item(
+                    "Check Document Now",
+                    crate::keyboard::label("check-spelling"),
+                    C::CheckSpelling,
+                ),
                 sep(),
                 item("Check While Typing", "", C::Toggle("spelling"))
                     .checked(self.prefs.spellcheck),
@@ -2807,7 +2956,7 @@ impl EditorWindow {
                     } else {
                         "Make Rich Text"
                     },
-                    "Ctrl+Shift+M",
+                    crate::keyboard::label("toggle-format"),
                     C::ToggleFormat,
                 ),
                 item(
@@ -2830,14 +2979,28 @@ impl EditorWindow {
                 ),
             ],
             M::Font => vec![
-                item("Show Fonts", "Ctrl+T", C::Font),
-                item("Bigger", "Ctrl+Shift++", C::FontStep(1.)),
-                item("Smaller", "Ctrl+Shift+-", C::FontStep(-1.)),
+                item("Show Fonts", crate::keyboard::label("font"), C::Font),
+                item("Bigger", crate::keyboard::label("bigger"), C::FontStep(1.)),
+                item(
+                    "Smaller",
+                    crate::keyboard::label("smaller"),
+                    C::FontStep(-1.),
+                ),
                 item("Other Size…", "", C::CustomFontSize),
-                e("Bold", "Ctrl+B", EditCommand::Bold).checked(self.doc.formatting.bold),
-                e("Italic", "Ctrl+I", EditCommand::Italic).checked(self.doc.formatting.italic),
-                e("Underline", "Ctrl+U", EditCommand::Underline)
-                    .checked(self.doc.formatting.underline),
+                e("Bold", crate::keyboard::label("bold"), EditCommand::Bold)
+                    .checked(self.doc.formatting.bold),
+                e(
+                    "Italic",
+                    crate::keyboard::label("italic"),
+                    EditCommand::Italic,
+                )
+                .checked(self.doc.formatting.italic),
+                e(
+                    "Underline",
+                    crate::keyboard::label("underline"),
+                    EditCommand::Underline,
+                )
+                .checked(self.doc.formatting.underline),
                 e("Strikethrough", "", EditCommand::Strikethrough)
                     .checked(self.doc.formatting.strikethrough),
                 sep(),
@@ -2848,7 +3011,11 @@ impl EditorWindow {
                 e("Copy Style", "", EditCommand::CopyStyle),
                 e("Paste Style", "", EditCommand::PasteStyle),
                 sep(),
-                item("Show Colors…", "Ctrl+Shift+C", C::Foreground),
+                item(
+                    "Show Colors…",
+                    crate::keyboard::label("colors"),
+                    C::Foreground,
+                ),
                 item("Text Background Color…", "", C::Background),
                 item("Insert Color Code…", "", C::InsertColorCode),
             ],
@@ -2902,7 +3069,7 @@ impl EditorWindow {
                     } else {
                         "Show Ruler"
                     },
-                    "Ctrl+R",
+                    crate::keyboard::label("ruler"),
                     C::ToggleRuler,
                 ),
                 sep(),
@@ -2928,9 +3095,13 @@ impl EditorWindow {
             )
             .chain([
                 sep(),
-                item("Actual Size", "Ctrl+0", C::Zoom(0)),
-                item("Zoom In", "Ctrl++", C::Zoom(10)),
-                item("Zoom Out", "Ctrl+-", C::Zoom(-10)),
+                item(
+                    "Actual Size",
+                    crate::keyboard::label("actual-size"),
+                    C::Zoom(0),
+                ),
+                item("Zoom In", crate::keyboard::label("zoom-in"), C::Zoom(10)),
+                item("Zoom Out", crate::keyboard::label("zoom-out"), C::Zoom(-10)),
                 sep(),
                 item("Interface Size", "›", C::Menu(M::InterfaceSize)),
             ])
@@ -2952,7 +3123,28 @@ impl EditorWindow {
                 .chain([sep(), item("Custom…", "", C::CustomInterfaceScale)])
                 .collect(),
             M::Window => vec![
-                item("New Window", "Ctrl+Shift+N", C::New),
+                item(
+                    "Next Tab",
+                    crate::keyboard::label("next-tab"),
+                    C::NextTab(false),
+                ),
+                item(
+                    "Previous Tab",
+                    crate::keyboard::label("previous-tab"),
+                    C::NextTab(true),
+                ),
+                item(
+                    "Move Tab Left",
+                    crate::keyboard::label("move-tab-left"),
+                    C::MoveTab(true),
+                ),
+                item(
+                    "Move Tab Right",
+                    crate::keyboard::label("move-tab-right"),
+                    C::MoveTab(false),
+                ),
+                sep(),
+                item("New Window", crate::keyboard::label("new"), C::New),
                 item(
                     "Move Tab to Window",
                     "›",
@@ -2997,8 +3189,16 @@ impl EditorWindow {
                 entries
             }
             M::Help => vec![
-                item("Command Palette…", "F1 / Ctrl+Shift+P", C::Palette),
-                item("Keyboard Shortcuts…", "Ctrl+K Ctrl+S", C::KeyboardHelp),
+                item(
+                    "Command Palette…",
+                    crate::keyboard::label("command-palette"),
+                    C::Palette,
+                ),
+                item(
+                    "Keyboard Shortcuts…",
+                    crate::keyboard::label("keyboard-help"),
+                    C::KeyboardHelp,
+                ),
                 item("ExEditor Help", "", C::Help),
                 item("About ExEditor", "", C::About),
             ],
@@ -3368,32 +3568,33 @@ impl Render for EditorWindow {
             .bg(rgb(c.paper))
             .text_color(rgb(c.ink))
             .font_family(crate::fonts::RICH_FONT)
-            // The document's RichEdit queues its own shortcuts; this covers focus on the window.
+            .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let m = &event.keystroke.modifiers;
                 if m.platform {
+                    this.chord.reset();
                     return;
                 }
-                let Some(key) = virtual_key(&event.keystroke.key) else {
-                    return;
-                };
-                let chord = this
-                    .chord
-                    .take()
-                    .is_some_and(|started| started.elapsed() < Duration::from_secs(3));
-                let modifiers = crate::keyboard::Modifiers {
-                    control: m.control,
-                    shift: m.shift,
-                    alt: m.alt,
-                };
-                if let Some(action) = crate::keyboard::shortcut(key, modifiers, chord) {
-                    cx.stop_propagation();
-                    if action == "chord" {
-                        this.chord = Some(Instant::now());
-                    } else if let Some(command) = shortcut_command(action) {
-                        this.command(command, window, cx);
+                let key = crate::keyboard::virtual_key(&event.keystroke.key).unwrap_or(0);
+                let modifiers = crate::keyboard::modifiers_for_key(
+                    &event.keystroke.key,
+                    crate::keyboard::Modifiers {
+                        control: m.control,
+                        shift: m.shift,
+                        alt: m.alt,
+                    },
+                );
+                match this.chord.resolve(key, modifiers, Instant::now()) {
+                    crate::keyboard::Outcome::Ignored => return,
+                    crate::keyboard::Outcome::Action(action) => {
+                        if let Some(command) = shortcut_command(action) {
+                            this.command(command, window, cx);
+                        }
                     }
+                    crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {}
                 }
+                cx.stop_propagation();
+                cx.prevent_default();
             }))
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 for path in &paths.0 {
@@ -3806,7 +4007,9 @@ mod window_tests {
             was_active: false,
             preview_theme: None,
             tab_scroll: ScrollHandle::new(),
-            chord: None,
+            chord: crate::keyboard::State::default(),
+            focus: None,
+            _shortcuts: None,
             _poll: Task::ready(()),
         }
     }
@@ -3826,6 +4029,33 @@ mod window_tests {
                 .clone()
             })
             .collect()
+    }
+    #[test]
+    fn every_binding_reaches_an_application_command() {
+        for binding in crate::keyboard::BINDINGS {
+            if binding.action != "chord" {
+                assert!(
+                    super::shortcut_command(binding.action).is_some(),
+                    "{binding:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn reordering_tabs_keeps_live_document_and_buffer_identity() {
+        let mut window = window_with_tabs(&["one", "two", "three"], 1);
+        let text = window.doc.last_text.clone();
+        window.reorder_tab(true);
+        assert_eq!(names(&window), ["two", "one", "three"]);
+        assert_eq!(window.active_tab, 0);
+        window.reorder_tab(true);
+        assert_eq!(names(&window), ["two", "one", "three"]);
+        window.reorder_tab(false);
+        window.reorder_tab(false);
+        window.reorder_tab(false);
+        assert_eq!(names(&window), ["one", "three", "two"]);
+        assert_eq!(window.active_tab, 2);
+        assert_eq!(window.doc.last_text, text);
     }
     #[test]
     fn moving_current_tab_keeps_other_documents_and_buffer_identity() {

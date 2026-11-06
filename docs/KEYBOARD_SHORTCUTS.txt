@@ -1,14 +1,146 @@
-Files: Ctrl+N new tab; Ctrl+Shift+N new window; Ctrl+O / Ctrl+P open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+K S save all.
-Tabs: Ctrl+W / Ctrl+F4 close; Ctrl+Shift+W close window; Ctrl+Tab / Ctrl+Shift+Tab next/previous; Ctrl+PageDown / Ctrl+PageUp next/previous; Ctrl+K Ctrl+W close all; Ctrl+Shift+T reopen closed saved file.
-Editing: Ctrl+Z undo; Ctrl+Y / Ctrl+Shift+Z redo; Ctrl+C / Ctrl+X copy/cut (whole line with no selection); Ctrl+V paste; Ctrl+A select all.
-Lines: Ctrl+L select line; Ctrl+Enter / Ctrl+Shift+Enter insert below/above; Ctrl+Shift+K delete line; Alt+Up/Down move line; Shift+Alt+Up/Down copy line; Ctrl+]/[ indent/outdent.
-Comments: Ctrl+/ toggle line comment; Shift+Alt+A toggle block comment; Ctrl+K Ctrl+C add; Ctrl+K Ctrl+U remove; Ctrl+K Ctrl+X trim trailing whitespace.
-Navigation: Ctrl+G go to line; Ctrl+Shift+\ matching bracket; Home/End and Ctrl+Home/End; Ctrl+Left/Right and Shift extend selection.
-Find: Ctrl+F find; Ctrl+H replace; F3 / Shift+F3 next/previous.
-Display: Ctrl+Plus/Minus zoom; Ctrl+0 reset zoom; F11 full screen; Alt+Z word wrap; Ctrl+Up/Down scroll line; Alt+PageUp/PageDown scroll page.
-Markdown: Ctrl+Shift+V or Ctrl+K V switches source/preview. Elsewhere Ctrl+Shift+V pastes plain text.
-Formatting: Ctrl+B/I/U bold/italic/underline; Ctrl+Shift+C Colors; Ctrl+Shift+M rich/plain mode; Ctrl+Shift+Plus/Minus font size.
-Commands: F1 / Ctrl+Shift+P Command Palette; Ctrl+, Settings; Ctrl+K Ctrl+S this reference.
-File location: Ctrl+K P copy path; Ctrl+K R reveal in Explorer.
+ExEditor keyboard shortcuts (Windows)
+=====================================
 
-Shortcuts apply to this editor's capabilities. VS Code workspace/debugger commands and multiple simultaneous cursors are not available in the native single-selection editor. Ctrl+K chords expire after three seconds. AltGr remains available for typing.
+These bindings apply in a document window. A command can be unavailable when
+the document has no selection, no saved path, no matching text, or no suitable
+rich-text context. Dialogs and search fields retain their own text-input keys.
+
+Files and tabs
+--------------
+Ctrl+N                    New document tab
+Ctrl+Shift+N              New document window
+Ctrl+O                    Open files with the file picker
+Ctrl+P                    Quick Open: search open and recent files
+Ctrl+R                    Open the Recent Files menu
+Ctrl+S                    Save
+Ctrl+Shift+S              Save As
+Ctrl+K S                  Save all documents
+Ctrl+W / Ctrl+F4          Close the current document tab
+Ctrl+Shift+W              Close the current window
+Ctrl+K Ctrl+W             Close all documents
+Ctrl+Shift+T              Reopen a closed saved file
+Ctrl+Q                    Quit
+Ctrl+Tab / Ctrl+PageDown   Next tab
+Ctrl+Shift+Tab            Previous tab (also Ctrl+PageUp)
+Ctrl+Shift+PageUp         Move the current tab left
+Ctrl+Shift+PageDown       Move the current tab right
+Ctrl+K P                  Copy the saved file's path
+Ctrl+K R                  Reveal the saved file in Explorer
+Ctrl+K Ctrl+P             Print
+Ctrl+K Ctrl+Shift+P       Page Setup
+
+Editing
+-------
+Ctrl+Z                    Undo
+Ctrl+Y / Ctrl+Shift+Z     Redo
+Ctrl+C                    Copy; copy the current line when nothing is selected
+Ctrl+X                    Cut; cut the current line when nothing is selected
+Ctrl+V                    Paste
+Ctrl+Shift+V              Switch Markdown source/preview; paste plain text otherwise
+Ctrl+A                    Select all
+Ctrl+Space                Show word completion suggestions
+Ctrl+L                    Select the current line
+Ctrl+Enter                Insert a line below
+Ctrl+Shift+Enter          Insert a line above
+Ctrl+Shift+K              Delete the current line
+Alt+Up                    Move line up
+Alt+Down                  Move line down
+Shift+Alt+Up              Copy line up
+Shift+Alt+Down            Copy line down
+Ctrl+]                    Indent line or selected lines
+Ctrl+[                    Outdent line or selected lines
+
+Comments and whitespace
+-----------------------
+Ctrl+/                    Toggle line comments
+Shift+Alt+A               Toggle a block comment
+Ctrl+K Ctrl+C             Add line comments
+Ctrl+K Ctrl+U             Remove line comments
+Ctrl+K Ctrl+X             Trim trailing whitespace
+
+Find and navigation
+-------------------
+Ctrl+F                    Find
+Ctrl+H                    Replace
+F3                        Find next
+Shift+F3                  Find previous
+Ctrl+E                    Use the selected text for Find
+Ctrl+G                    Go to line
+Ctrl+J                    Jump to the selection
+Ctrl+Shift+\              Jump to the matching bracket
+Ctrl+Up                   Scroll up one line
+Ctrl+Down                 Scroll down one line
+Alt+PageUp                Scroll up one page
+Alt+PageDown              Scroll down one page
+
+Native text navigation remains available: arrows, Home/End, PageUp/PageDown,
+Ctrl+Left/Right for words, and Ctrl+Home/End for the document. Add Shift to
+extend the selection. Backspace/Delete and Ctrl+Backspace/Delete stay native.
+
+View and formatting
+-------------------
+Alt+Z                     Toggle word wrap
+F11                       Toggle full screen
+Ctrl+=                    Zoom in
+Ctrl+-                    Zoom out
+Ctrl+0                    Reset zoom
+Ctrl+Shift+R              Toggle the ruler
+Ctrl+B                    Bold
+Ctrl+I                    Italic
+Ctrl+U                    Underline
+Ctrl+T                    Font dialog
+Ctrl+Shift+C              Text colors
+Ctrl+Shift+M              Switch rich/plain text format
+Ctrl+Shift+.              Increase font size
+Ctrl+Shift+,              Decrease font size
+Ctrl+;                    Check spelling
+Ctrl+Shift+;              Show spelling suggestions
+Ctrl+K V                  Switch Markdown source/preview
+
+Zoom also accepts Ctrl+Plus, Ctrl+Shift+=, Ctrl+Num+, and Ctrl+Shift+Num+.
+The plus key always zooms. Ctrl+Num- also zooms out.
+Font-size decrease also accepts Ctrl+Shift+- and Ctrl+Shift+Num-.
+Use Ctrl+Shift+. / Ctrl+Shift+, for the font-size increase/decrease pair.
+
+Commands and menus
+------------------
+Ctrl+Shift+P / F1         Command Palette
+Ctrl+,                    Settings
+Ctrl+K Ctrl+S             This keyboard reference
+Alt+F / F10               File menu
+Alt+E                     Edit menu
+Alt+O                     Format menu
+Alt+V                     View menu
+Alt+W                     Window menu
+Alt+H                     Help menu
+
+How chords work
+---------------
+Press Ctrl+K, then press the second combination within three seconds.
+For Ctrl+K S, release Ctrl before pressing S: this saves all documents.
+For Ctrl+K Ctrl+S, hold or press Ctrl again with S: this opens this reference.
+Modifier presses/releases preserve a pending chord. Escape cancels it.
+An unrecognized second key cancels the chord and is consumed once.
+After the timeout, the next key works normally.
+AltGr (Ctrl+Alt) always remains available for typing and cancels a pending chord.
+
+VS Code compatibility and deliberate differences
+------------------------------------------------
+The supported editing bindings follow the Windows VS Code reference:
+https://code.visualstudio.com/shortcuts/keyboard-shortcuts-windows.pdf
+
+ExEditor retains Ctrl+B / Ctrl+I / Ctrl+U for rich-text bold/italic/underline.
+Ctrl+Space opens the editor's word completion, rather than language-server
+completion or parameter hints. Ctrl+T opens the font dialog, Ctrl+Shift+M
+switches document format, and Ctrl+J jumps to the current selection.
+
+Ctrl+P is Quick Open; Ctrl+O opens the file picker.
+Ctrl+R opens recent files; the ruler uses Ctrl+Shift+R.
+Print and Page Setup use the Ctrl+K chords above.
+Ctrl+Shift+. / Ctrl+Shift+, change font size, while Ctrl+Plus changes zoom.
+
+This is a native single-selection document editor. Multiple simultaneous
+cursors, column selection, folding, symbol navigation/refactoring, language
+server actions, editor groups, workspaces, project-wide search, source control,
+debugging, extensions, and an integrated terminal are unavailable. Their
+VS Code shortcuts are not assigned to placeholder commands.

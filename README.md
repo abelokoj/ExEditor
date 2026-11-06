@@ -113,6 +113,11 @@ ExEditor supports familiar VS Code editing shortcuts, including moving/copying l
 indent/outdent, line and block comments, bracket navigation, scrolling, Find/Replace,
 Save All, reopening closed saved files, Markdown source/preview, and the searchable
 Command Palette (F1 or Ctrl+Shift+P). **Help > Keyboard Shortcuts** lists the bindings.
+Ctrl+P searches open and recent files; Ctrl+O opens the file picker. Ctrl+R opens
+recent files, Ctrl+Space shows word completion, and Ctrl+Shift+PageUp/PageDown move
+the current tab left/right. Ctrl+K starts a three-second chord; Escape cancels it.
+Menu labels and both keyboard input paths share one binding catalog. Ctrl+Plus
+zooms, Ctrl+Shift+period/comma change font size, and Ctrl+Shift+R toggles the ruler.
 The source reference is [Microsoft's Windows shortcut sheet](https://code.visualstudio.com/shortcuts/keyboard-shortcuts-windows.pdf).
 VS Code workspace/debugger commands and multiple simultaneous cursors are outside the
 native editor's current capabilities. Rich-text formatting shortcuts remain available.

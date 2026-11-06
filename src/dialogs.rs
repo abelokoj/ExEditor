@@ -71,6 +71,7 @@ impl MenuEntry {
     }
 }
 struct MenuView {
+    keyboard: crate::keyboard::State,
     entries: Vec<MenuEntry>,
     commands: Commands,
     colors: Palette,
@@ -138,6 +139,7 @@ pub fn menu(
                 .position(|entry| entry.checked && entry.enabled)
                 .or_else(|| menu_selection(&entries, None, MenuStep::First));
             MenuView {
+                keyboard: crate::keyboard::State::default(),
                 entries,
                 commands,
                 colors,
@@ -187,6 +189,48 @@ impl MenuView {
         self.select(index, cx);
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let m = &event.keystroke.modifiers;
+        if m.platform {
+            self.keyboard.reset();
+            return;
+        }
+        let modifiers = crate::keyboard::modifiers_for_key(
+            &event.keystroke.key,
+            crate::keyboard::Modifiers {
+                control: m.control,
+                shift: m.shift,
+                alt: m.alt,
+            },
+        );
+        let key = crate::keyboard::virtual_key(&event.keystroke.key).unwrap_or(0);
+        match self
+            .keyboard
+            .resolve(key, modifiers, std::time::Instant::now())
+        {
+            crate::keyboard::Outcome::Action(action) => {
+                if let Some(command) = crate::app::shortcut_command(action) {
+                    self.commands.borrow_mut().push_back(command);
+                    window.remove_window();
+                }
+            }
+            crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {}
+            crate::keyboard::Outcome::Ignored => {
+                if m.control || m.alt {
+                    return;
+                }
+                self.navigation_key(event, window, cx);
+                return;
+            }
+        }
+        cx.stop_propagation();
+        cx.prevent_default();
+    }
+    fn navigation_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match event.keystroke.key.as_str() {
             "escape" | "tab" => window.remove_window(),
             "up" => self.navigate(MenuStep::Previous, cx),
@@ -483,7 +527,7 @@ impl Render for FormView {
             .text_color(rgb(c.ink))
             .text_size(px(13.))
             .font_family(crate::fonts::RICH_FONT)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     window.remove_window();
                     cx.stop_propagation();

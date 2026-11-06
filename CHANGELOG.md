@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-06T17:02:39-05:00 - Keyboard routing and VS Code editing bindings (local/uncommitted source)
+
+- Consolidated 95 key combinations, aliases, menu labels and help into one catalog shared by the native document, GPUI window and menus. Added tracked window focus and document-focus restoration after toolbar/native-dialog interactions. Native shortcuts now dispatch synchronously before subsequent typing; busy modal updates retain the existing queued fallback. Callback state survives a shortcut closing its own tab/window, and transfers route to the new owner.
+- Added Quick Open over open/recent documents (Ctrl+P), recent files (Ctrl+R), word completion (Ctrl+Space), tab reorder (Ctrl+Shift+PageUp/PageDown), menu access and print/page-setup chords. Corrected the zoom/font-size conflict and shifted punctuation handling; the ruler now uses Ctrl+Shift+R. Chord timeout/cancellation, AltGr input and focus/IME resets are consistent. Dialog fields retain their editing keys and Ctrl+Enter submissions are captured before field handlers.
+- Added source regressions for every catalog entry through the real hidden Win32 key-message handler, immediate selection/typing/undo/redo/formatting, ordinary navigation, AltGr/composition/focus resets, fallback dispatch, replacement registrations, transferred owners and closing the active callback. Pure catalog, command-bridge and tab-order/buffer tests cover the remaining shared behavior. These tests do not inject input into the user's desktop.
+- Local validation is source formatting and whitespace only; compilation, strict diagnostics, tests and packaging will run on GitHub after this completed feature batch is pushed. No local compilation or unit tests. Physical keyboard interactions, all international layouts and full VS Code behavior are not claimed: multicursor, workspace/language-server/debugger commands remain outside the current Windows RichEdit engine.
+
 ## 2026-11-06T02:15:26-05:00 — GPUI Fast, file-manager tabs and window moves ready for testing (recording time)
 
 - GitHub run [42177182056](https://github.com/abelokoj/ExEditor/actions/runs/42177182056) completed formatting, strict diagnostics, all 134 regression tests, release application packaging and installer integration checks for committed application source a1116098da00476ecf4c384c7e971f53d9bf4455. The preceding batch entries retain their original pre-commit/pending status; those source changes are now committed and validated by this run.

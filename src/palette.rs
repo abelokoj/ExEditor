@@ -12,6 +12,7 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
 struct CommandPalette {
+    title: &'static str,
     entries: Vec<MenuEntry>,
     matches: Vec<usize>,
     selection: Option<usize>,
@@ -24,6 +25,33 @@ struct CommandPalette {
 }
 
 pub fn open(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, cx: &mut App) {
+    open_with_title(
+        entries,
+        commands,
+        colors,
+        "Command Palette",
+        "Type a command…",
+        cx,
+    );
+}
+pub fn open_files(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, cx: &mut App) {
+    open_with_title(
+        entries,
+        commands,
+        colors,
+        "Quick Open",
+        "Search open and recent files…",
+        cx,
+    );
+}
+fn open_with_title(
+    entries: Vec<MenuEntry>,
+    commands: Commands,
+    colors: Palette,
+    title: &'static str,
+    placeholder: &'static str,
+    cx: &mut App,
+) {
     let options = WindowOptions {
         kind: WindowKind::PopUp,
         titlebar: None,
@@ -33,11 +61,11 @@ pub fn open(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, cx: &m
         ..Default::default()
     };
     let result = gpui_kit::open_window(options, cx, move |window, cx| {
-        window.set_window_title("ExEditor Command Palette");
+        window.set_window_title(&format!("ExEditor {title}"));
         window.set_rem_size(ui::rem_size());
         let handle = window.window_handle();
         cx.new(|cx: &mut Context<CommandPalette>| {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command…"));
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
             let focus = cx.focus_handle();
             let filter_subscription =
                 cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
@@ -70,6 +98,7 @@ pub fn open(entries: Vec<MenuEntry>, commands: Commands, colors: Palette, cx: &m
             let matches = filtered(&entries, "");
             let selection = (!matches.is_empty()).then_some(0);
             CommandPalette {
+                title,
                 entries,
                 matches,
                 selection,
@@ -142,7 +171,7 @@ impl Render for CommandPalette {
         let c = self.colors;
         let count = self.matches.len();
         let selected = self.selection;
-        div().id("command-palette").role(Role::Dialog).aria_label("Command Palette")
+        div().id("command-palette").role(Role::Dialog).aria_label(self.title)
             .aria_description("Type to filter commands. Up and Down select a result. Enter runs the command. Escape closes the palette.")
             .track_focus(&self.focus).size_full().flex().flex_col()
             .rounded(px(7.)).overflow_hidden().border_1().border_color(rgb(c.border))
@@ -159,7 +188,7 @@ impl Render for CommandPalette {
                 .flex_1().min_h(px(0.)).overflow_y_scroll().track_scroll(&self.scroll)
                 .flex().flex_col().p(px(5.))
                 .when(count == 0, |list| list.child(div().px(px(12.)).py(px(18.))
-                    .text_color(rgb(c.muted)).child("No matching commands.")))
+                    .text_color(rgb(c.muted)).child("No matching results.")))
                 .children(self.matches.iter().enumerate().map(|(position, index)| {
                     let entry = &self.entries[*index];
                     let active = selected == Some(position);
@@ -184,7 +213,7 @@ impl Render for CommandPalette {
             .child(div().h(px(31.)).flex_shrink_0().flex().items_center().justify_between().px(px(12.))
                 .text_size(px(10.)).text_color(rgb(c.muted))
                 .child("Up/Down to navigate · Enter to run")
-                .child(format!("{count} command{}", if count == 1 { "" } else { "s" })))
+                .child(format!("{count} result{}", if count == 1 { "" } else { "s" })))
     }
 }
 

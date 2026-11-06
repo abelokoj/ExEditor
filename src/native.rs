@@ -2,14 +2,14 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt::Write as _,
     marker::PhantomData,
     mem::size_of,
     ops::Range,
     path::Path,
     ptr,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::OnceLock,
 };
 use windows::{
@@ -36,7 +36,7 @@ use windows_sys::Win32::{
             EM_CANUNDO, EM_EMPTYUNDOBUFFER, EM_GETMODIFY, EM_REPLACESEL, EM_SCROLLCARET,
             EM_SETMARGINS, EM_SETMODIFY, EM_SETREADONLY, ShowScrollBar,
         },
-        Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT},
+        Input::KeyboardAndMouse::{GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT},
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
@@ -46,10 +46,11 @@ use windows_sys::Win32::{
             SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
             SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WA_ACTIVE,
             WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLEAR, WM_CONTEXTMENU, WM_COPY, WM_CUT,
-            WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
-            WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_UNDO, WM_USER,
-            WM_WINDOWPOSCHANGED, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_HSCROLL,
-            WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+            WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SIZE,
+            WM_SYSCHAR, WM_SYSKEYDOWN, WM_UNDO, WM_USER, WM_WINDOWPOSCHANGED, WNDCLASSW, WS_CHILD,
+            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_HSCROLL, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WS_VSCROLL,
         },
     },
 };
@@ -301,6 +302,51 @@ impl Default for PageSettings {
         }
     }
 }
+type ShortcutHandler = dyn Fn(&'static str) -> bool;
+thread_local! {
+    static SHORTCUT_HANDLERS: RefCell<HashMap<isize, Weak<ShortcutHandler>>> = RefCell::default();
+}
+/// Keeps each document window's synchronous command route alive.
+pub struct ShortcutRegistration {
+    owner: isize,
+    handler: Rc<ShortcutHandler>,
+}
+pub fn register_shortcuts(
+    owner: isize,
+    handler: impl Fn(&'static str) -> bool + 'static,
+) -> ShortcutRegistration {
+    let handler: Rc<ShortcutHandler> = Rc::new(handler);
+    SHORTCUT_HANDLERS.with_borrow_mut(|handlers| {
+        handlers.insert(owner, Rc::downgrade(&handler));
+    });
+    ShortcutRegistration { owner, handler }
+}
+impl Drop for ShortcutRegistration {
+    fn drop(&mut self) {
+        SHORTCUT_HANDLERS.with_borrow_mut(|handlers| {
+            if handlers
+                .get(&self.owner)
+                .is_some_and(|handler| handler.ptr_eq(&Rc::downgrade(&self.handler)))
+            {
+                handlers.remove(&self.owner);
+            }
+        });
+    }
+}
+fn dispatch_shortcut(owner: HWND, action: &'static str) -> bool {
+    let handler = SHORTCUT_HANDLERS
+        .with_borrow(|handlers| handlers.get(&(owner as isize)).and_then(Weak::upgrade));
+    handler.is_some_and(|handler| handler(action))
+}
+/// A command may close this editor while its window callback is still running.
+unsafe fn retain_state(data: usize) -> Rc<NativeState> {
+    let state = data as *const NativeState;
+    // SAFETY: NativeEditor owns this allocation until both subclasses are removed.
+    unsafe {
+        Rc::increment_strong_count(state);
+        Rc::from_raw(state)
+    }
+}
 struct NativeState {
     shortcuts: RefCell<VecDeque<String>>,
     alive: Cell<bool>,
@@ -323,7 +369,7 @@ struct NativeState {
     emoji: Cell<Option<crate::emoji::CharRange>>,
     wrap: Cell<Option<bool>>,
     margins: Cell<Option<(i32, i32)>>,
-    chord: Cell<Option<std::time::Instant>>,
+    chord: Cell<crate::keyboard::State>,
     consumed_key: Cell<bool>,
 }
 impl NativeState {
@@ -378,7 +424,7 @@ impl NativeState {
 /// The thread-affinity marker forbids Send/Sync.
 pub struct NativeEditor {
     hwnd: HWND,
-    state: Box<NativeState>,
+    state: Rc<NativeState>,
     read_only: Cell<bool>,
     /// Light color standing in for automatic text on a dark document.
     text_override: Cell<Option<u32>>,
@@ -453,7 +499,7 @@ impl NativeEditor {
             }
             bail!("creating document editor: {error}");
         }
-        let state = Box::new(NativeState {
+        let state = Rc::new(NativeState {
             shortcuts: RefCell::default(),
             alive: Cell::new(true),
             owner: Cell::new(owner),
@@ -467,11 +513,11 @@ impl NativeEditor {
             emoji: Cell::new(None),
             wrap: Cell::new(None),
             margins: Cell::new(None),
-            chord: Cell::new(None),
+            chord: Cell::default(),
             consumed_key: Cell::new(false),
         });
-        let data = (&*state as *const NativeState) as usize;
-        // SAFETY: boxed state stays stable until both subclasses are removed in Drop;
+        let data = Rc::as_ptr(&state) as usize;
+        // SAFETY: reference-counted state stays stable until both subclasses are removed in Drop;
         // its address doubles as a unique owner-subclass id per editor.
         let installed = unsafe {
             SetWindowSubclass(hwnd, Some(editor_subclass), SUBCLASS_ID, data) != 0
@@ -534,9 +580,9 @@ impl NativeEditor {
         if owner == previous {
             return Ok(());
         }
-        let data = (&*self.state as *const NativeState) as usize;
+        let data = Rc::as_ptr(&self.state) as usize;
         // Install the new hook before releasing the old one, so failure leaves ownership intact.
-        // SAFETY: the stable boxed state and both windows belong to this UI thread.
+        // SAFETY: the stable reference-counted state and both windows belong to this UI thread.
         unsafe {
             ensure!(
                 SetWindowSubclass(owner, Some(owner_subclass), data, data) != 0,
@@ -600,6 +646,16 @@ impl NativeEditor {
                 // A hidden host cannot take activation; focus once it first appears.
                 self.state.focus_on_show.set(true);
             }
+        }
+    }
+    /// Return keyboard input to the document after its toolbar or a native dialog.
+    pub fn restore_focus(&self) {
+        // SAFETY: all handles belong to this UI thread; helper windows retain their own focus.
+        let focused = unsafe { GetFocus() };
+        if self.state.alive.get()
+            && (focused == self.state.owner.get() || focused == self.state.host)
+        {
+            self.focus();
         }
     }
     pub fn take_shortcut(&self) -> Option<String> {
@@ -1878,8 +1934,8 @@ impl NativeEditor {
 }
 impl Drop for NativeEditor {
     fn drop(&mut self) {
-        let data = (&*self.state as *const NativeState) as usize;
-        // SAFETY: remove both subclasses before their boxed state drops. The owner
+        let data = Rc::as_ptr(&self.state) as usize;
+        // SAFETY: remove both subclasses before their reference-counted state drops. The owner
         // hook removes itself on WM_NCDESTROY, so removing it again is a no-op.
         // alive is cleared by WM_NCDESTROY if the owner destroyed the host first.
         unsafe {
@@ -1980,8 +2036,8 @@ unsafe extern "system" fn owner_subclass(
     id: usize,
     data: usize,
 ) -> isize {
-    // SAFETY: data is the boxed state that Drop keeps alive until this hook is removed.
-    let state = unsafe { &*(data as *const NativeState) };
+    // SAFETY: data is the reference-counted state that Drop keeps alive until this hook is removed.
+    let state = unsafe { retain_state(data) };
     match message {
         // The owner losing activation to its own document host is not a real deactivation.
         WM_ACTIVATE if (wparam & 0xffff) as u32 == WA_INACTIVE && lparam as HWND == state.host => {
@@ -2060,20 +2116,25 @@ unsafe extern "system" fn editor_subclass(
     id: usize,
     data: usize,
 ) -> isize {
+    // SAFETY: this callback is installed only while NativeEditor holds a state reference.
+    let state = (data != 0).then(|| unsafe { retain_state(data) });
     if message == WM_NCDESTROY {
-        if data != 0 {
-            // SAFETY: state remains owned until after the window is destroyed.
-            unsafe {
-                (&*(data as *const NativeState)).alive.set(false);
-            }
+        if let Some(state) = &state {
+            state.alive.set(false);
         }
         // SAFETY: remove this callback from its own native window.
         unsafe {
             RemoveWindowSubclass(hwnd, Some(editor_subclass), id);
         }
-    } else if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN) && data != 0 {
-        // SAFETY: this boxed state and keyboard state belong to this live UI thread.
-        let state = unsafe { &*(data as *const NativeState) };
+    } else if matches!(message, WM_KILLFOCUS | WM_IME_STARTCOMPOSITION) {
+        if let Some(state) = &state {
+            state.chord.set(crate::keyboard::State::default());
+            state.consumed_key.set(false);
+        }
+    } else if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN)
+        && let Some(state) = &state
+    {
+        // SAFETY: keyboard state belongs to this UI thread.
         let modifiers = unsafe {
             crate::keyboard::Modifiers {
                 control: GetKeyState(VK_CONTROL as i32) < 0,
@@ -2081,36 +2142,46 @@ unsafe extern "system" fn editor_subclass(
                 alt: GetKeyState(VK_MENU as i32) < 0,
             }
         };
-        if matches!(wparam, 0x10..=0x12) {
-            // Modifier transitions do not cancel a Ctrl+K chord.
-            return unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-        }
-        let chord = state
-            .chord
-            .take()
-            .is_some_and(|start| start.elapsed() < std::time::Duration::from_secs(3));
-        if let Some(action) = crate::keyboard::shortcut(wparam as u32, modifiers, chord) {
-            if action == "chord" {
-                state.chord.set(Some(std::time::Instant::now()));
-            } else {
-                state.shortcuts.borrow_mut().push_back(action.into());
+        let mut chord = state.chord.get();
+        // Windows-key combinations belong to the operating system.
+        let outcome = if unsafe { GetKeyState(0x5b) < 0 || GetKeyState(0x5c) < 0 }
+            || matches!(wparam, 0x5b | 0x5c)
+        {
+            chord.reset();
+            crate::keyboard::Outcome::Ignored
+        } else {
+            chord.resolve(wparam as u32, modifiers, std::time::Instant::now())
+        };
+        state.chord.set(chord);
+        match outcome {
+            crate::keyboard::Outcome::Ignored => {
+                if !matches!(wparam, 0x10..=0x12 | 0xa0..=0xa5) {
+                    state.consumed_key.set(false);
+                }
             }
-            state.consumed_key.set(true);
-            return 0;
-        }
-        state.consumed_key.set(chord);
-        if chord {
-            return 0;
+            crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {
+                state.consumed_key.set(true);
+                return 0;
+            }
+            crate::keyboard::Outcome::Action(action) => {
+                state.consumed_key.set(true);
+                // Execute before subsequent typing; a busy modal loop falls back to the queue.
+                if !dispatch_shortcut(state.owner.get(), action) && state.alive.get() {
+                    state.shortcuts.borrow_mut().push_back(action.into());
+                }
+                state.consumed_key.set(true);
+                return 0;
+            }
         }
     } else if matches!(message, WM_CHAR | WM_SYSCHAR) && data != 0 {
         // Suppress only the character generated by a handled shortcut; ordinary typing/IME is native.
-        let state = unsafe { &*(data as *const NativeState) };
+        let state = unsafe { retain_state(data) };
         if state.consumed_key.replace(false) {
             return 0;
         }
     } else if message == WM_PASTE && data != 0 {
-        // SAFETY: data points to boxed state owned until subclass removal.
-        let state = unsafe { &*(data as *const NativeState) };
+        // SAFETY: data points to reference-counted state owned until subclass removal.
+        let state = unsafe { retain_state(data) };
         let (message, wparam) = if state.plain.get() {
             (EM_PASTESPECIAL, CF_UNICODETEXT)
         } else {
@@ -2124,7 +2195,7 @@ unsafe extern "system" fn editor_subclass(
         // SAFETY: the original procedure paints and validates first; state is owned
         // until subclass removal.
         let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-        let state = unsafe { &*(data as *const NativeState) };
+        let state = unsafe { retain_state(data) };
         let drew = crate::emoji::paint(hwnd, state.paper.get());
         state.emoji.set(drew.then(|| crate::emoji::selection(hwnd)));
         return result;
@@ -2137,7 +2208,7 @@ unsafe extern "system" fn editor_subclass(
         // entering the selection get the right picture.
         // SAFETY: as above.
         let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-        let state = unsafe { &*(data as *const NativeState) };
+        let state = unsafe { retain_state(data) };
         if let Some(painted) = state.emoji.get()
             && crate::emoji::selection(hwnd) != painted
         {
@@ -2564,6 +2635,265 @@ mod tests {
             _owner: owner,
         }
     }
+    struct KeyboardState([u8; 256]);
+    impl KeyboardState {
+        fn capture() -> Self {
+            let mut state = [0; 256];
+            // SAFETY: a writable keyboard-state array on this test thread only.
+            assert_ne!(
+                unsafe {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardState(
+                        state.as_mut_ptr(),
+                    )
+                },
+                0
+            );
+            Self(state)
+        }
+        fn set(modifiers: crate::keyboard::Modifiers) {
+            let mut state = [0; 256];
+            state[VK_CONTROL as usize] = u8::from(modifiers.control) << 7;
+            state[VK_SHIFT as usize] = u8::from(modifiers.shift) << 7;
+            state[VK_MENU as usize] = u8::from(modifiers.alt) << 7;
+            // SAFETY: changes only this thread's keyboard state, without injecting user input.
+            assert_ne!(
+                unsafe {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(
+                        state.as_ptr(),
+                    )
+                },
+                0
+            );
+        }
+    }
+    impl Drop for KeyboardState {
+        fn drop(&mut self) {
+            // SAFETY: restore this thread's captured keyboard-state array.
+            unsafe {
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(self.0.as_ptr());
+            }
+        }
+    }
+    fn key(hwnd: HWND, key: u32, modifiers: crate::keyboard::Modifiers) {
+        KeyboardState::set(modifiers);
+        // SAFETY: synchronously exercises the private hidden editor on this thread.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                if modifiers.alt {
+                    WM_SYSKEYDOWN
+                } else {
+                    WM_KEYDOWN
+                },
+                key as usize,
+                1,
+            );
+        }
+    }
+    fn character(hwnd: HWND, character: char) {
+        // SAFETY: synchronously exercises the private hidden editor on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_CHAR, character as usize, 1);
+        }
+    }
+    fn ctrl() -> crate::keyboard::Modifiers {
+        crate::keyboard::Modifiers {
+            control: true,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn every_catalog_binding_dispatches_through_the_real_native_key_handler() {
+        let _keyboard = KeyboardState::capture();
+        let fixture = hidden_editor();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let capture = calls.clone();
+        let _registration = register_shortcuts(fixture.editor.owner(), move |action| {
+            capture.borrow_mut().push(action);
+            true
+        });
+        for binding in crate::keyboard::BINDINGS {
+            calls.borrow_mut().clear();
+            fixture.editor.set_text("").expect("empty fixture");
+            fixture
+                .editor
+                .state
+                .chord
+                .set(crate::keyboard::State::default());
+            if binding.chord {
+                key(fixture.editor.hwnd, 0x4b, ctrl());
+                character(fixture.editor.hwnd, '\u{b}');
+                key(
+                    fixture.editor.hwnd,
+                    u32::from(VK_CONTROL),
+                    Default::default(),
+                );
+            }
+            key(fixture.editor.hwnd, binding.key, binding.modifiers);
+            character(fixture.editor.hwnd, 'q');
+            let expected: &[&str] = if binding.action == "chord" {
+                &[]
+            } else {
+                &[binding.action]
+            };
+            assert_eq!(&*calls.borrow(), expected, "{binding:?}");
+            assert!(fixture.editor.take_shortcut().is_none(), "{binding:?}");
+            assert_eq!(
+                fixture.editor.text().expect("text"),
+                "",
+                "shortcut character leaked: {binding:?}"
+            );
+        }
+    }
+    #[test]
+    fn select_all_runs_before_subsequent_typing_and_formatting_is_immediate() {
+        let _keyboard = KeyboardState::capture();
+        let fixture = hidden_editor();
+        let editor = Rc::new(fixture.editor);
+        let document = editor.clone();
+        let errors = Rc::new(RefCell::new(Vec::new()));
+        let failures = errors.clone();
+        let _registration = register_shortcuts(editor.owner(), move |action| {
+            let Some(crate::app::Command::Edit(command)) = crate::app::shortcut_command(action)
+            else {
+                return false;
+            };
+            if let Err(error) = document.execute(command) {
+                failures.borrow_mut().push(error.to_string());
+            }
+            true
+        });
+        editor.set_text("original").expect("initial text");
+        key(editor.hwnd, 0x41, ctrl());
+        assert_eq!(editor.selection(), 0..8);
+        character(editor.hwnd, '\u{1}');
+        key(editor.hwnd, 0x58, Default::default());
+        character(editor.hwnd, 'x');
+        assert_eq!(editor.text().expect("replacement"), "x");
+        key(editor.hwnd, 0x5a, ctrl());
+        character(editor.hwnd, '\u{1a}');
+        assert_eq!(editor.text().expect("undo"), "original");
+        key(editor.hwnd, 0x59, ctrl());
+        character(editor.hwnd, '\u{19}');
+        assert_eq!(editor.text().expect("redo"), "x");
+        key(editor.hwnd, 0x41, ctrl());
+        for (keycode, charcode) in [(0x42, '\u{2}'), (0x49, '\t'), (0x55, '\u{15}')] {
+            key(editor.hwnd, keycode, ctrl());
+            character(editor.hwnd, charcode);
+        }
+        let style = editor.formatting();
+        assert!(style.bold && style.italic && style.underline);
+        assert_eq!(
+            editor
+                .text()
+                .expect("formatting did not type control characters"),
+            "x"
+        );
+        assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
+    }
+    #[test]
+    fn native_chords_leave_typing_altgr_ime_and_navigation_available() {
+        let _keyboard = KeyboardState::capture();
+        let fixture = hidden_editor();
+        let editor = &fixture.editor;
+        for reset in [WM_KILLFOCUS, WM_IME_STARTCOMPOSITION] {
+            editor.set_text("").expect("empty document");
+            key(editor.hwnd, 0x4b, ctrl());
+            character(editor.hwnd, '\u{b}');
+            // SAFETY: reset focus/composition on the hidden test control.
+            unsafe {
+                SendMessageW(editor.hwnd, reset, 0, 0);
+            }
+            key(editor.hwnd, 0x53, Default::default());
+            character(editor.hwnd, 's');
+            assert_eq!(editor.text().expect("typing after reset"), "s");
+        }
+        editor.set_text("").expect("empty document");
+        key(editor.hwnd, 0x4b, ctrl());
+        character(editor.hwnd, '\u{b}');
+        key(
+            editor.hwnd,
+            0x51,
+            crate::keyboard::Modifiers {
+                control: true,
+                alt: true,
+                shift: false,
+            },
+        );
+        character(editor.hwnd, '\u{20ac}');
+        assert_eq!(editor.text().expect("AltGr input"), "\u{20ac}");
+        key(editor.hwnd, 0x4b, ctrl());
+        character(editor.hwnd, '\u{b}');
+        key(editor.hwnd, 0x51, Default::default());
+        character(editor.hwnd, 'q');
+        key(editor.hwnd, 0x53, Default::default());
+        character(editor.hwnd, 's');
+        assert_eq!(
+            editor.text().expect("invalid chord consumes once"),
+            "\u{20ac}s"
+        );
+        editor.set_text("one two").expect("navigation text");
+        editor.select_range(7..7).expect("caret");
+        key(editor.hwnd, 0x24, ctrl());
+        assert_eq!(editor.selection(), 0..0);
+        key(
+            editor.hwnd,
+            0x23,
+            crate::keyboard::Modifiers {
+                control: true,
+                shift: true,
+                alt: false,
+            },
+        );
+        assert_eq!(editor.selection(), 0..7);
+    }
+    #[test]
+    fn native_shortcuts_fallback_once_and_follow_transferred_documents() {
+        let _keyboard = KeyboardState::capture();
+        let source = hidden_editor();
+        let target = hidden_editor();
+        let editor = &source.editor;
+        let old = register_shortcuts(editor.owner(), |_| false);
+        key(editor.hwnd, 0x53, ctrl());
+        assert_eq!(editor.take_shortcut().as_deref(), Some("save"));
+        assert!(editor.take_shortcut().is_none());
+        let calls = Rc::new(Cell::new(0));
+        let count = calls.clone();
+        let replacement = register_shortcuts(editor.owner(), move |_| {
+            count.set(count.get() + 1);
+            true
+        });
+        drop(old);
+        key(editor.hwnd, 0x53, ctrl());
+        assert_eq!(calls.get(), 1);
+        let destination = calls.clone();
+        let _target = register_shortcuts(target.editor.owner(), move |_| {
+            destination.set(destination.get() + 10);
+            true
+        });
+        editor
+            .reparent(target.editor.owner())
+            .expect("move document");
+        key(editor.hwnd, 0x53, ctrl());
+        assert_eq!(calls.get(), 11);
+        assert!(editor.take_shortcut().is_none());
+        drop(replacement);
+    }
+    #[test]
+    fn shortcut_can_destroy_its_own_editor_without_invalidating_the_callback_state() {
+        let _keyboard = KeyboardState::capture();
+        let fixture = hidden_editor();
+        let hwnd = fixture.editor.hwnd;
+        let owner = fixture.editor.owner();
+        let document = Rc::new(RefCell::new(Some(fixture)));
+        let closed = document.clone();
+        let _registration = register_shortcuts(owner, move |_| {
+            closed.borrow_mut().take();
+            true
+        });
+        key(hwnd, 0x57, ctrl());
+        assert!(document.borrow().is_none());
+    }
     #[test]
     fn moving_live_editor_preserves_rtf_selection_dirty_state_and_undo() {
         let mut source = hidden_editor();
@@ -2807,8 +3137,8 @@ mod tests {
         assert_eq!(shortcut(0x5a, true), Some("redo"));
         assert_eq!(shortcut(0x56, false), Some("paste"));
         assert_eq!(shortcut(0xbc, false), Some("preferences"));
-        assert_eq!(shortcut(0xbc, true), Some("zoom-out"));
-        assert_eq!(shortcut(0xbb, true), Some("bigger"));
+        assert_eq!(shortcut(0xbc, true), Some("smaller"));
+        assert_eq!(shortcut(0xbb, true), Some("zoom-in"));
         // Ctrl+I's control character (Tab) is consumed, not typed.
         assert_eq!(shortcut(9 + 0x40, false), Some("italic"));
     }
