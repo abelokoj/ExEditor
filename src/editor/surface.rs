@@ -1067,7 +1067,7 @@ impl Render for EditorSurface {
                     .rounded(px(4.))
                     .text_color(rgb(palette.ink))
                     .text_size(crate::ui::px(11.))
-                    .font_family(crate::fonts::PLAIN_FONT)
+                    .font_family(crate::fonts::default_plain_font())
                     .cursor_default();
                 for (index, candidate) in popup
                     .result

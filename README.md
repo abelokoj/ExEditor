@@ -29,7 +29,9 @@ For Linux, extract the archive and run `python3 install-desktop.py` in its folde
 
 Unsaved documents retain automatic local snapshots. New snapshots include the complete WordCraft model alongside backward-compatible plain text/RTF content; older ExEditor snapshots remain readable. Recovery preserves original snapshots when opening fails. Safe saves detect outside modifications and retain version history.
 
-Bundled fonts are Pretendard Std Regular/Bold with synthesized italics, Maple Mono NF Regular/Italic/Bold/Bold Italic, Inter Regular/Italic/Bold/Bold Italic and Noto Color Emoji. Font registration stays in the current process.
+Inter Regular/Italic/Bold/Bold Italic is bundled for the interface. **Settings > Accessories** offers three optional downloads: Pretendard Std Regular/Bold with synthesized italics (about 0.9 MB), Maple Mono NF Regular/Italic/Bold/Bold Italic (about 9.6 MB), and Noto Color Emoji (about 10.7 MB). These font files remain in this GitHub repository and are excluded from the application executable and installer.
+
+Downloads happen only when requested. Each file comes from a pinned repository commit, is size-bounded and SHA-256 verified, and is saved with its OFL license in ExEditor’s own accessories folder. Fonts become available immediately and remain available offline after restarting; no system font installation is performed. Missing or damaged accessories use the bundled/system fallbacks and can be downloaded again. Choose a downloaded family through Format > Font or New Document settings; installing it does not rewrite existing document formatting. Before those downloads, new installations use Inter for rich text and the platform monospace font for plain text; emoji use available system fonts.
 
 Harper provides offline grammar checking. Language Tools also supports Hunspell dictionaries, Divvun spelling and Voikko where its native runtime/dictionaries are available. Windows packages include the native proofing runtime. The Windows system dictionary remains a Windows-only provider; choose an offline provider on other platforms.
 

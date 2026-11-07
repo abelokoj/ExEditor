@@ -258,7 +258,7 @@ impl Render for MenuView {
             .border_color(rgb(c.border))
             .text_size(px(13.))
             .text_color(rgb(c.ink))
-            .font_family("Segoe UI")
+            .font_family(crate::fonts::INTER_FONT)
             .on_key_down(cx.listener(Self::key))
             .children(self.entries.iter().enumerate().map(|(index, entry)| {
                 let Some(command) = entry.command.clone() else {
@@ -518,7 +518,7 @@ impl Render for FormView {
             .bg(rgb(c.chrome))
             .text_color(rgb(c.ink))
             .text_size(px(13.))
-            .font_family(crate::fonts::RICH_FONT)
+            .font_family(crate::fonts::INTER_FONT)
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     window.remove_window();

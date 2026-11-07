@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-07T16:36:11-05:00 - Optional font accessories (local/uncommitted source; GitHub validation pending)
+
+- Kept Pretendard Std, Maple Mono NF and Noto Color Emoji in the GitHub repository but removed their font bytes from compiled assets. Inter remains bundled; new installations use available platform monospace and emoji fallbacks until accessories are downloaded.
+- Added Settings > Accessories with individual size labels, download/retry/loading/available states and explicit opt-in downloads. Pinned source URLs, bounded HTTPS reads, per-file SHA-256 checks and atomic writes protect local installs; startup is offline and damaged/incomplete packs remain repairable. Verified fonts activate immediately without system installation or changing saved document styles, with layout/raster invalidation across open editors.
+- Added regression source for manifests, corrupt/partial installs, live font activation, and a separate GitHub-only download/cache check. GitHub packaging now rejects executables containing any of the three optional font payloads.
+- Before this follow-up, GitHub run 42412982327 completed successfully on all three platforms, including Windows installer integration, and produced verified Linux/macOS archives for source 665e783; those are the pre-accessory baseline, not the new lightweight package. Optional-accessory compilation/tests/packages remain pending. No local application compilation or source tests.
+
 ## 2026-11-07T15:49:30-05:00 - Native input scheduler and composition corrections (local/uncommitted; GitHub validation pending)
 
 - GitHub run 42412008974 passed strict diagnostics on macOS and Linux, then the editor test process aborted because the caret timer woke GPUI's local test executor from the external async-IO thread. The surface now uses GPUI's scheduler timer; corrected missing keypad aliases in the shortcut harness and the mixed-section printing fixture's paragraph index.

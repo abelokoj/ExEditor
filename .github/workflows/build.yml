@@ -115,9 +115,19 @@ jobs:
           cargo test --locked --all-targets 2>&1 | Tee-Object -FilePath logs/tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check optional font downloads
+        run: |
+          cargo test --locked accessories::tests::github_font_downloads_are_verified_and_cached -- --ignored 2>&1 | Tee-Object -FilePath logs/accessory-downloads.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build the application
         run: |
           cargo build --locked --release --bin exeditor 2>&1 | Tee-Object -FilePath logs/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check optional fonts are not bundled
+        run: |
+          python scripts/check-optional-fonts.py target/release/exeditor.exe 2>&1 | Tee-Object -FilePath logs/optional-fonts.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package the downloadable application
@@ -234,9 +244,15 @@ jobs:
       - name: Run native editor regressions
         shell: bash
         run: set -o pipefail; cargo test --locked --all-targets 2>&1 | tee logs/tests.log
+      - name: Check optional font downloads
+        shell: bash
+        run: set -o pipefail; cargo test --locked accessories::tests::github_font_downloads_are_verified_and_cached -- --ignored 2>&1 | tee logs/accessory-downloads.log
       - name: Build the application
         shell: bash
         run: set -o pipefail; cargo build --locked --release --bin exeditor 2>&1 | tee logs/build.log
+      - name: Check optional fonts are not bundled
+        shell: bash
+        run: set -o pipefail; python3 scripts/check-optional-fonts.py target/release/exeditor 2>&1 | tee logs/optional-fonts.log
       - name: Package native application
         run: python3 scripts/package-desktop.py --target '${{ matrix.target }}' --commit '${{ github.sha }}'
       - uses: actions/upload-artifact@v4

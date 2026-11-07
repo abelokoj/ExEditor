@@ -41,6 +41,7 @@ pub struct Editor {
     mapped: RefCell<Option<(u64, core_positions::TextMap)>>,
     rendered: RefCell<Option<DisplayDocument>>,
     layout_cache: RefCell<LayoutCache>,
+    font_generation: Cell<u64>,
     modified: Cell<bool>,
     buffered_changes: Cell<bool>,
     text_changed: Cell<bool>,
@@ -83,6 +84,7 @@ impl Editor {
             mapped: RefCell::new(None),
             rendered: RefCell::new(None),
             layout_cache: RefCell::new(LayoutCache::new()),
+            font_generation: Cell::new(wordcraft_fonts::FontDb::global().generation()),
             modified: Cell::new(false),
             buffered_changes: Cell::new(false),
             text_changed: Cell::new(false),
@@ -114,6 +116,11 @@ impl Editor {
             .rev()
             .wrapping_mul(1_000_003)
             .wrapping_add(self.display_revision.get())
+            .wrapping_add(
+                wordcraft_fonts::FontDb::global()
+                    .generation()
+                    .wrapping_mul(1_000_000_007),
+            )
     }
     fn invalidate_display(&self) {
         self.display_revision
@@ -886,6 +893,10 @@ impl Editor {
         Ok(())
     }
     fn ensure_display(&self) {
+        let generation = wordcraft_fonts::FontDb::global().generation();
+        if self.font_generation.replace(generation) != generation {
+            self.layout_cache.borrow_mut().clear();
+        }
         let key = self.revision();
         if self
             .rendered

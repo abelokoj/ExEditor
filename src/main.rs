@@ -3,6 +3,7 @@
 #[cfg(test)]
 extern crate gpui_kit as gpui;
 
+mod accessories;
 mod app;
 mod clipboard_html;
 mod color;

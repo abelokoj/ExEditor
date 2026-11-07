@@ -157,7 +157,7 @@ pub fn ruler(
                                 px(9.),
                                 &[TextRun {
                                     len,
-                                    font: font(crate::fonts::RICH_FONT),
+                                    font: font(crate::fonts::INTER_FONT),
                                     color: rgb(colors.muted).into(),
                                     background_color: None,
                                     underline: None,

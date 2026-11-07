@@ -1129,7 +1129,7 @@ impl Render for ColorsPanel {
                                     .focus_bordered(false)
                                     .text_center()
                                     .text_size(px(18.))
-                                    .font_family(crate::fonts::PLAIN_FONT),
+                                    .font_family(crate::fonts::default_plain_font()),
                             ),
                     )
                     .child(

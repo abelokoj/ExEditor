@@ -3309,14 +3309,21 @@ impl EditorWindow {
                 crate::fonts::RICH_FONT,
                 crate::fonts::PLAIN_FONT,
                 crate::fonts::INTER_FONT,
+                "Noto Color Emoji",
                 "Arial",
                 "Times New Roman",
                 "Georgia",
-                "Consolas",
+                crate::fonts::SYSTEM_PLAIN_FONT,
                 "Courier New",
                 "Segoe UI",
             ]
             .into_iter()
+            .filter(|name| match *name {
+                crate::fonts::RICH_FONT => crate::fonts::accessory_available("pretendard-std"),
+                crate::fonts::PLAIN_FONT => crate::fonts::accessory_available("maple-mono-nf"),
+                "Noto Color Emoji" => crate::fonts::accessory_available("noto-color-emoji"),
+                _ => true,
+            })
             .map(|name| {
                 e(name, "", EditCommand::Font(name.into()))
                     .checked(self.doc.formatting.font == name)
@@ -3670,7 +3677,7 @@ impl Render for EditorWindow {
             .border_color(rgb(c.border))
             .bg(rgb(c.paper))
             .text_color(rgb(c.ink))
-            .font_family(crate::fonts::RICH_FONT)
+            .font_family(crate::fonts::INTER_FONT)
             .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match this

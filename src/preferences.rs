@@ -54,9 +54,9 @@ impl Default for Preferences {
         Self {
             rich_text: true,
             untitled_prefix: crate::names::DEFAULT_PREFIX.into(),
-            rich_font: crate::fonts::RICH_FONT.into(),
+            rich_font: crate::fonts::default_rich_font().into(),
             rich_size: 12.0,
-            plain_font: crate::fonts::PLAIN_FONT.into(),
+            plain_font: crate::fonts::default_plain_font().into(),
             plain_size: 11.0,
             wrap_to_page: false,
             show_ruler: true,

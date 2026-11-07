@@ -1,4 +1,4 @@
-//! TextEdit's two-tab Settings window, backed by real persisted preferences.
+//! Persisted editor settings and explicit optional font downloads.
 use crate::{
     app::{Command, show_error},
     dialogs::{Commands, FormKind},
@@ -7,7 +7,7 @@ use crate::{
     ui::{Palette, px},
 };
 use gpui_kit::component::{
-    Sizable as _, Size,
+    Disableable as _, Sizable as _, Size,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     checkbox::Checkbox,
     input::{Input, InputState},
@@ -19,11 +19,18 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 enum Tab {
     NewDocument,
     OpenAndSave,
+    Accessories,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FontEditor {
     Plain,
     Rich,
+}
+enum DownloadStatus {
+    Missing,
+    Downloading,
+    Available,
+    Failed(String),
 }
 struct Settings {
     draft: Preferences,
@@ -35,6 +42,7 @@ struct Settings {
     recovery: Entity<InputState>,
     tab: Tab,
     font_editor: Option<FontEditor>,
+    accessories: Vec<DownloadStatus>,
     error: Option<String>,
     commands: Commands,
     colors: Palette,
@@ -87,6 +95,17 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette, cx: &
                 draft: preferences,
                 tab: Tab::NewDocument,
                 font_editor: None,
+                accessories: crate::accessories::manifest()
+                    .packs
+                    .iter()
+                    .map(|pack| {
+                        if crate::fonts::accessory_available(&pack.id) {
+                            DownloadStatus::Available
+                        } else {
+                            DownloadStatus::Missing
+                        }
+                    })
+                    .collect(),
                 error: None,
                 commands,
                 colors,
@@ -216,6 +235,126 @@ impl Settings {
                         .child(div().text_color(rgb(self.colors.muted)).child("pt")),
                 )
             })
+    }
+    fn download_accessory(&mut self, index: usize, cx: &mut Context<Self>) {
+        if matches!(
+            self.accessories[index],
+            DownloadStatus::Downloading | DownloadStatus::Available
+        ) {
+            return;
+        }
+        self.accessories[index] = DownloadStatus::Downloading;
+        cx.notify();
+        let pack = &crate::accessories::manifest().packs[index];
+        cx.spawn(async move |view, cx| {
+            let result = smol::unblock(move || crate::accessories::download(pack))
+                .await
+                .and_then(|files| {
+                    cx.update(|cx| crate::fonts::register_accessory(pack, files, cx))
+                });
+            let _ = view.update(cx, |this, cx| {
+                this.accessories[index] = match result {
+                    Ok(()) => DownloadStatus::Available,
+                    Err(error) => DownloadStatus::Failed(error.to_string()),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    fn accessories(&self, cx: &mut Context<Self>) -> Div {
+        let c = self.colors;
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .child(self.heading("Font Accessories"))
+            .child(
+                div()
+                    .child("Download the font families you want. Inter is included with ExEditor."),
+            );
+        for (index, pack) in crate::accessories::manifest().packs.iter().enumerate() {
+            let state = &self.accessories[index];
+            let available = matches!(state, DownloadStatus::Available)
+                || crate::fonts::accessory_available(&pack.id);
+            let downloading = matches!(state, DownloadStatus::Downloading);
+            let label = if available {
+                "Available"
+            } else if downloading {
+                "Downloading…"
+            } else if matches!(state, DownloadStatus::Failed(_)) {
+                "Retry"
+            } else {
+                "Download"
+            };
+            let row =
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(pack.name.clone()),
+                            )
+                            .child(div().w(px(62.)).text_color(rgb(c.muted)).child(format!(
+                                "{:.1} MB",
+                                pack.download_bytes() as f64 / 1_000_000.
+                            )))
+                            .child(
+                                self.button(
+                                    match index {
+                                        0 => "download-pretendard",
+                                        1 => "download-maple",
+                                        _ => "download-emoji",
+                                    },
+                                    label,
+                                    cx,
+                                )
+                                .w(px(108.))
+                                .disabled(available || downloading)
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| this.download_accessory(index, cx),
+                                )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(c.muted))
+                            .child(pack.description.clone()),
+                    )
+                    .when(available, |row| {
+                        row.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(c.muted))
+                                .child("Ready to use, including offline."),
+                        )
+                    })
+                    .when(matches!(state, DownloadStatus::Failed(_)), |row| {
+                        let message = if let DownloadStatus::Failed(message) = state {
+                            message.clone()
+                        } else {
+                            String::new()
+                        };
+                        row.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(0xd43a35))
+                                .child(message),
+                        )
+                    });
+            panel = panel.child(row);
+        }
+        panel.child(div().text_size(px(11.)).text_color(rgb(c.muted))
+            .child("Choose downloaded fonts in Format > Font or New Document settings. Existing document formatting stays as you set it."))
     }
     fn new_document(&self, cx: &mut Context<Self>) -> Div {
         let c = self.colors;
@@ -540,10 +679,12 @@ impl Render for Settings {
         let tabs = [
             (Tab::NewDocument, "New Document", "settings-new-document"),
             (Tab::OpenAndSave, "Open and Save", "settings-open-save"),
+            (Tab::Accessories, "Accessories", "settings-accessories"),
         ];
         let panel = match tab {
             Tab::NewDocument => self.new_document(cx),
             Tab::OpenAndSave => self.open_and_save(cx),
+            Tab::Accessories => self.accessories(cx),
         };
         div()
             .id("exeditor-settings")
@@ -557,7 +698,7 @@ impl Render for Settings {
             .border_color(rgb(c.border))
             .text_color(rgb(c.ink))
             .text_size(px(12.))
-            .font_family("Segoe UI")
+            .font_family(crate::fonts::INTER_FONT)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     window.remove_window();
