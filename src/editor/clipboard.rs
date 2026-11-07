@@ -157,7 +157,10 @@ pub fn paste(editor: &Editor, plain: bool) -> Result<()> {
 /// Pastes HTML explicitly; CF_HTML selection ranges are decoded before import on Windows.
 pub fn paste_html(editor: &Editor) -> Result<()> {
     ensure!(!editor.is_read_only(), "This document is read-only.");
-    let html = platform::html()?.context("The clipboard has no HTML fragment.")?;
+    let html = match platform::html()? {
+        Some(html) => html,
+        None => platform::text()?.context("The clipboard has no HTML fragment or markup text.")?,
+    };
     if editor.is_plain() {
         bail!("Switch to a rich text document to paste HTML formatting.");
     }

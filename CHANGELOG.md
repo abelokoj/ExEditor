@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-07T15:17:38-05:00 - First GitHub migration diagnostics (local/uncommitted corrections)
+
+- GitHub run 42409637854 resolved the pinned WordCraft dependencies and passed formatting on macOS/Linux, then reported stale native spelling calls, a menu modifier binding, test trait imports and a missing index type. Corrected those integration errors and adopted GitHub’s resolved Cargo.lock for reproducible builds.
+- Restored explicit HTML-markup paste and added accessible document value/focus/edit actions and keyboard context-menu navigation. Suggestions open after typing or manual request, not just caret movement, and manual completion remains available when automatic suggestions are off.
+- Added native-input regression source for full shortcut delivery, IME undo grouping and drawn dark-page pixels; corrected clean navigation state and rich-text wrap behavior without changing saved document styles.
+- Validation: local Rust formatting/source inspection only; no local build or application tests. The corrected GitHub build/tests/packages remain pending and no new installer is claimed.
+
 ## 2026-11-07T15:05:18-05:00 - WordCraft editor migration, input fixes and suggestions (local/uncommitted source; GitHub validation pending)
 
 - Replaced the Windows RichEdit document host and old conversion model with WordCraft’s native Rust document, command, font, layout and rendering engines, keeping the existing GPUI Fast interface. Preserved the prior working source in a verified private local archive; no private notes or backup contents are included in the repository.

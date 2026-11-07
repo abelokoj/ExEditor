@@ -194,6 +194,7 @@ impl MenuView {
         self.select(index, cx);
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let m = event.keystroke.modifiers;
         match self
             .keyboard
             .resolve_keystroke(&event.keystroke, std::time::Instant::now())
@@ -206,7 +207,7 @@ impl MenuView {
             }
             crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {}
             crate::keyboard::Outcome::Ignored => {
-                if m.control || m.alt {
+                if m.control || m.platform || m.alt {
                     return;
                 }
                 self.navigation_key(event, window, cx);

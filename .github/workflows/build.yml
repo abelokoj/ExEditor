@@ -221,6 +221,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.target }}-wordcraft
+          cache-on-failure: true
       - name: Resolve source dependency changes
         shell: bash
         run: set -o pipefail; cargo update --workspace 2>&1 | tee logs/lockfile.log

@@ -751,7 +751,7 @@ impl EditorWindow {
         self.doc
             .editor
             .clone()
-            .context("The editor text editor could not be created")
+            .context("The document editor could not be created")
     }
     fn is_dark(&self, window: &Window) -> bool {
         match self.prefs.appearance {
@@ -2504,7 +2504,6 @@ impl EditorWindow {
                     }
                     "spelling" => {
                         self.prefs.spellcheck = !self.prefs.spellcheck;
-                        self.editor()?.set_spellcheck(false);
                         self.editor()?.set_proofing_marks(&[])?;
                         self.doc.proofing.invalidate();
                     }
@@ -2817,7 +2816,6 @@ impl EditorWindow {
                     }
                 }
                 self.editor()?.set_auto_links(self.prefs.automatic_links);
-                self.editor()?.set_spellcheck(false);
                 self.editor()?.set_proofing_marks(&[])?;
                 self.doc.proofing.invalidate();
             }
@@ -3892,7 +3890,7 @@ impl DocumentTab {
         let editor = tab
             .editor
             .as_ref()
-            .context("The editor text editor could not be created")?;
+            .context("The document editor could not be created")?;
         editor.set_plain_text_mode(buffer.document.format.is_plain())?;
         if let Some(snapshot) = buffer.document.editor_snapshot {
             editor.set_document(snapshot)?;

@@ -71,10 +71,10 @@ fn raster_channels_match_gpui_without_losing_alpha() {
 }
 
 use super::{Editor, EditorSurface};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, FocusHandle, IntoElement, KeyDownEvent, Keystroke,
-    Modifiers, Render, Styled as _, TestAppContext, Window, div,
+    AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, Keystroke, Modifiers, ParentElement as _, Render, Styled as _, TestAppContext,
+    Window, div,
 };
 use std::{cell::RefCell, rc::Rc, time::Instant};
 
@@ -248,4 +248,93 @@ fn completion_accepts_tab_and_escape_does_not_insert_a_tab(cx: &mut TestAppConte
     });
     cx.simulate_keystrokes("escape");
     assert_eq!(editor.text().unwrap(), "example exa");
+}
+
+#[gpui_kit::test]
+fn native_composition_suppresses_suggestions_and_undoes_as_one_edit(cx: &mut TestAppContext) {
+    use gpui_kit::EntityInputHandler as _;
+    let editor = Rc::new(Editor::new().unwrap());
+    editor.set_text("example ").unwrap();
+    editor.select_range(8..8).unwrap();
+    editor.mark_saved();
+    let (view, cx, _) = setup(cx, editor.clone(), true);
+    for text in ["exa", "exam"] {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.surface.update(cx, |surface, cx| {
+                    surface.replace_and_mark_text_in_range(None, text, None, window, cx);
+                    assert!(surface.completion.is_none());
+                })
+            });
+        });
+    }
+    assert_eq!(editor.text().unwrap(), "example exam");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.surface.update(cx, |surface, cx| {
+                surface.replace_text_in_range(None, "exam", window, cx);
+                assert!(surface.marked.is_none());
+            })
+        });
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    assert_eq!(editor.text().unwrap(), "example ");
+}
+
+#[gpui_kit::test]
+fn dark_theme_reaches_the_drawn_page_without_rewriting_the_document(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let editor = Rc::new(Editor::new().unwrap());
+    editor.set_text("Theme sample").unwrap();
+    editor.mark_saved();
+    let original = editor.snapshot();
+    let (view, cx, _) = setup(cx, editor.clone(), false);
+    editor.set_background(0x202530);
+    editor.set_text_override(Some(0xeeeeee)).unwrap();
+    cx.update(|window, cx| window.render_frame(cx));
+    view.update(cx, |view, cx| {
+        view.surface.update(cx, |surface, _| {
+            assert_eq!(surface.palette().paper, crate::ui::Palette::new(true).paper);
+            assert!(
+                surface
+                    .cache
+                    .values()
+                    .any(|image| image.as_bytes(0).is_some_and(|bytes| bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|pixel| pixel == &[0x30, 0x25, 0x20, 0xff])))
+            );
+        })
+    });
+    assert_eq!(editor.snapshot(), original);
+    assert!(!editor.is_modified());
+}
+
+#[gpui_kit::test]
+fn moving_the_caret_does_not_open_suggestions_and_manual_completion_survives_the_toggle(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    let editor = Rc::new(Editor::new().unwrap());
+    editor.set_text("example exa").unwrap();
+    editor.select_range(11..11).unwrap();
+    let (view, cx, _) = setup(cx, editor.clone(), false);
+    cx.update(|window, cx| window.render_frame(cx));
+    view.update(cx, |view, cx| {
+        assert!(view.surface.read(cx).completion.is_none())
+    });
+    editor.set_autocomplete_enabled(false);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.surface
+                .update(cx, |surface, cx| surface.complete(window, cx))
+        })
+    });
+    cx.update(|window, cx| window.render_frame(cx));
+    view.update(cx, |view, cx| {
+        assert!(view.surface.read(cx).completion.is_some())
+    });
+    cx.simulate_keystrokes("tab");
+    assert_eq!(editor.text().unwrap(), "example example");
 }

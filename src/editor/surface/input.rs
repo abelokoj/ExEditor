@@ -76,7 +76,8 @@ impl EntityInputHandler for EditorSurface {
                 }
                 self.completion_seen = None;
                 self.changed(window, cx, true);
-                self.refresh_completion(false);
+                let manual = self.completion.as_ref().is_some_and(|popup| popup.manual);
+                self.refresh_completion(manual);
             }
             Err(error) => {
                 self.error = Some(error.to_string());

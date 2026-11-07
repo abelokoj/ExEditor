@@ -23,6 +23,14 @@ mod tests;
 const POINT_TO_PIXEL: f32 = 96. / 72.;
 const TILE_PIXELS: f32 = 768.;
 const SCROLLBAR: f32 = 12.;
+const CONTEXT_ACTIONS: [(&str, &str); 6] = [
+    ("Undo", "undo"),
+    ("Cut", "cut"),
+    ("Copy", "copy"),
+    ("Paste", "paste"),
+    ("Delete", "delete"),
+    ("Select All", "select-all"),
+];
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct TileKey {
@@ -36,6 +44,7 @@ struct CompletionPopup {
     selected: usize,
     revision: u64,
     caret: usize,
+    manual: bool,
 }
 
 struct MarkedText {
@@ -78,6 +87,7 @@ pub(crate) struct EditorSurface {
     completion_seen: Option<(u64, Range<usize>)>,
     dismissed_completion: Option<(u64, usize)>,
     context_menu: Option<Point<Pixels>>,
+    context_selection: usize,
     drag: Option<Drag>,
     pointer: Point<Pixels>,
     last_drag: Instant,
@@ -130,6 +140,7 @@ impl EditorSurface {
             completion_seen: None,
             dismissed_completion: None,
             context_menu: None,
+            context_selection: 0,
             drag: None,
             pointer: Point::default(),
             last_drag: Instant::now(),
@@ -244,7 +255,9 @@ impl EditorSurface {
         let selection = self.editor.selection();
         if self.completion_seen.as_ref() != Some(&(state.revision, selection.clone())) {
             self.completion_seen = Some((state.revision, selection));
-            self.refresh_completion(false);
+            if let Some(manual) = self.completion.as_ref().map(|popup| popup.manual) {
+                self.refresh_completion(manual);
+            }
             // Popups use the new caret geometry on the next layout pass.
             if self.completion.is_some() {
                 cx.notify();
@@ -405,7 +418,7 @@ impl EditorSurface {
         let state = self.editor.display_state();
         let selection = self.editor.selection();
         if !self.focused
-            || !state.autocomplete_enabled
+            || (!state.autocomplete_enabled && !manual)
             || state.read_only
             || self.marked.is_some()
             || !selection.is_empty()
@@ -427,6 +440,7 @@ impl EditorSurface {
             selected: 0,
             revision: state.revision,
             caret: selection.start,
+            manual,
         });
         if manual {
             self.dismissed_completion = None;
@@ -473,7 +487,41 @@ impl EditorSurface {
         if self.marked.is_some() {
             return;
         }
-        if control && !modifiers.alt && !modifiers.shift && matches!(key, "space" | " ") {
+        if self.context_menu.is_some()
+            && !control
+            && !modifiers.alt
+            && matches!(
+                key,
+                "up" | "down" | "home" | "end" | "enter" | "space" | " " | "escape"
+            )
+        {
+            match key {
+                "escape" => self.context_menu = None,
+                "enter" | "space" | " " => {
+                    self.activate_context(self.context_selection, window, cx)
+                }
+                _ => {
+                    let backwards = matches!(key, "up" | "end");
+                    let mut index = match key {
+                        "home" => 5,
+                        "end" => 0,
+                        _ => self.context_selection,
+                    };
+                    for _ in 0..6 {
+                        index = if backwards {
+                            (index + 5) % 6
+                        } else {
+                            (index + 1) % 6
+                        };
+                        if self.context_enabled(index) {
+                            break;
+                        }
+                    }
+                    self.context_selection = index;
+                }
+            }
+            cx.notify();
+        } else if control && !modifiers.alt && !modifiers.shift && matches!(key, "space" | " ") {
             self.context_menu = None;
             self.refresh_completion(true);
             cx.notify();
@@ -512,6 +560,7 @@ impl EditorSurface {
             || key == "context-menu"
         {
             self.completion = None;
+            self.context_selection = if self.editor.is_read_only() { 2 } else { 0 };
             self.context_menu = self
                 .caret_bounds()
                 .map(|caret| caret.origin - self.bounds.origin + point(px(0.), caret.size.height));
@@ -641,6 +690,7 @@ impl EditorSurface {
                 self.error = Some(error.to_string());
             }
         }
+        self.context_selection = if self.editor.is_read_only() { 2 } else { 0 };
         self.context_menu = Some(event.position - self.bounds.origin);
         self.changed(window, cx, false);
         cx.stop_propagation();
@@ -918,8 +968,40 @@ impl Render for EditorSurface {
         let view = cx.entity();
         let paint_view = view.clone();
         let palette = self.palette();
+        let accessible_focus = cx.weak_entity();
+        let accessible_value = cx.weak_entity();
         let mut root = div()
             .id("wordcraft-editor")
+            .role(Role::TextInput)
+            .accessibility_id("ExEditor.Document")
+            .aria_label("Document")
+            .when(window.is_a11y_active() || cfg!(test), |root| {
+                root.aria_value(self.editor.plain_text_snapshot())
+            })
+            .on_a11y_action(AccessibleAction::Focus, move |_, window, cx| {
+                let _ = accessible_focus.update(cx, |surface, cx| window.focus(&surface.focus, cx));
+            })
+            .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
+                if let Some(accesskit::ActionData::Value(value)) = data {
+                    let _ = accessible_value.update(cx, |surface, cx| {
+                        if surface.editor.is_read_only() {
+                            return;
+                        }
+                        surface.editor.session_mut().close_typing();
+                        let result = surface
+                            .editor
+                            .select_range(0..surface.editor.text_length())
+                            .and_then(|()| surface.editor.replace_current(value));
+                        match result {
+                            Ok(()) => surface.changed(window, cx, true),
+                            Err(error) => {
+                                surface.error = Some(error.to_string());
+                                cx.notify();
+                            }
+                        }
+                    });
+                }
+            })
             .relative()
             .size_full()
             .min_h(px(0.))
@@ -1046,46 +1128,39 @@ impl Render for EditorSurface {
                 .border_color(rgb(palette.border))
                 .rounded(px(4.))
                 .cursor_default();
-            for (index, (label, action)) in [
-                ("Undo", "undo"),
-                ("Cut", "cut"),
-                ("Copy", "copy"),
-                ("Paste", "paste"),
-                ("Delete", "delete"),
-                ("Select All", "select-all"),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let disabled = self.editor.is_read_only()
-                    && matches!(action, "undo" | "cut" | "paste" | "delete");
+            for (index, (label, _)) in CONTEXT_ACTIONS.into_iter().enumerate() {
+                let enabled = self.context_enabled(index);
+                let selected = index == self.context_selection;
                 menu = menu.child(
                     div()
                         .id(("editor-context", index))
+                        .role(Role::MenuItem)
+                        .aria_label(label)
                         .h(crate::ui::px(23.))
                         .px(px(8.))
-                        .text_color(rgb(if disabled { palette.muted } else { palette.ink }))
-                        .when(!disabled, |item| {
-                            item.hover(|style| style.bg(rgb(0x2864b4)).text_color(rgb(0xffffff)))
-                        })
+                        .bg(rgb(if selected && enabled {
+                            0x2864b4
+                        } else {
+                            palette.field
+                        }))
+                        .text_color(rgb(if !enabled {
+                            palette.muted
+                        } else if selected {
+                            0xffffff
+                        } else {
+                            palette.ink
+                        }))
+                        .on_hover(cx.listener(move |this, hovered, _, cx| {
+                            if *hovered && this.context_enabled(index) {
+                                this.context_selection = index;
+                                cx.notify();
+                            }
+                        }))
                         .child(label)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
-                                this.context_menu = None;
-                                if !disabled {
-                                    if action == "delete" {
-                                        this.command(
-                                            "text.delete",
-                                            serde_json::json!({}),
-                                            window,
-                                            cx,
-                                        );
-                                    } else {
-                                        this.editor.enqueue_shortcut(action);
-                                    }
-                                }
-                                cx.notify();
+                                this.activate_context(index, window, cx);
                                 cx.stop_propagation();
                                 window.prevent_default();
                             }),
@@ -1114,6 +1189,24 @@ impl Render for EditorSurface {
 }
 
 impl EditorSurface {
+    fn context_enabled(&self, index: usize) -> bool {
+        index < CONTEXT_ACTIONS.len() && (!self.editor.is_read_only() || matches!(index, 2 | 5))
+    }
+    fn activate_context(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.context_menu = None;
+        if !self.context_enabled(index) {
+            cx.notify();
+            return;
+        }
+        let action = CONTEXT_ACTIONS[index].1;
+        if action == "delete" {
+            self.command("text.delete", serde_json::json!({}), window, cx);
+        } else {
+            self.editor.enqueue_shortcut(action);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn complete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         self.focused = true;

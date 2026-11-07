@@ -139,3 +139,13 @@ fn page_setup_and_completion_preferences_invalidate_display_once() {
     editor.set_autocomplete_enabled(false);
     assert_eq!(editor.revision(), revision);
 }
+
+#[test]
+fn navigation_clearing_pending_style_does_not_dirty_a_saved_document() {
+    let editor = editor("text");
+    editor.select_range(4..4).unwrap();
+    editor.execute(EditCommand::Bold).unwrap();
+    editor.mark_saved();
+    editor.run_command("caret.left", &json!({})).unwrap();
+    assert!(!editor.is_modified());
+}

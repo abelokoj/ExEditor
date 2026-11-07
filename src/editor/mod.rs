@@ -132,10 +132,11 @@ impl Editor {
             !self.is_read_only() || !spec.mutates,
             "the document is locked"
         );
+        let mutates = spec.mutates;
         let before = session.doc.clone();
         let pending = session.pending.clone();
         let result = session.run(id, params).map_err(anyhow::Error::new)?;
-        if !before.same_content(&session.doc) || pending != session.pending {
+        if !before.same_content(&session.doc) || (mutates && pending != session.pending) {
             self.changed();
         }
         Ok(result)
@@ -482,7 +483,7 @@ impl Editor {
         let count = result["replaced"].as_u64().unwrap_or(0) as usize;
         let text = self.text()?;
         let length = text.encode_utf16().count();
-        let boundary = |mut n| {
+        let boundary = |mut n: usize| {
             n = n.min(length);
             while core_positions::utf16_to_byte(&text, n).is_none() {
                 n -= 1;
@@ -680,6 +681,10 @@ impl Editor {
         ensure!(
             !url.is_empty() && !url.chars().any(|c| matches!(c, '\r' | '\n' | '\0' | '"')),
             "enter a valid link without quotes or line breaks"
+        );
+        ensure!(
+            wordcraft_doc::link::is_safe_href(url),
+            "Use a web, email, bookmark or relative link."
         );
         validate_text(label)?;
         self.run_command(
@@ -939,7 +944,7 @@ impl Editor {
                 }
             }
         }
-        let mode = if display.wrap_to_page && !display.plain {
+        let mode = if display.wrap_to_page && !display.plain && display.wrap {
             ViewMode::Print
         } else {
             ViewMode::Web
