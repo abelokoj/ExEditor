@@ -1,8 +1,15 @@
 # Changelog
 
+## 2026-11-07T15:49:30-05:00 - Native input scheduler and composition corrections (local/uncommitted; GitHub validation pending)
+
+- GitHub run 42412008974 passed strict diagnostics on macOS and Linux, then the editor test process aborted because the caret timer woke GPUI's local test executor from the external async-IO thread. The surface now uses GPUI's scheduler timer; corrected missing keypad aliases in the shortcut harness and the mixed-section printing fixture's paragraph index.
+- Kept marked IME ranges tied to canonical document revisions, so screen theme/syntax changes cannot cancel composition, and paused polled smart typography until composition completes. Added the theme-during-composition regression.
+- Validation: inspected GitHub failure logs and upstream scheduler/document defaults; local formatting only. Remote regression rerun and replacement release packages remain pending. No local application compilation or tests.
+
 ## 2026-11-07T15:37:45-05:00 - Portable recovery ownership and strict lint cleanup (local/uncommitted corrections)
 
 - GitHub run 42411020078 reached strict diagnostics on all three platforms. Removed unused native-adapter remnants, limited CF_HTML platform code to Windows while retaining parser tests everywhere, and applied the pinned toolchain’s fixed-size chunk style.
+- Kept native composition validity separate from screen-color/syntax revisions so theme updates cannot discard the marked input range; suspended polled typographic replacements during composition.
 - Replaced the prior non-Windows recovery lease rejection with real private file locks, including symlink refusal and lease ownership regressions. Normal committed typing uses the editor’s ordinary input rules; composition updates retain grouped raw edits. Native speech keeps its process handle if stopping fails.
 - Validation: GitHub compiler/lint reports and local source formatting only; no local application compilation or tests. Remote regression execution and downloadable release packages remain pending.
 

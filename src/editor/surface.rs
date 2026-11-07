@@ -104,7 +104,9 @@ impl EditorSurface {
         let (x, y) = editor.view_scroll();
         let ticker = cx.spawn(async move |view, cx| {
             loop {
-                smol::Timer::after(Duration::from_millis(33)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
                 if view
                     .update(cx, |this, cx| {
                         let blinking = this.focused && this.editor.selection().is_empty();
@@ -151,6 +153,10 @@ impl EditorSurface {
             error: None,
             _ticker: ticker,
         }
+    }
+
+    pub(crate) fn is_composing(&self) -> bool {
+        self.marked.is_some()
     }
 
     fn viewport(&self) -> Bounds<Pixels> {
@@ -240,7 +246,8 @@ impl EditorSurface {
             self.context_menu = None;
         }
         if self.marked.as_ref().is_some_and(|marked| {
-            marked.revision != state.revision || marked.selection != self.editor.selection()
+            marked.revision != self.editor.document_revision()
+                || marked.selection != self.editor.selection()
         }) {
             self.marked = None;
             window.notify_text_input_changed(&self.focus);

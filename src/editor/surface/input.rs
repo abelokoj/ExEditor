@@ -36,7 +36,7 @@ impl EntityInputHandler for EditorSurface {
         self.marked
             .as_ref()
             .filter(|marked| {
-                marked.revision == self.editor.revision()
+                marked.revision == self.editor.document_revision()
                     && marked.selection == self.editor.selection()
             })
             .map(|marked| marked.range.clone())
@@ -62,7 +62,8 @@ impl EntityInputHandler for EditorSurface {
             return;
         }
         let marked = self.marked.take().filter(|marked| {
-            marked.revision == self.editor.revision() && marked.selection == self.editor.selection()
+            marked.revision == self.editor.document_revision()
+                && marked.selection == self.editor.selection()
         });
         let join = marked.is_some();
         let requested = range
@@ -105,7 +106,8 @@ impl EntityInputHandler for EditorSurface {
             return;
         }
         let previous = self.marked.take().filter(|marked| {
-            marked.revision == self.editor.revision() && marked.selection == self.editor.selection()
+            marked.revision == self.editor.document_revision()
+                && marked.selection == self.editor.selection()
         });
         let join = previous.is_some();
         let requested = range
@@ -131,7 +133,7 @@ impl EntityInputHandler for EditorSurface {
                 self.marked = (!new_text.is_empty()).then(|| MarkedText {
                     range: start..start.saturating_add(len),
                     selection,
-                    revision: self.editor.revision(),
+                    revision: self.editor.document_revision(),
                 });
                 self.completion = None;
                 self.completion_seen = None;

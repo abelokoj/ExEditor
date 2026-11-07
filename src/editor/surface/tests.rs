@@ -155,6 +155,8 @@ fn stroke(binding: &crate::keyboard::Binding, platform: bool) -> Keystroke {
         0x28 => "down".into(),
         0x2d => "insert".into(),
         0x2e => "delete".into(),
+        0x6b => "numpadadd".into(),
+        0x6d => "numpadsubtract".into(),
         0xba => ";".into(),
         0xbb => "=".into(),
         0xbc => ",".into(),
@@ -268,6 +270,18 @@ fn native_composition_suppresses_suggestions_and_undoes_as_one_edit(cx: &mut Tes
             });
         });
     }
+    editor.set_background(0x202530);
+    editor.set_text_override(Some(0xeeeeee)).unwrap();
+    {
+        use gpui_kit::test::TestWindowExt as _;
+        cx.update(|window, cx| window.render_frame(cx));
+    }
+    view.update(cx, |view, cx| {
+        assert!(
+            view.surface.read(cx).is_composing(),
+            "theme changes must not cancel native composition"
+        )
+    });
     assert_eq!(editor.text().unwrap(), "example exam");
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {

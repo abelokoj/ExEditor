@@ -105,6 +105,9 @@ impl Editor {
     pub fn snapshot(&self) -> Document {
         self.session.borrow().doc.clone()
     }
+    pub fn document_revision(&self) -> u64 {
+        self.session.borrow().rev()
+    }
     pub fn revision(&self) -> u64 {
         self.session
             .borrow()

@@ -1011,6 +1011,10 @@ impl EditorWindow {
                 cx,
             );
         }
+        let composing = self
+            .surface
+            .as_ref()
+            .is_some_and(|(_, surface)| surface.read(cx).is_composing());
         self.doc.dirty = editor.is_modified() || self.doc.dirty;
         self.doc.formatting = editor.formatting();
         if editor.take_text_changed()
@@ -1019,6 +1023,7 @@ impl EditorWindow {
         {
             let range = editor.selection();
             if active
+                && !composing
                 && !self.doc.read_only
                 && range.start == range.end
                 && text.chars().count() == self.doc.last_text.chars().count() + 1

@@ -221,11 +221,10 @@ mod tests {
             margin_left: 40.,
             ..Default::default()
         };
-        doc.body
-            .push(Arc::new(Block::Para(wordcraft_doc::Paragraph {
-                section: Some(Box::new(first)),
-                ..Default::default()
-            })));
+        doc.body[0] = Arc::new(Block::Para(wordcraft_doc::Paragraph {
+            section: Some(Box::new(first)),
+            ..Default::default()
+        }));
         let canonical = PageSettings {
             width_twips: 12240,
             height_twips: 15840,
