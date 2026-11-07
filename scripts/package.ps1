@@ -77,6 +77,8 @@ $toolchainText = Get-Content -LiteralPath (Join-Path $projectRoot 'rust-toolchai
 $rustVersion = [regex]::Match($toolchainText, 'channel\s*=\s*"([^"]+)"').Groups[1].Value
 $buildInfo = [ordered]@{
     application = 'ExEditor'
+    editor_engine = 'WordCraft'
+    wordcraft_commit = '729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b'
     repository = 'https://github.com/abelokoj/ExEditor'
     source_commit = $Commit.ToLowerInvariant()
     built_at_utc = [DateTimeOffset]::UtcNow.ToString('o')

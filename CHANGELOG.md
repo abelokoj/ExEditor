@@ -6,7 +6,7 @@
 - Connected native text input/IME, selection, rich formatting and undo, rich clipboard, tables/images/links, PDF/system printing, and full-model recovery alongside legacy text/RTF snapshots. Imports and safe saves use the canonical model for office formats.
 - Fixed recurring editor focus requests, unified Control/Command shortcut decoding, retained syntax spans across text edits, and applied document themes only to screen copies. Added bounded offline word/language-keyword suggestions with automatic/manual triggers and keyboard selection, plus a Settings toggle.
 - Added Unix single-instance handoff and native OS file-open events, and prepared Windows/macOS/Linux GitHub workflows/packages and regression source. Removed old native editor/emoji rendering dependencies.
-- Validation so far: source inspection and private backup hash verification only. No local compilation or application tests. GitHub diagnostics/tests/builds and interactive acceptance remain pending. Imported secondary stories are retained but not directly editable; broad format/IME/accessibility/printer qualification remains outstanding.
+- Validation so far: source inspection, Rust formatting, packaging-script syntax parsing and private backup hash verification. Packaging hashes are recorded after macOS signing; Linux launcher registration validates and quotes its portable location. No local compilation or application tests. GitHub diagnostics/tests/builds and interactive acceptance remain pending. Imported secondary stories are retained but not directly editable; broad format/IME/accessibility/printer qualification remains outstanding.
 
 ## 2026-11-06T23:15:10-05:00 - Private local conversation archive (local/uncommitted documentation)
 

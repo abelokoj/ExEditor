@@ -27,7 +27,8 @@ def package(target, commit):
     with tempfile.TemporaryDirectory(prefix="exeditor-package-") as temporary:
         staging = Path(temporary)
         if target.startswith("macos"):
-            bundle = staging / "ExEditor.app"
+            root = staging / "ExEditor"
+            bundle = root / "ExEditor.app"
             executable = bundle / "Contents/MacOS/exeditor"
             resources = bundle / "Contents/Resources"
             executable.parent.mkdir(parents=True)
@@ -53,7 +54,6 @@ def package(target, commit):
                     name = f"icon_{size}x{size}" + ("@2x" if scale == 2 else "") + ".png"
                     subprocess.run(["/usr/bin/sips", "-z", str(size*scale), str(size*scale), str(project/"assets/ExEditor.png"), "--out", str(icons/name)], check=True, capture_output=True)
             subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(icons), "-o", str(resources/"ExEditor.icns")], check=True)
-            root = bundle
         else:
             root = staging / "ExEditor"
             root.mkdir()
@@ -77,30 +77,38 @@ def package(target, commit):
                 "rust_toolchain":toolchain, "workflow_run":os.getenv("GITHUB_RUN_ID"),
                 "built_at_utc":datetime.now(timezone.utc).isoformat()}
         (resources/"build-info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
-        sums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}" for path in sorted(root.rglob("*")) if path.is_file()]
-        (resources/"SHA256SUMS.txt").write_text("\n".join(sums)+"\n", encoding="utf-8")
         if target.startswith("macos"):
-            subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(root)], check=True)
+            subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True)
+        sums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}" for path in sorted(root.rglob("*")) if path.is_file()]
+        (root/"SHA256SUMS.txt").write_text("\n".join(sums)+"\n", encoding="utf-8")
+        if target.startswith("macos"):
             subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(root), str(output/"ExEditor-macos.zip")], check=True)
         else:
             with tarfile.open(output/"ExEditor-linux-x64.tar.gz", "w:gz") as archive:
                 archive.add(root, arcname="ExEditor")
 
 
-INSTALL_DESKTOP = r'''"""Register this extracted portable folder in the current user's Linux application menu."""
+INSTALL_DESKTOP = r'''"""Register the extracted portable folder in the current user's Linux application menu."""
 from pathlib import Path
 import shutil
 import subprocess
 
-root=Path(__file__).resolve().parent
-binary=str(root/"exeditor")
-quoted='"'+binary.replace('\\','\\\\').replace('"','\\"').replace('$','\\$').replace('`','\\`').replace('%','%%')+'"'
-desktop=Path.home()/".local/share/applications/exeditor.desktop"
-desktop.parent.mkdir(parents=True,exist_ok=True)
-desktop.write_text("[Desktop Entry]\\nType=Application\\nName=ExEditor\\nComment=Edit text and rich documents\\nTerminal=false\\nExec="+quoted+" %F\\nIcon="+str(root/"ExEditor.png")+"\\nMimeType=text/plain;text/markdown;text/html;application/rtf;application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;\\nActions=Edit;\\n\\n[Desktop Action Edit]\\nName=Edit with ExEditor\\nExec="+quoted+" %F\\n",encoding="utf-8")
+root = Path(__file__).resolve().parent
+binary = str(root / "exeditor")
+if any(ord(ch) < 32 for ch in str(root)):
+    raise SystemExit("Move the portable folder to a path without control characters.")
+# Desktop Entry Exec quoting escapes these four characters inside double quotes.
+quoted = '"' + ''.join('\\' + ch if ch in '\\"`$' else '%%' if ch == '%' else ch for ch in binary) + '"'
+desktop = Path.home() / ".local/share/applications/exeditor.desktop"
+desktop.parent.mkdir(parents=True, exist_ok=True)
+lines = ["[Desktop Entry]", "Type=Application", "Name=ExEditor", "Comment=Edit text and rich documents",
+         "Terminal=false", "Exec=" + quoted + " %F", "Icon=" + str(root / "ExEditor.png"),
+         "MimeType=text/plain;text/markdown;text/html;application/rtf;application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;",
+         "Actions=Edit;", "", "[Desktop Action Edit]", "Name=Edit with ExEditor", "Exec=" + quoted + " %F"]
+desktop.write_text('\n'.join(lines) + '\n', encoding="utf-8")
 if shutil.which("update-desktop-database"):
-    subprocess.run(["update-desktop-database",str(desktop.parent)],check=True)
-print("Registered ExEditor from",root)
+    subprocess.run(["update-desktop-database", str(desktop.parent)], check=True)
+print("Registered ExEditor from", root)
 '''
 
 if __name__ == "__main__":

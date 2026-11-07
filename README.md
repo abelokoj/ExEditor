@@ -37,12 +37,6 @@ Harper provides offline grammar checking. Language Tools also supports Hunspell 
 
 WordCraft's engine is used independently of its egui frontend. ExEditor retains its own interface; adopting the engine does not reproduce every WordCraft application feature. Imported headers, footers and text boxes remain in the document model and output, but this editor surface currently edits the main document body. Broad real-world document fidelity, native IME, screen-reader use and physical printers still require platform acceptance testing.
 
-## Interface reference
-
-The following captures show the previous released ExEditor interface. The WordCraft surface retains that chrome; these are not validation screenshots of the migrated engine.
-
-![ExEditor document interface](docs/screenshots/exeditor-document.png)
-
 ## Attribution
 
 WordCraft is pinned to [729cd0a5](https://github.com/storytold/wordcraft/tree/729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b). See [the adapter attribution](assets/licenses/wordcraft/NOTICE.txt) and the bundled font/proofing license files. ExEditor is distributed under [MIT](LICENSE).
