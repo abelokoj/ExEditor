@@ -1,5 +1,9 @@
-ExEditor keyboard shortcuts (Windows)
+ExEditor keyboard shortcuts (desktop)
 =====================================
+
+On macOS, Command is also accepted for Control-based document shortcuts.
+Automatic suggestions start after three letters; Ctrl/Command+Space requests them.
+Use Up/Down to choose, Tab/Enter to accept, or Escape to dismiss.
 
 Help > Keyboard Shortcuts opens a searchable native command/keybinding panel.
 This complete reference is also bundled as KEYBOARD_SHORTCUTS.txt.

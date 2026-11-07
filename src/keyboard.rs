@@ -1,4 +1,4 @@
-//! Shared Windows shortcut catalog and chord decoding for native text and GPUI windows.
+//! Shared desktop shortcut catalog and chord decoding for GPUI windows.
 use std::time::{Duration, Instant};
 
 /// Keyboard modifiers shared by the native and GPUI input paths.
@@ -219,6 +219,19 @@ pub struct State {
 }
 
 impl State {
+    /// The same decoder serves the editor window and menus on every desktop platform.
+    pub fn resolve_keystroke(&mut self, keystroke: &gpui_kit::Keystroke, now: Instant) -> Outcome {
+        let m = keystroke.modifiers;
+        let modifiers = modifiers_for_key(
+            &keystroke.key,
+            Modifiers {
+                control: m.control || m.platform,
+                shift: m.shift,
+                alt: m.alt,
+            },
+        );
+        self.resolve(virtual_key(&keystroke.key).unwrap_or(0), modifiers, now)
+    }
     /// Cancels any pending chord, for example when focus changes.
     pub fn reset(&mut self) {
         self.chord_started = None;

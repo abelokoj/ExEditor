@@ -365,6 +365,13 @@ impl Settings {
                                     .flex_col()
                                     .gap(px(10.))
                                     .child(self.checkbox(
+                                        "word-suggestions",
+                                        "Suggest words while typing",
+                                        self.draft.autocomplete,
+                                        |p, value| p.autocomplete = value,
+                                        cx,
+                                    ))
+                                    .child(self.checkbox(
                                         "default-quotes",
                                         "Smart quotes",
                                         self.draft.smart_quotes,
@@ -500,6 +507,7 @@ impl Settings {
             appearance.into(),
             encoding.into(),
             untitled_prefix,
+            self.draft.autocomplete.to_string(),
         ])
     }
     fn submit(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -554,7 +562,9 @@ impl Render for Settings {
                 if event.keystroke.key == "escape" {
                     window.remove_window();
                     cx.stop_propagation();
-                } else if event.keystroke.key == "enter" && event.keystroke.modifiers.control {
+                } else if event.keystroke.key == "enter"
+                    && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
+                {
                     this.submit(true, window, cx);
                     cx.stop_propagation();
                 }

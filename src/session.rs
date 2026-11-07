@@ -206,6 +206,7 @@ mod tests {
             line_ending: LineEnding::Lf,
             saved_at: saved_at.into(),
             untitled_name: None,
+            editor_snapshot: None,
         }
     }
 

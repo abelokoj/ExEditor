@@ -1,10 +1,8 @@
 //! Bundled, process-private typefaces shared by GPUI and the native document editor.
 
-use std::{borrow::Cow, ptr};
-
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result};
 use gpui_kit::{App, Global};
-use windows_sys::Win32::Graphics::Gdi::{AddFontMemResourceEx, RemoveFontMemResourceEx};
+use std::{borrow::Cow, sync::OnceLock};
 
 /// The bundled proportional family used in place of Helvetica.
 pub const RICH_FONT: &str = "Pretendard Std";
@@ -54,57 +52,55 @@ const FONTS: &[(&str, &[u8])] = &[
         "Maple Mono NF Bold Italic",
         include_bytes!("../assets/fonts/maple-mono-nf/MapleMono-NF-BoldItalic.ttf"),
     ),
+    (
+        "Noto Color Emoji",
+        include_bytes!("../assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"),
+    ),
 ];
 
 #[derive(Debug)]
-struct RegisteredFonts(Vec<usize>);
-
+struct RegisteredFonts;
 impl Global for RegisteredFonts {}
 
-impl Drop for RegisteredFonts {
-    fn drop(&mut self) {
-        for handle in self.0.drain(..) {
-            // SAFETY: each handle comes from AddFontMemResourceEx and is removed once.
-            unsafe { RemoveFontMemResourceEx(handle as _) };
-        }
-    }
-}
-
-/// Loads the bundled fonts into GPUI and this process's Windows text engine.
+/// Loads bundled fonts into GPUI and WordCraft for this process.
 /// No typeface is installed into the user's system font directory.
 ///
 /// # Errors
-/// Returns an error if Windows or GPUI cannot load an embedded font face.
+/// Returns an error if GPUI or WordCraft cannot load an embedded font face.
 pub fn register(cx: &mut App) -> Result<()> {
     if cx.has_global::<RegisteredFonts>() {
         return Ok(());
     }
-    let mut registered = RegisteredFonts(Vec::with_capacity(FONTS.len()));
-    for &(face, bytes) in FONTS {
-        let length =
-            u32::try_from(bytes.len()).context("bundled font exceeds Windows' font size limit")?;
-        let mut count = 0;
-        // SAFETY: include_bytes provides immutable process-lifetime font data; count is writable.
-        let handle = unsafe {
-            AddFontMemResourceEx(bytes.as_ptr().cast(), length, ptr::null(), &raw mut count)
-        };
-        ensure!(
-            !handle.is_null(),
-            "Windows could not load the bundled {face} font"
-        );
-        registered.0.push(handle as usize);
-        ensure!(
-            count > 0,
-            "Windows found no font faces in the bundled {face} resource"
-        );
-    }
+    register_engine_fonts()?;
     let fonts = FONTS
         .iter()
+        .filter(|(name, _)| *name != "Noto Color Emoji")
         .map(|(_, bytes)| Cow::Borrowed(*bytes))
         .collect();
     cx.text_system()
         .add_fonts(fonts)
         .context("loading the bundled fonts into GPUI")?;
-    cx.set_global(registered);
+    cx.set_global(RegisteredFonts);
+    Ok(())
+}
+
+/// Registers every bundled face in WordCraft without installing system fonts.
+/// Pretendard italics use the engine's synthetic oblique, matching the document style.
+pub fn register_engine_fonts() -> Result<()> {
+    static REGISTERED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    REGISTERED
+        .get_or_init(|| {
+            let db = wordcraft_fonts::FontDb::global();
+            let mut files = Vec::with_capacity(FONTS.len());
+            for &(name, bytes) in FONTS {
+                let decoded = wordcraft_fonts::decode_font_file(bytes)
+                    .map_err(|error| format!("loading bundled {name}: {error}"))?;
+                files.push((decoded, name.to_owned()));
+            }
+            db.add_document_fonts(files);
+            Ok(())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(())
 }

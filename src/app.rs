@@ -1,4 +1,4 @@
-//! Document windows and commands shared by menus, toolbar, and native shortcuts.
+//! Document windows and commands shared by menus, toolbar, and editor shortcuts.
 use crate::{
     color::{ColorTarget, Rgba},
     color_picker,
@@ -8,7 +8,10 @@ use crate::{
         TextEncoding,
     },
     editing::LineAction,
-    native::{Alignment, Case, EditCommand, FormatState, ListKind, NativeEditor, PageSettings},
+    editor::{
+        Alignment, Case, EditCommand, Editor, FormatState, ListKind, PageSettings,
+        surface::EditorSurface,
+    },
     preferences::{Appearance, Preferences},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
@@ -17,7 +20,6 @@ use crate::{
 };
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::{
     cell::RefCell,
@@ -85,6 +87,17 @@ pub enum Command {
     Close,
     Quit,
     Print,
+    ChoosePrinter {
+        printers: Vec<(String, bool)>,
+        document: std::sync::Arc<wordcraft_doc::Document>,
+        page: PageSettings,
+    },
+    PrintTo {
+        printer: String,
+        document: std::sync::Arc<wordcraft_doc::Document>,
+        page: PageSettings,
+    },
+    ReportError(String),
     Pdf,
     PageSetup,
     Properties,
@@ -169,7 +182,7 @@ pub fn show_error(error: &anyhow::Error) {
         .set_buttons(MessageButtons::Ok)
         .show();
 }
-/// The command behind a `native::shortcut` name, shared by the document and window key paths.
+/// The command behind a `editor::shortcut` name, shared by the document and window key paths.
 pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
     Some(match name {
         "command-palette" => Command::Palette,
@@ -395,16 +408,6 @@ fn confirm(title: &str, message: &str) -> bool {
         == MessageDialogResult::Ok
 }
 
-fn native_parent(window: &Window) -> Result<isize> {
-    match HasWindowHandle::window_handle(window)
-        .map_err(|error| anyhow::anyhow!("Native window handle: {error:?}"))?
-        .as_raw()
-    {
-        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
-        _ => bail!("A Windows document window is required"),
-    }
-}
-
 pub fn open_document(path: Option<PathBuf>, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
@@ -438,8 +441,8 @@ pub fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
             let _ = handle.update(cx, |_, window, cx| {
                 window.activate_window();
                 let _ = editor.update(cx, |view, _| {
-                    if let Some(native) = &view.doc.native {
-                        native.focus();
+                    if let Some(editor) = &view.doc.editor {
+                        editor.focus();
                     }
                 });
             });
@@ -496,13 +499,19 @@ pub fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
 
 struct FileRequests {
     instance: Rc<crate::instance::Instance>,
+    os_requests: Rc<RefCell<Vec<Vec<PathBuf>>>>,
     pending: Vec<Vec<PathBuf>>,
 }
 impl Global for FileRequests {}
 
-pub fn listen_for_files(instance: Rc<crate::instance::Instance>, cx: &mut App) {
+pub fn listen_for_files(
+    instance: Rc<crate::instance::Instance>,
+    os_requests: Rc<RefCell<Vec<Vec<PathBuf>>>>,
+    cx: &mut App,
+) {
     cx.set_global(FileRequests {
         instance,
+        os_requests,
         pending: Vec::new(),
     });
 }
@@ -522,6 +531,8 @@ fn prepare_instance_exit(cx: &mut App) -> bool {
     let received = instance.stop_accepting();
     let requests = cx.global_mut::<FileRequests>();
     requests.pending.extend(received);
+    let os_requests = std::mem::take(&mut *requests.os_requests.borrow_mut());
+    requests.pending.extend(os_requests);
     if requests.pending.is_empty() {
         return true;
     }
@@ -566,22 +577,15 @@ pub fn restore_session(cx: &mut App) -> bool {
     match gpui_kit::open_window(options, cx, move |window, cx| {
         cx.new(|cx| {
             let mut view = EditorWindow::new(None, window, cx);
-            let parent = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw())
-            {
-                Ok(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
-                _ => None,
-            };
             let mut count = 0;
             for buffer in restored.buffers {
-                let result = parent
-                    .context("The recovery window could not create its text editor")
-                    .and_then(|parent| DocumentTab::restore(&view.prefs, parent, buffer));
+                let result = DocumentTab::restore(&view.prefs, buffer);
                 match result {
                     Ok(tab) => {
                         if count == 0 {
                             view.doc = tab;
                         } else {
-                            if let Some(editor) = &tab.native {
+                            if let Some(editor) = &tab.editor {
                                 editor.set_visible(false);
                             }
                             view.tabs.push(Some(tab));
@@ -594,7 +598,7 @@ pub fn restore_session(cx: &mut App) -> bool {
                 }
             }
             view.show_tabs = count > 1;
-            if let Some(editor) = &view.doc.native {
+            if let Some(editor) = &view.doc.editor {
                 editor.set_visible(true);
                 editor.focus();
             }
@@ -610,7 +614,7 @@ pub fn restore_session(cx: &mut App) -> bool {
 }
 
 struct DocumentTab {
-    native: Option<Rc<NativeEditor>>,
+    editor: Option<Rc<Editor>>,
     path: Option<PathBuf>,
     format: DocumentFormat,
     encoding: TextEncoding,
@@ -648,7 +652,7 @@ struct DocumentTab {
     /// The editor's background color.
     paper: u32,
     /// Markdown shown formatted (read-only); this is the text that is saved.
-    markdown_source: Option<Rc<NativeEditor>>,
+    markdown_source: Option<Rc<Editor>>,
     proofing: crate::language_tools::CheckState,
 }
 struct EditorWindow {
@@ -666,7 +670,7 @@ struct EditorWindow {
     tab_scroll: ScrollHandle,
     chord: crate::keyboard::State,
     focus: Option<FocusHandle>,
-    _shortcuts: Option<crate::native::ShortcutRegistration>,
+    surface: Option<(Rc<Editor>, Entity<EditorSurface>)>,
     _poll: Task<()>,
 }
 
@@ -676,11 +680,7 @@ impl EditorWindow {
             show_error(&error);
             Preferences::default()
         });
-        let hwnd = match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
-            Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
-            _ => 0,
-        };
-        let doc = DocumentTab::new(&prefs, hwnd);
+        let doc = DocumentTab::new(&prefs);
         let mut this = Self {
             doc,
             tabs: vec![None],
@@ -694,7 +694,7 @@ impl EditorWindow {
             tab_scroll: ScrollHandle::new(),
             chord: crate::keyboard::State::default(),
             focus: None,
-            _shortcuts: None,
+            surface: None,
             _poll: Task::ready(()),
         };
         if let Some(path) = path
@@ -728,23 +728,10 @@ impl EditorWindow {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         this.focus = Some(focus);
-        if let Some(editor) = &this.doc.native {
+        if let Some(editor) = &this.doc.editor {
             editor.focus();
         }
         let handle = Window::window_handle(window);
-        let weak = cx.entity().downgrade();
-        let context = cx.to_async();
-        this._shortcuts = Some(crate::native::register_shortcuts(hwnd, move |action| {
-            let Some(command) = shortcut_command(action) else {
-                return false;
-            };
-            matches!(
-                handle.update(&mut context.clone(), |_, window, cx| {
-                    weak.update(cx, |this, cx| this.command(command, window, cx))
-                }),
-                Ok(Ok(()))
-            )
-        }));
         this._poll = cx.spawn(async move |this, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(100)).await;
@@ -760,11 +747,11 @@ impl EditorWindow {
         });
         this
     }
-    fn editor(&self) -> Result<Rc<NativeEditor>> {
+    fn editor(&self) -> Result<Rc<Editor>> {
         self.doc
-            .native
+            .editor
             .clone()
-            .context("The native text editor could not be created")
+            .context("The editor text editor could not be created")
     }
     fn is_dark(&self, window: &Window) -> bool {
         match self.prefs.appearance {
@@ -782,6 +769,8 @@ impl EditorWindow {
     /// Applies the document background, text color, and code coloring when the
     /// appearance, the dark-document preference, or the code theme changed.
     fn refresh_look(&mut self, window: &Window) -> Result<()> {
+        let editor = self.editor()?;
+        editor.set_autocomplete_enabled(self.prefs.autocomplete);
         let dark_paper = self.is_dark(window) && self.prefs.dark_documents;
         let theme = self
             .preview_theme
@@ -805,6 +794,7 @@ impl EditorWindow {
         if self.doc.highlighter.take().is_some() {
             editor.clear_spans()?;
         }
+        editor.set_completion_language(syntax.clone());
         self.doc.highlighter =
             syntax.map(|syntax| CodeHighlighter::new(syntax, &theme, dark_paper));
         let (paper, text) = match &self.doc.highlighter {
@@ -821,11 +811,11 @@ impl EditorWindow {
         self.highlight(&editor)
     }
     /// Colors the lines that changed since the last call.
-    fn highlight(&mut self, editor: &NativeEditor) -> Result<()> {
+    fn highlight(&mut self, editor: &Editor) -> Result<()> {
         if let Some(highlighter) = &mut self.doc.highlighter
             && self.doc.last_text.len() <= syntax::MAX_BYTES
         {
-            editor.apply_spans(&highlighter.update(&self.doc.last_text))?;
+            editor.apply_spans(&highlighter.all_spans(&self.doc.last_text))?;
         }
         Ok(())
     }
@@ -840,13 +830,13 @@ impl EditorWindow {
         let rtf = crate::formats::markdown_to_rtf(&source, directory)?;
         let editor = self.editor()?;
         let preview = Rc::new(editor.preview(&rtf)?);
-        // Keep the original native buffer alive: text, undo, selection and dirty state.
+        // Keep the original editor buffer alive: text, undo, selection and dirty state.
         self.doc.dirty |= editor.is_modified();
         self.doc.last_text = preview.text()?;
         editor.set_visible(false);
         self.doc.markdown_source = Some(editor);
         preview.set_visible(true);
-        self.doc.native = Some(preview);
+        self.doc.editor = Some(preview);
         self.doc.look = None;
         Ok(())
     }
@@ -857,13 +847,13 @@ impl EditorWindow {
         let text = source.text()?;
         source.set_read_only(self.doc.read_only);
         self.doc.dirty |= source.is_modified();
-        if let Some(preview) = &self.doc.native {
+        if let Some(preview) = &self.doc.editor {
             preview.set_visible(false);
         }
-        self.doc.native = self.doc.markdown_source.take();
+        self.doc.editor = self.doc.markdown_source.take();
         self.doc.last_text = text;
         self.doc.look = None;
-        if let Some(source) = &self.doc.native {
+        if let Some(source) = &self.doc.editor {
             source.set_visible(true);
             source.focus();
         }
@@ -920,7 +910,13 @@ impl EditorWindow {
         self.editor()?.set_read_only(self.doc.read_only);
         self.editor()?
             .set_plain_text_mode(loaded.format.is_plain())?;
-        self.load_content(&loaded.content)?;
+        if let Some(snapshot) = loaded.editor_snapshot {
+            self.editor()?.set_document(snapshot)?;
+            self.editor()?.mark_modified();
+        } else {
+            self.load_content(&loaded.content)?;
+        }
+        self.doc.page = self.editor()?.page_settings();
         if loaded.format.is_plain() {
             // Plain files have no fonts of their own; without this they keep the rich default.
             let editor = self.editor()?;
@@ -955,7 +951,8 @@ impl EditorWindow {
     }
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(requests) = cx.try_global::<FileRequests>() {
-            let pending = requests.instance.take_requests();
+            let mut pending = requests.instance.take_requests();
+            pending.extend(std::mem::take(&mut *requests.os_requests.borrow_mut()));
             if !pending.is_empty() {
                 // Keep staged requests visible to the close guard until the entity update ends.
                 cx.global_mut::<FileRequests>().pending.extend(pending);
@@ -965,7 +962,7 @@ impl EditorWindow {
         while let Some(command) = { self.queue.borrow_mut().pop_front() } {
             self.command(command, window, cx);
         }
-        let Some(editor) = self.doc.native.clone() else {
+        let Some(editor) = self.doc.editor.clone() else {
             return;
         };
         while let Some(shortcut) = editor.take_shortcut() {
@@ -973,11 +970,12 @@ impl EditorWindow {
                 self.command(command, window, cx);
             }
         }
-        let Some(editor) = self.doc.native.clone() else {
+        let Some(editor) = self.doc.editor.clone() else {
             return;
         };
         let active = window.is_window_active();
-        if active && !self.was_active {
+        let activated = active && !self.was_active;
+        if activated {
             let own = cx.entity().entity_id();
             let editors = &mut cx.global_mut::<OpenEditors>().0;
             if let Some(index) = editors
@@ -996,9 +994,10 @@ impl EditorWindow {
             self.prefs = prefs;
         }
         self.was_active = active;
-        if active {
+        if activated {
             editor.restore_focus();
-        } else {
+        }
+        if !active {
             self.chord.reset();
         }
         let dark = self.is_dark(window);
@@ -1066,7 +1065,7 @@ impl EditorWindow {
                 tab.last_recovery = Instant::now();
             }
         }
-        let needs_buffer = editor.is_modified()
+        let needs_buffer = editor.has_buffered_changes()
             || (!self.doc.buffered && (self.doc.dirty || self.doc.path.is_none()))
             || (self.doc.dirty
                 && self.doc.last_recovery.elapsed()
@@ -1292,13 +1291,25 @@ impl EditorWindow {
         } else {
             DocumentContent::Rich(self.editor()?.rtf()?)
         };
-        let fingerprint = document::save(
-            &path,
-            format,
-            &content,
-            self.doc.encoding,
-            self.doc.line_ending,
-        )?;
+        let snapshot = self.editor()?.snapshot();
+        let fingerprint = if format.is_plain() {
+            document::save(
+                &path,
+                format,
+                &content,
+                self.doc.encoding,
+                self.doc.line_ending,
+            )?
+        } else {
+            document::save_with_document(
+                &path,
+                format,
+                &content,
+                self.doc.encoding,
+                self.doc.line_ending,
+                Some(&snapshot),
+            )?
+        };
         self.doc.path = Some(path.clone());
         self.doc.format = format;
         self.doc.fingerprint = Some(fingerprint);
@@ -1385,22 +1396,21 @@ impl EditorWindow {
         let next = self.tabs[index]
             .take()
             .context("The document tab is unavailable")?;
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(false);
         }
         let previous = std::mem::replace(&mut self.doc, next);
         self.tabs[self.active_tab] = Some(previous);
         self.active_tab = index;
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
         }
         Ok(())
     }
-    fn new_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
-        let hwnd = native_parent(window)?;
-        let doc = DocumentTab::new(&self.prefs, hwnd);
-        if let Some(editor) = &doc.native {
+    fn new_tab(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
+        let doc = DocumentTab::new(&self.prefs);
+        if let Some(editor) = &doc.editor {
             editor.set_visible(false);
         }
         self.tabs.push(Some(doc));
@@ -1458,7 +1468,7 @@ impl EditorWindow {
         let old = self.active_tab;
         self.tabs.remove(old);
         self.active_tab = if next > old { next - 1 } else { next };
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
         }
@@ -1466,7 +1476,7 @@ impl EditorWindow {
     }
     fn receive_transfer(&mut self, mut incoming: Vec<DocumentTab>, active: usize) {
         let next = incoming.remove(active);
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(false);
         }
         let previous = std::mem::replace(&mut self.doc, next);
@@ -1483,7 +1493,7 @@ impl EditorWindow {
         }
         self.show_tabs = true;
         self.tab_scroll.scroll_to_item(self.active_tab);
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
         }
@@ -1506,40 +1516,10 @@ impl EditorWindow {
             .find(|(_, editor)| editor.entity_id() == target && editor.upgrade().is_some())
             .cloned()
             .context("The destination window has closed; your documents have not moved")?;
-        let source_owner = native_parent(window)?;
         let close_source = scope == TransferScope::AllTabs || self.tabs.len() == 1;
         handle.update(cx, |_, target_window, cx| {
             destination.update(cx, |destination, cx| {
                 destination.doc.queue_buffer()?;
-                let owner = native_parent(target_window)?;
-                let moving: Vec<_> = if scope == TransferScope::AllTabs {
-                    self.tabs
-                        .iter()
-                        .enumerate()
-                        .map(|(index, tab)| {
-                            if index == self.active_tab {
-                                &self.doc
-                            } else {
-                                tab.as_ref().expect("inactive tab")
-                            }
-                        })
-                        .collect()
-                } else {
-                    vec![&self.doc]
-                };
-                let mut moved: Vec<&DocumentTab> = Vec::new();
-                for tab in moving {
-                    if let Err(error) = tab.reparent(owner) {
-                        for previous in moved {
-                            if let Err(rollback) = previous.reparent(source_owner) {
-                                show_error(&rollback);
-                            }
-                        }
-                        return Err(error);
-                    }
-                    moved.push(tab);
-                }
-                drop(moved);
                 let (incoming, active) = self.take_transfer(scope);
                 destination.receive_transfer(incoming, active);
                 target_window.activate_window();
@@ -1578,14 +1558,14 @@ impl EditorWindow {
         let doc = self.tabs[next]
             .take()
             .context("The next document tab is unavailable")?;
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(false);
         }
         self.doc = doc;
         let old = self.active_tab;
         self.tabs.remove(old);
         self.active_tab = if next > old { next - 1 } else { next };
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
         }
@@ -1609,7 +1589,7 @@ impl EditorWindow {
         if let Err(error) = self.try_command(command, window, cx) {
             show_error(&error);
         }
-        if let Some(editor) = &self.doc.native {
+        if let Some(editor) = &self.doc.editor {
             editor.restore_focus();
         }
         cx.notify();
@@ -1981,7 +1961,7 @@ impl EditorWindow {
                             let mut view = Self::new(None, window, cx);
                             view.doc.rich = rich;
                             view.doc.format = format;
-                            if let Some(editor) = &view.doc.native {
+                            if let Some(editor) = &view.doc.editor {
                                 let _ = editor.set_plain_text_mode(!rich);
                             }
                             if let Err(error) = view.load_content(&content) {
@@ -2070,7 +2050,65 @@ impl EditorWindow {
                     cx.quit();
                 }
             }
-            Command::Print => self.editor()?.print(&self.doc.page)?,
+            Command::Print => {
+                let document = std::sync::Arc::new(self.editor()?.snapshot());
+                let page = self.doc.page.clone();
+                let queue = self.queue.clone();
+                cx.spawn(async move |_, _| {
+                    let command = match smol::unblock(crate::editor::printing::printers).await {
+                        Ok(printers) if !printers.is_empty() => Command::ChoosePrinter {
+                            printers: printers.into_iter().map(|printer| (printer.name, printer.is_default)).collect(),
+                            document, page,
+                        },
+                        Ok(_) => Command::ReportError("No printers are available. Add a printer in system settings, or export the document as PDF.".into()),
+                        Err(error) => Command::ReportError(format!("Finding printers: {error:#}")),
+                    };
+                    queue.borrow_mut().push_back(command);
+                }).detach();
+            }
+            Command::ChoosePrinter {
+                printers,
+                document,
+                page,
+            } => {
+                let entries = printers
+                    .into_iter()
+                    .map(|(printer, is_default)| {
+                        MenuEntry::item(
+                            &printer,
+                            if is_default { "Default" } else { "" },
+                            Command::PrintTo {
+                                printer: printer.clone(),
+                                document: document.clone(),
+                                page: page.clone(),
+                            },
+                        )
+                        .checked(is_default)
+                    })
+                    .collect();
+                self.show_menu(entries, window, cx);
+            }
+            Command::PrintTo {
+                printer,
+                document,
+                page,
+            } => self.show_form(
+                FormKind::Print {
+                    printer: printer.clone(),
+                    document,
+                    page,
+                },
+                &format!("Print — {printer}"),
+                vec![
+                    Field::text("Copies", 1),
+                    Field::text("Pages (blank for all)", ""),
+                    Field::toggle("Print on both sides", false),
+                    Field::toggle("Grayscale", false),
+                ],
+                window,
+                cx,
+            ),
+            Command::ReportError(message) => bail!("{message}"),
             Command::Pdf => {
                 if let Some(path) = FileDialog::new()
                     .set_title("Export as PDF")
@@ -2440,21 +2478,9 @@ impl EditorWindow {
                 self.editor()?.replace_current(&text)?;
             }
             Command::Complete => {
-                let editor = self.editor()?;
-                let text = editor.text()?;
-                let caret = editor.selection().end;
-                let before =
-                    String::from_utf16(&text.encode_utf16().take(caret).collect::<Vec<_>>())?;
-                let prefix = before
-                    .rsplit(|c: char| !c.is_alphanumeric())
-                    .next()
-                    .unwrap_or_default();
-                let range = caret - prefix.encode_utf16().count()..caret;
-                let entries = services::completions(&text, prefix)
-                    .into_iter()
-                    .map(|s| MenuEntry::item(&s, "", Command::Correct(range.clone(), s.clone())))
-                    .collect();
-                self.show_menu(entries, window, cx);
+                if let Some((_, surface)) = &self.surface {
+                    surface.update(cx, |surface, cx| surface.complete(window, cx));
+                }
             }
             Command::Speak => {
                 let selected = self.editor()?.selected_text()?;
@@ -2549,7 +2575,7 @@ impl EditorWindow {
             }
             Command::Submit(kind, values) => self.submit(kind, values, window, cx)?,
             Command::About => {
-                MessageDialog::new().set_title("About ExEditor").set_description("ExEditor 0.1.0\nA native document editor built with Rust and GPUI Kit.\nhttps://github.com/abelokoj/ExEditor\n\nTextEdit is a trademark of Apple Inc. ExEditor is an independent application.").show();
+                MessageDialog::new().set_title("About ExEditor").set_description("ExEditor 0.1.0\nA editor document editor built with Rust and GPUI Kit.\nhttps://github.com/abelokoj/ExEditor\n\nTextEdit is a trademark of Apple Inc. ExEditor is an independent application.").show();
             }
             Command::Help => {
                 let _ = std::process::Command::new("explorer.exe")
@@ -2614,6 +2640,41 @@ impl EditorWindow {
             Ok(n)
         };
         match kind {
+            FormKind::Print {
+                printer,
+                document,
+                page,
+            } => {
+                let copies = value(0)?
+                    .trim()
+                    .parse::<u32>()
+                    .context("Enter a whole number of copies")?;
+                ensure!(
+                    (1..=999).contains(&copies),
+                    "Copies must be between 1 and 999."
+                );
+                let range = value(1)?.trim();
+                let options = crate::editor::printing::PrintOptions {
+                    printer,
+                    copies,
+                    page_range: (!range.is_empty()).then(|| range.to_owned()),
+                    duplex: value(2)? == "true",
+                    grayscale: value(3)? == "true",
+                };
+                let queue = self.queue.clone();
+                cx.spawn(async move |_, _| {
+                    if let Err(error) = smol::unblock(move || {
+                        crate::editor::printing::submit(&document, &page, &options)
+                    })
+                    .await
+                    {
+                        queue.borrow_mut().push_back(Command::ReportError(format!(
+                            "Printing the document: {error:#}"
+                        )));
+                    }
+                })
+                .detach();
+            }
             FormKind::Font => {
                 let font = value(0)?.trim();
                 ensure!(!font.is_empty(), "Choose a font family");
@@ -2686,6 +2747,7 @@ impl EditorWindow {
                         && page.margin_top + page.margin_bottom < page.height_twips,
                     "Margins must leave space for the document"
                 );
+                self.editor()?.set_page_settings(&page)?;
                 self.doc.page = page;
             }
             FormKind::Preferences => {
@@ -2730,8 +2792,12 @@ impl EditorWindow {
                     crate::names::validate_prefix(prefix)?;
                     prefs.untitled_prefix = prefix.trim().to_owned();
                 }
+                if let Some(autocomplete) = values.get(15) {
+                    prefs.autocomplete = autocomplete == "true";
+                }
                 prefs.save()?;
                 self.prefs = prefs;
+                self.doc.look = None;
                 // Show a new default font now where it can't overwrite chosen styling:
                 // plain text has one font, and an empty rich document has none yet.
                 let editor = self.editor()?;
@@ -3609,21 +3675,10 @@ impl Render for EditorWindow {
             .font_family(crate::fonts::RICH_FONT)
             .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let m = &event.keystroke.modifiers;
-                if m.platform {
-                    this.chord.reset();
-                    return;
-                }
-                let key = crate::keyboard::virtual_key(&event.keystroke.key).unwrap_or(0);
-                let modifiers = crate::keyboard::modifiers_for_key(
-                    &event.keystroke.key,
-                    crate::keyboard::Modifiers {
-                        control: m.control,
-                        shift: m.shift,
-                        alt: m.alt,
-                    },
-                );
-                match this.chord.resolve(key, modifiers, Instant::now()) {
+                match this
+                    .chord
+                    .resolve_keystroke(&event.keystroke, Instant::now())
+                {
                     crate::keyboard::Outcome::Ignored => return,
                     crate::keyboard::Outcome::Action(action) => {
                         if let Some(command) = shortcut_command(action) {
@@ -3686,7 +3741,7 @@ impl Render for EditorWindow {
             root = root.child(self.render_toolbar(c, cx));
         }
         if self.doc.rich && self.doc.ruler {
-            let editor = self.doc.native.clone();
+            let editor = self.doc.editor.clone();
             root = root.child(ui::ruler(c, self.doc.zoom, move |position, _, _| {
                 if let Some(editor) = &editor {
                     let _ = editor.execute(EditCommand::TabStop(
@@ -3695,49 +3750,32 @@ impl Render for EditorWindow {
                 }
             }));
         }
-        if let Some(editor) = &self.doc.native {
-            let editor = editor.clone();
-            let page = self.doc.page.clone();
-            let wrap_page = self.doc.wrap_page;
-            let zoom = self.doc.zoom;
+        if let Some(editor) = self.doc.editor.clone() {
             editor.set_wrap(self.doc.word_wrap);
-            // RichEdit is a child HWND: position it in physical pixels after GPUI layout.
-            root = root.child(
-                div()
-                    .id("document")
-                    .flex_1()
-                    .min_h(px(1.))
-                    .w_full()
-                    .bg(rgb(if wrap_page { c.chrome } else { self.doc.paper }))
-                    .child(
-                        canvas(
-                            move |bounds, window, _| {
-                                let scale = window.scale_factor();
-                                let mut x = f32::from(bounds.origin.x);
-                                let y = f32::from(bounds.origin.y);
-                                let mut width = f32::from(bounds.size.width);
-                                let height = f32::from(bounds.size.height);
-                                if wrap_page {
-                                    let paper_width =
-                                        page.width_twips as f32 / 15. * zoom as f32 / 100.;
-                                    if width > paper_width {
-                                        x += (width - paper_width) / 2.;
-                                        width = paper_width;
-                                    }
-                                }
-                                editor.set_bounds(
-                                    (x * scale).round() as i32,
-                                    (y * scale).round() as i32,
-                                    (width * scale).round() as i32,
-                                    (height * scale).round() as i32,
-                                );
-                                editor.set_margins(6, 6);
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .size_full(),
-                    ),
-            );
+            editor.set_wrap_to_page(self.doc.wrap_page);
+            if self
+                .surface
+                .as_ref()
+                .is_none_or(|(current, _)| !Rc::ptr_eq(current, &editor))
+            {
+                let surface = cx.new(|cx| EditorSurface::new(editor.clone(), cx));
+                self.surface = Some((editor.clone(), surface));
+            }
+            if let Some((_, surface)) = &self.surface {
+                root = root.child(
+                    div()
+                        .id("document")
+                        .flex_1()
+                        .min_h(px(1.))
+                        .w_full()
+                        .bg(rgb(if self.doc.wrap_page {
+                            c.chrome
+                        } else {
+                            self.doc.paper
+                        }))
+                        .child(surface.clone()),
+                );
+            }
         } else {
             root = root.child(div().p(px(24.)).child(
                 "The document editor could not be initialized. Close this window and try again.",
@@ -3748,15 +3786,15 @@ impl Render for EditorWindow {
 }
 
 impl DocumentTab {
-    fn new(prefs: &Preferences, parent: isize) -> Self {
-        let native = match NativeEditor::new(parent) {
+    fn new(prefs: &Preferences) -> Self {
+        let editor = match Editor::new() {
             Ok(editor) => Some(Rc::new(editor)),
             Err(error) => {
                 show_error(&error);
                 None
             }
         };
-        if let Some(editor) = &native {
+        if let Some(editor) = &editor {
             let initialized = editor
                 .set_plain_text_mode(!prefs.rich_text)
                 .and_then(|()| {
@@ -3777,7 +3815,6 @@ impl DocumentTab {
                 show_error(&error);
             }
             editor.set_auto_links(prefs.automatic_links);
-            editor.set_spellcheck(false);
             editor.mark_saved();
         }
         let recovery_id = format!(
@@ -3796,7 +3833,7 @@ impl DocumentTab {
             }
         };
         Self {
-            native,
+            editor,
             recovery_id,
             buffer_lease: buffer_lease.map(std::sync::Arc::new),
             untitled_name: crate::names::next_name(&prefs.untitled_prefix),
@@ -3804,10 +3841,10 @@ impl DocumentTab {
             ..Self::vacant(prefs)
         }
     }
-    // An emptied transfer source is removed before rendering; this owns no native control or buffer.
+    // An emptied transfer source is removed before rendering; this owns no editor control or buffer.
     fn vacant(prefs: &Preferences) -> Self {
         Self {
-            native: None,
+            editor: None,
             path: None,
             format: if prefs.rich_text {
                 DocumentFormat::Rtf
@@ -3849,34 +3886,23 @@ impl DocumentTab {
             proofing: crate::language_tools::CheckState::default(),
         }
     }
-    fn reparent(&self, owner: isize) -> Result<()> {
-        let native = self
-            .native
-            .as_ref()
-            .context("The document editor is unavailable")?;
-        let previous = native.owner();
-        native.reparent(owner)?;
-        if let Some(source) = &self.markdown_source
-            && let Err(error) = source.reparent(owner)
-        {
-            if let Err(rollback) = native.reparent(previous) {
-                show_error(&rollback);
-            }
-            return Err(error);
-        }
-        Ok(())
-    }
-    fn restore(prefs: &Preferences, parent: isize, buffer: RestoredBuffer) -> Result<Self> {
-        let mut tab = Self::new(prefs, parent);
+
+    fn restore(prefs: &Preferences, buffer: RestoredBuffer) -> Result<Self> {
+        let mut tab = Self::new(prefs);
         let editor = tab
-            .native
+            .editor
             .as_ref()
-            .context("The native text editor could not be created")?;
+            .context("The editor text editor could not be created")?;
         editor.set_plain_text_mode(buffer.document.format.is_plain())?;
-        match &buffer.document.content {
-            DocumentContent::Plain(text) => editor.set_text(text)?,
-            DocumentContent::Rich(bytes) => editor.set_rtf(bytes)?,
+        if let Some(snapshot) = buffer.document.editor_snapshot {
+            editor.set_document(snapshot)?;
+        } else {
+            match &buffer.document.content {
+                DocumentContent::Plain(text) => editor.set_text(text)?,
+                DocumentContent::Rich(bytes) => editor.set_rtf(bytes)?,
+            }
         }
+        tab.page = editor.page_settings();
         if buffer.document.format.is_plain() {
             editor.execute(EditCommand::Font(prefs.plain_font.clone()))?;
             editor.execute(EditCommand::FontSize(prefs.plain_size))?;
@@ -3904,8 +3930,8 @@ impl DocumentTab {
         tab.buffered = true;
         Ok(tab)
     }
-    fn canonical_editor(&self) -> Option<&Rc<NativeEditor>> {
-        self.markdown_source.as_ref().or(self.native.as_ref())
+    fn canonical_editor(&self) -> Option<&Rc<Editor>> {
+        self.markdown_source.as_ref().or(self.editor.as_ref())
     }
     fn snapshot(&mut self) -> Result<Option<RecoveryDocument>> {
         if !self.retain_buffer {
@@ -3936,6 +3962,7 @@ impl DocumentTab {
             original_path: self.path.clone(),
             format: self.format,
             content,
+            editor_snapshot: Some(editor.snapshot()),
             encoding: self.encoding,
             line_ending: self.line_ending,
             saved_at: chrono::Local::now().to_rfc3339(),
@@ -4048,7 +4075,7 @@ mod window_tests {
             tab_scroll: ScrollHandle::new(),
             chord: crate::keyboard::State::default(),
             focus: None,
-            _shortcuts: None,
+            surface: None,
             _poll: Task::ready(()),
         }
     }
@@ -4146,7 +4173,7 @@ mod window_tests {
             target.receive_transfer(moved, selected);
             assert_eq!(names(&target), ["target", "one", "two", "three"]);
             assert_eq!(target.active_tab, active + 1);
-            assert!(source.doc.native.is_none());
+            assert!(source.doc.editor.is_none());
             assert!(!source.doc.retain_buffer);
             assert!(source.doc.recovery_id.is_empty());
         }

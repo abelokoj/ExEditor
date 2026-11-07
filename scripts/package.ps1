@@ -72,6 +72,7 @@ foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter', 'noto-color-em
     New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
     Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $licenseDirectory 'OFL.txt')
 }
+Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/wordcraft') -Destination (Join-Path $packageRoot 'licenses/wordcraft') -Recurse
 $toolchainText = Get-Content -LiteralPath (Join-Path $projectRoot 'rust-toolchain.toml') -Raw
 $rustVersion = [regex]::Match($toolchainText, 'channel\s*=\s*"([^"]+)"').Groups[1].Value
 $buildInfo = [ordered]@{

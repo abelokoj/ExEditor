@@ -1,284 +1,116 @@
-//! Windows spelling and speech, plus local typographic editing helpers.
+//! Platform language services and local typographic editing helpers.
 
-use std::{collections::BTreeMap, marker::PhantomData, ops::Range, rc::Rc};
+use std::ops::Range;
 
-use anyhow::{Context as _, Result, bail, ensure};
-use unicode_segmentation::UnicodeSegmentation as _;
-use windows::{
-    Win32::{
-        Foundation::RPC_E_CHANGED_MODE,
-        Globalization::{
-            CORRECTIVE_ACTION_DELETE, CORRECTIVE_ACTION_GET_SUGGESTIONS, CORRECTIVE_ACTION_NONE,
-            CORRECTIVE_ACTION_REPLACE, ISpellChecker, ISpellCheckerFactory, SpellCheckerFactory,
-        },
-        Media::Speech::{ISpVoice, SPF_ASYNC, SPF_IS_NOT_XML, SPF_PURGEBEFORESPEAK, SpVoice},
-        System::Com::{
-            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-            CoTaskMemFree, CoUninitialize, IEnumString,
-        },
-    },
-    core::{PCWSTR, PWSTR},
-};
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::{Speech, check_spelling_for_language};
 
-/// A Windows spelling finding with offsets in RichEdit's UTF-16 coordinate system.
+/// A spelling finding with offsets in the editor's UTF-16 coordinate system.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpellingIssue {
     /// The affected UTF-16 code units, excluding any terminating NUL.
     pub range: Range<usize>,
     /// The original document text in that range.
     pub word: String,
-    /// Suggested replacements in Windows' preferred order; empty text means delete.
+    /// Suggested replacements in the provider's preferred order; empty text means delete.
     pub suggestions: Vec<String>,
 }
 
-/// Checks spelling with the Windows dictionary for the selected language.
-///
-/// # Errors
-/// Returns an error for missing dictionaries, invalid input, or COM/provider failures.
-pub fn check_spelling_for_language(text: &str, language: &str) -> Result<Vec<SpellingIssue>> {
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    ensure!(
-        !text.contains('\0'),
-        "spelling input contains a NUL character"
-    );
-    let units: Vec<u16> = text.encode_utf16().collect();
-    ensure!(
-        units.len() <= u32::MAX as usize,
-        "document is too long for Windows spellchecking"
-    );
-    let _apartment = ComApartment::initialize()?;
-    ensure!(
-        !language.is_empty()
-            && language.len() < 85
-            && language
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-        "Choose a spelling language such as en-US or fi-FI"
-    );
-    let locale: Vec<u16> = language.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: COM is initialized on this thread and the factory has no outer object.
-    let factory: ISpellCheckerFactory =
-        unsafe { CoCreateInstance(&SpellCheckerFactory, None, CLSCTX_INPROC_SERVER) }
-            .context("Windows spellchecking is unavailable")?;
-    // SAFETY: locale contains the NUL-terminated language name and remains alive.
-    let supported = unsafe { factory.IsSupported(PCWSTR(locale.as_ptr())) }
-        .context("checking the installed spelling dictionary")?;
-    ensure!(
-        supported.as_bool(),
-        "no Windows spelling dictionary is installed for {language}"
-    );
-    // SAFETY: the validated language string remains valid throughout the COM call.
-    let checker = unsafe { factory.CreateSpellChecker(PCWSTR(locale.as_ptr())) }
-        .context("opening the Windows spelling dictionary")?;
-    let mut terminated = units.clone();
-    terminated.push(0);
-    // SAFETY: terminated contains the complete NUL-terminated input for this call.
-    let errors = unsafe { checker.ComprehensiveCheck(PCWSTR(terminated.as_ptr())) }
-        .context("checking the document's spelling")?;
-    let mut issues = Vec::new();
-    loop {
-        let mut error = None;
-        // SAFETY: error is a valid writable COM out parameter and owns any result.
-        unsafe { errors.Next(&mut error) }
-            .ok()
-            .context("reading the next spelling finding")?;
-        let Some(error) = error else { break };
-        // SAFETY: error is a live interface returned by the spelling enumerator.
-        let action =
-            unsafe { error.CorrectiveAction() }.context("reading a spelling correction")?;
-        if action == CORRECTIVE_ACTION_NONE {
-            continue;
-        }
-        // SAFETY: both properties are read from the same live COM finding.
-        let start = unsafe { error.StartIndex() }.context("reading spelling offset")? as usize;
-        // SAFETY: error remains alive and Length writes only its return value.
-        let length = unsafe { error.Length() }.context("reading spelling length")? as usize;
-        let end = start
-            .checked_add(length)
-            .context("spelling range overflow")?;
-        let word_units = units
-            .get(start..end)
-            .context("Windows returned an invalid spelling range")?;
-        let word =
-            String::from_utf16(word_units).context("spelling range splits a Unicode character")?;
-        let suggestions = if action == CORRECTIVE_ACTION_GET_SUGGESTIONS {
-            spelling_suggestions(&checker, &word)?
-        } else if action == CORRECTIVE_ACTION_REPLACE {
-            // SAFETY: Replacement returns a CoTaskMem-allocated NUL-terminated string.
-            let replacement = TaskString(
-                unsafe { error.Replacement() }
-                    .context("reading the suggested spelling replacement")?,
-            );
-            vec![replacement.into_string()?]
-        } else if action == CORRECTIVE_ACTION_DELETE {
-            vec![String::new()]
-        } else {
-            bail!(
-                "Windows returned an unknown spelling correction: {}",
-                action.0
-            );
-        };
-        issues.push(SpellingIssue {
-            range: start..end,
-            word,
-            suggestions,
-        });
-    }
-    Ok(issues)
+#[cfg(not(target_os = "windows"))]
+pub fn check_spelling_for_language(
+    _text: &str,
+    _language: &str,
+) -> anyhow::Result<Vec<SpellingIssue>> {
+    anyhow::bail!(
+        "The Windows spelling dictionary is unavailable on this platform. Choose an offline spelling provider in Language Tools."
+    )
 }
 
-fn spelling_suggestions(checker: &ISpellChecker, word: &str) -> Result<Vec<String>> {
-    let terminated: Vec<u16> = word.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: word is validated text from the document and remains NUL-terminated.
-    let suggestions = unsafe { checker.Suggest(PCWSTR(terminated.as_ptr())) }
-        .context("requesting spelling suggestions")?;
-    read_com_strings(&suggestions)
-}
-
-fn read_com_strings(enumerator: &IEnumString) -> Result<Vec<String>> {
-    let mut strings = Vec::new();
-    loop {
-        let mut slot = [PWSTR::null()];
-        let mut fetched = 0;
-        // SAFETY: slot holds one writable pointer; fetched is a live out parameter.
-        let status = unsafe { enumerator.Next(&mut slot, Some(&mut fetched)) };
-        let owned = TaskString(slot[0]);
-        status.ok().context("reading a spelling suggestion")?;
-        if fetched == 0 {
-            break;
-        }
-        ensure!(
-            fetched == 1,
-            "Windows returned an invalid spelling suggestion count"
-        );
-        let value = owned.into_string()?;
-        if !strings.contains(&value) {
-            strings.push(value);
-        }
-    }
-    Ok(strings)
-}
-
-#[derive(Debug)]
-struct TaskString(PWSTR);
-
-impl TaskString {
-    fn into_string(self) -> Result<String> {
-        ensure!(
-            !self.0.is_null(),
-            "Windows returned a missing spelling suggestion"
-        );
-        // SAFETY: this private wrapper owns a documented COM-allocated UTF-16 string.
-        unsafe { self.0.to_string() }.context("Windows returned invalid Unicode text")
-    }
-}
-
-impl Drop for TaskString {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: the pointer was allocated by COM and is released exactly once.
-            unsafe { CoTaskMemFree(Some(self.0.as_ptr().cast())) };
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ComApartment {
-    initialized: bool,
-    _thread_bound: PhantomData<Rc<()>>,
-}
-
-impl ComApartment {
-    fn initialize() -> Result<Self> {
-        // SAFETY: the reserved argument is null and this guard balances successful calls.
-        let status = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        let initialized = if status == RPC_E_CHANGED_MODE {
-            false
-        } else {
-            status
-                .ok()
-                .context("initializing Windows language services")?;
-            true
-        };
-        Ok(Self {
-            initialized,
-            _thread_bound: PhantomData,
-        })
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        if self.initialized {
-            // SAFETY: the guard cannot move between threads and owns one successful init.
-            unsafe { CoUninitialize() };
-        }
-    }
-}
-
-/// A cancellable native Windows voice that keeps COM alive while speech is queued.
+/// A cancellable utterance using an installed native speech command.
+#[cfg(not(target_os = "windows"))]
 #[derive(Debug, Default)]
 pub struct Speech {
-    voice: Option<ISpVoice>,
-    apartment: Option<ComApartment>,
+    child: Option<std::process::Child>,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl Speech {
-    /// Starts asynchronous speech, replacing anything previously queued by this voice.
-    ///
-    /// # Errors
-    /// Returns errors from Windows speech initialization or queuing the utterance.
-    pub fn start(&mut self, text: &str) -> Result<()> {
+    /// Starts speech through macOS say or Linux eSpeak, if installed.
+    pub fn start(&mut self, text: &str) -> anyhow::Result<()> {
+        use anyhow::{Context as _, ensure};
+        use std::{
+            io::Write as _,
+            process::{Command, Stdio},
+        };
         ensure!(
             !text.contains('\0'),
             "speech input contains a NUL character"
         );
+        self.stop()?;
         if text.is_empty() {
-            return self.stop();
+            return Ok(());
         }
-        if self.voice.is_none() {
-            if self.apartment.is_none() {
-                self.apartment = Some(ComApartment::initialize()?);
+        #[cfg(target_os = "macos")]
+        let commands: &[(&str, &[&str])] = &[("/usr/bin/say", &[])];
+        #[cfg(not(target_os = "macos"))]
+        let commands: &[(&str, &[&str])] = &[("espeak-ng", &["--stdin"]), ("espeak", &["--stdin"])];
+        for (program, arguments) in commands {
+            let child = Command::new(program)
+                .args(*arguments)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            let mut child = match child {
+                Ok(child) => child,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("starting native speech synthesis"),
+            };
+            let input = child
+                .stdin
+                .take()
+                .context("opening speech input")?
+                .write_all(text.as_bytes());
+            if let Err(error) = input {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("sending text to speech synthesis");
             }
-            // SAFETY: the apartment field keeps COM initialized until after voice drops.
-            self.voice = Some(
-                unsafe { CoCreateInstance(&SpVoice, None, CLSCTX_INPROC_SERVER) }
-                    .context("Windows speech synthesis is unavailable")?,
-            );
+            self.child = Some(child);
+            return Ok(());
         }
-        let terminated: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let flags = (SPF_ASYNC.0 | SPF_PURGEBEFORESPEAK.0 | SPF_IS_NOT_XML.0) as u32;
-        if let Some(voice) = &self.voice {
-            // SAFETY: SAPI copies the terminated input when queuing asynchronous speech.
-            unsafe { voice.Speak(PCWSTR(terminated.as_ptr()), flags, None) }
-                .context("starting speech synthesis")?;
-        }
-        Ok(())
+        anyhow::bail!(
+            "Native speech synthesis is unavailable. Install eSpeak NG on Linux or enable the macOS say service."
+        )
     }
 
-    /// Stops any utterance queued by this voice without affecting other applications.
-    ///
-    /// # Errors
-    /// Returns an error if Windows cannot cancel the current utterance.
-    pub fn stop(&mut self) -> Result<()> {
-        if let Some(voice) = &self.voice {
-            // SAFETY: a null string with PURGEBEFORESPEAK cancels this live SAPI voice.
-            unsafe { voice.Speak(PCWSTR::null(), SPF_PURGEBEFORESPEAK.0 as u32, None) }
-                .context("stopping speech synthesis")?;
+    /// Stops only the utterance this editor started and reaps its process.
+    pub fn stop(&mut self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        if let Some(mut child) = self.child.take() {
+            if child
+                .try_wait()
+                .context("checking speech synthesis")?
+                .is_none()
+            {
+                child.kill().context("stopping speech synthesis")?;
+                child.wait().context("finishing speech synthesis")?;
+            }
         }
         Ok(())
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 impl Drop for Speech {
     fn drop(&mut self) {
         let _ = self.stop();
     }
 }
 
-/// A local replacement with offsets in RichEdit's UTF-16 coordinate system.
+/// A local replacement with offsets in the editor's UTF-16 coordinate system.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextSubstitution {
     /// The exact code units to replace, leaving surrounding formatting intact.
@@ -346,25 +178,9 @@ pub(crate) fn utf16_byte_offset(text: &str, offset: usize) -> Option<usize> {
     (units == offset).then_some(text.len())
 }
 
-/// Returns document words extending a prefix, deduplicated and ordered ignoring case.
-pub fn completions(text: &str, prefix: &str) -> Vec<String> {
-    if prefix.is_empty() {
-        return Vec::new();
-    }
-    let prefix = prefix.to_lowercase();
-    let mut candidates = BTreeMap::new();
-    for word in text.unicode_words() {
-        let key = word.to_lowercase();
-        if key.starts_with(&prefix) && key != prefix {
-            candidates.entry(key).or_insert_with(|| word.to_owned());
-        }
-    }
-    candidates.into_values().collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{TextSubstitution, completions, substitution, utf16_byte_offset};
+    use super::{TextSubstitution, substitution, utf16_byte_offset};
 
     #[test]
     fn smart_dashes_keep_utf16_offsets_after_emoji() {
@@ -412,21 +228,5 @@ mod tests {
             substitution("😀\"", 3, true, true).map(|item| item.range),
             Some(2..3)
         );
-    }
-
-    #[test]
-    fn completions_are_case_insensitive_and_deterministic() {
-        assert_eq!(
-            completions("Alpha alphabet ALPHA alpine beta", "AL"),
-            vec!["Alpha", "alphabet", "alpine"]
-        );
-        assert_eq!(completions("alpha alpha", "alpha"), Vec::<String>::new());
-        assert_eq!(completions("alpha", ""), Vec::<String>::new());
-    }
-
-    #[test]
-    fn completions_preserve_combining_marks_and_non_ascii_words() {
-        assert_eq!(completions("e\u{301}clair École ÉCOLE", "é"), vec!["École"]);
-        assert_eq!(completions("e\u{301}clair", "e"), vec!["e\u{301}clair"]);
     }
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-07T15:05:18-05:00 - WordCraft editor migration, input fixes and suggestions (local/uncommitted source; GitHub validation pending)
+
+- Replaced the Windows RichEdit document host and old conversion model with WordCraft’s native Rust document, command, font, layout and rendering engines, keeping the existing GPUI Fast interface. Preserved the prior working source in a verified private local archive; no private notes or backup contents are included in the repository.
+- Connected native text input/IME, selection, rich formatting and undo, rich clipboard, tables/images/links, PDF/system printing, and full-model recovery alongside legacy text/RTF snapshots. Imports and safe saves use the canonical model for office formats.
+- Fixed recurring editor focus requests, unified Control/Command shortcut decoding, retained syntax spans across text edits, and applied document themes only to screen copies. Added bounded offline word/language-keyword suggestions with automatic/manual triggers and keyboard selection, plus a Settings toggle.
+- Added Unix single-instance handoff and native OS file-open events, and prepared Windows/macOS/Linux GitHub workflows/packages and regression source. Removed old native editor/emoji rendering dependencies.
+- Validation so far: source inspection and private backup hash verification only. No local compilation or application tests. GitHub diagnostics/tests/builds and interactive acceptance remain pending. Imported secondary stories are retained but not directly editable; broad format/IME/accessibility/printer qualification remains outstanding.
+
+## 2026-11-06T23:15:10-05:00 - Private local conversation archive (local/uncommitted documentation)
+
+- Created the user-requested local conversation archive from original recorded user/assistant messages and timestamps. The archive remains excluded by the existing private-notes Git ignore rule; conversation content was not copied into tracked project files.
+- Documentation-only work. No application behavior changes, builds, tests, commits or pushes were performed for this archive.
+
 ## 2026-11-06T18:45:56-05:00 - Shortcut and native HTML-paste build ready for user testing (recording time)
 
 - GitHub run [42311910950](https://github.com/abelokoj/ExEditor/actions/runs/42311910950) completed successfully for committed application source 20636ffec5c9d05781025d6e105b04fd748fbabb: formatting, strict diagnostics, all 173 regression tests, release packaging and installer integration checks passed. This includes every one of the 95 key combinations through the real native message handler, immediate selection/typing/undo/formatting, tab owner routing, empty-document line operations, HTML selections/media/conversion, native paste undo and actual Windows HTML/Unicode clipboard formats. The preceding pending/local batch entries retain their original recording status; the corresponding application changes are now committed and validated.

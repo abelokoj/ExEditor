@@ -920,7 +920,9 @@ impl Render for ColorsPanel {
                         window.remove_window();
                     }
                     cx.stop_propagation();
-                } else if event.keystroke.key == "enter" && event.keystroke.modifiers.control {
+                } else if event.keystroke.key == "enter"
+                    && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
+                {
                     this.apply(window, cx);
                     cx.stop_propagation();
                 }

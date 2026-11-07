@@ -21,6 +21,11 @@ pub enum FormKind {
     FontSize,
     InterfaceScale,
     PageSetup,
+    Print {
+        printer: String,
+        document: std::sync::Arc<wordcraft_doc::Document>,
+        page: crate::editor::PageSettings,
+    },
     Preferences,
     Find,
     Replace,
@@ -189,23 +194,9 @@ impl MenuView {
         self.select(index, cx);
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let m = &event.keystroke.modifiers;
-        if m.platform {
-            self.keyboard.reset();
-            return;
-        }
-        let modifiers = crate::keyboard::modifiers_for_key(
-            &event.keystroke.key,
-            crate::keyboard::Modifiers {
-                control: m.control,
-                shift: m.shift,
-                alt: m.alt,
-            },
-        );
-        let key = crate::keyboard::virtual_key(&event.keystroke.key).unwrap_or(0);
         match self
             .keyboard
-            .resolve(key, modifiers, std::time::Instant::now())
+            .resolve_keystroke(&event.keystroke, std::time::Instant::now())
         {
             crate::keyboard::Outcome::Action(action) => {
                 if let Some(command) = crate::app::shortcut_command(action) {
@@ -531,7 +522,9 @@ impl Render for FormView {
                 if event.keystroke.key == "escape" {
                     window.remove_window();
                     cx.stop_propagation();
-                } else if event.keystroke.key == "enter" && event.keystroke.modifiers.control {
+                } else if event.keystroke.key == "enter"
+                    && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
+                {
                     this.submit(window, cx);
                     cx.stop_propagation();
                 }
@@ -606,6 +599,7 @@ impl Render for FormView {
                             match self.kind {
                                 FormKind::Find => "Find Next",
                                 FormKind::Replace => "Replace All",
+                                FormKind::Print { .. } => "Print",
                                 _ => "OK",
                             },
                             100.,

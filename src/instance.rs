@@ -3,29 +3,10 @@
 #[cfg(windows)]
 pub(crate) use windows::{Instance, Startup, start};
 
-#[cfg(not(windows))]
-#[derive(Debug)]
-pub(crate) struct Instance;
-#[cfg(not(windows))]
-#[derive(Debug)]
-pub(crate) enum Startup {
-    Primary(Instance),
-    Forwarded,
-}
-#[cfg(not(windows))]
-pub(crate) fn start(_paths: &[std::path::PathBuf]) -> anyhow::Result<Startup> {
-    Ok(Startup::Primary(Instance))
-}
-#[cfg(not(windows))]
-impl Instance {
-    pub(crate) fn take_requests(&self) -> Vec<Vec<std::path::PathBuf>> {
-        Vec::new()
-    }
-    pub(crate) fn stop_accepting(&self) -> Vec<Vec<std::path::PathBuf>> {
-        Vec::new()
-    }
-    pub(crate) fn resume_accepting(&self) {}
-}
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub(crate) use unix::{Instance, Startup, start};
 
 #[cfg(windows)]
 mod windows {

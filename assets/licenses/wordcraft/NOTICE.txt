@@ -1,0 +1,5 @@
+Native clipboard platform adapters in src/editor/clipboard.rs derive from WordCraft
+apps/wordcraft/src/clipboard.rs, commit 729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b.
+Source: https://github.com/storytold/wordcraft
+Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.
+Adapted and distributed under the MIT license; see LICENSE-MIT.txt in this folder.

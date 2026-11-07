@@ -45,6 +45,8 @@ pub struct Preferences {
     pub dark_documents: bool,
     /// A `syntax::THEMES` label, or `syntax::AUTOMATIC`.
     pub code_theme: String,
+    /// Offer document words and language keywords while typing.
+    pub autocomplete: bool,
 }
 
 impl Default for Preferences {
@@ -71,6 +73,7 @@ impl Default for Preferences {
             interface_scale: 100,
             dark_documents: true,
             code_theme: crate::syntax::AUTOMATIC.into(),
+            autocomplete: true,
         }
     }
 }
@@ -172,6 +175,7 @@ mod tests {
         assert!(!preferences.rich_text);
         assert_eq!(preferences.untitled_prefix, "Untitled");
         assert!(preferences.spellcheck);
+        assert!(preferences.autocomplete);
         assert_eq!(preferences.autosave_seconds, 30);
     }
 

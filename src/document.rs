@@ -110,6 +110,7 @@ pub struct FileFingerprint {
 pub struct LoadedDocument {
     pub content: DocumentContent,
     pub path: PathBuf,
+    pub editor_snapshot: Option<wordcraft_doc::Document>,
     pub format: DocumentFormat,
     pub encoding: TextEncoding,
     pub line_ending: LineEnding,
@@ -132,6 +133,7 @@ fn load_using_encoding(
     let path = fs::canonicalize(path).with_context(|| format!("Opening {}", path.display()))?;
     let format = DocumentFormat::from_path(&path)?;
     let before = fingerprint(&path)?;
+    let mut editor_snapshot = None;
     let (content, encoding, line_ending) = match format {
         DocumentFormat::PlainText => {
             let bytes = read_document(&path)?;
@@ -162,7 +164,9 @@ fn load_using_encoding(
             LineEnding::Lf,
         ),
         _ => {
-            let converted = crate::formats::import(&path, format)?;
+            let imported = crate::formats::import(&path, format)?;
+            let converted = wordcraft_formats::rtf::export(&imported).into_bytes();
+            editor_snapshot = Some(imported);
             validate_rtf(&converted)?;
             (
                 DocumentContent::Rich(converted),
@@ -182,6 +186,7 @@ fn load_using_encoding(
         encoding,
         line_ending,
         fingerprint: before,
+        editor_snapshot,
     })
 }
 
@@ -191,6 +196,17 @@ pub fn save(
     content: &DocumentContent,
     encoding: TextEncoding,
     line_ending: LineEnding,
+) -> Result<FileFingerprint> {
+    save_with_document(path, format, content, encoding, line_ending, None)
+}
+
+pub fn save_with_document(
+    path: &Path,
+    format: DocumentFormat,
+    content: &DocumentContent,
+    encoding: TextEncoding,
+    line_ending: LineEnding,
+    editor_snapshot: Option<&wordcraft_doc::Document>,
 ) -> Result<FileFingerprint> {
     let existed = path.try_exists()?;
     let before = existed.then(|| fingerprint(path)).transpose()?;
@@ -214,7 +230,10 @@ pub fn save(
             encode_text(text, encoding, line_ending)?
         }
         DocumentFormat::Rtf | DocumentFormat::Rtfd => content_as_rtf(content)?,
-        _ => crate::formats::export(&content_as_rtf(content)?, format)?,
+        _ => match editor_snapshot {
+            Some(snapshot) => crate::formats::export_document(snapshot, format)?,
+            None => crate::formats::export(&content_as_rtf(content)?, format)?,
+        },
     };
     let now = path.try_exists()?.then(|| fingerprint(path)).transpose()?;
     ensure!(
@@ -570,6 +589,9 @@ pub struct RecoveryDocument {
     pub original_path: Option<PathBuf>,
     pub format: DocumentFormat,
     pub content: DocumentContent,
+    /// Complete WordCraft model; older recovery snapshots fall back to their text/RTF.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_snapshot: Option<wordcraft_doc::Document>,
     pub encoding: TextEncoding,
     pub line_ending: LineEnding,
     pub saved_at: String,
@@ -948,7 +970,16 @@ fn graphic_groups(bytes: &[u8]) -> Result<Vec<(usize, usize, usize, usize)>> {
 }
 
 pub fn supports_format(format: DocumentFormat) -> bool {
-    !matches!(format, DocumentFormat::Doc)
+    matches!(
+        format,
+        DocumentFormat::PlainText
+            | DocumentFormat::Rtf
+            | DocumentFormat::Rtfd
+            | DocumentFormat::Html
+            | DocumentFormat::Docx
+            | DocumentFormat::Odt
+            | DocumentFormat::Doc
+    )
 }
 
 #[cfg(test)]

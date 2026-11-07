@@ -82,7 +82,7 @@ fn rgb(color: syntect::highlighting::Color) -> u32 {
     (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b)
 }
 
-/// One colored run, in UTF-16 code units as RichEdit counts them.
+/// One colored run, in the app’s UTF-16 coordinate system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -98,6 +98,8 @@ struct Line {
     /// Parser and highlighter state before this line.
     parse: ParseState,
     highlight: HighlightState,
+    /// Cached runs relative to this line, retained when its parser state is reused.
+    styles: Vec<Span>,
 }
 
 /// Incremental highlighter for one document: re-colors from the first edited
@@ -184,7 +186,10 @@ impl CodeHighlighter {
                 text: line.to_owned(),
                 parse: parse.clone(),
                 highlight: highlight.clone(),
+                styles: Vec::new(),
             });
+            let line_start = offset;
+            let mut line_styles = Vec::new();
             let ops = if line.len() <= MAX_LINE_BYTES {
                 parse.parse_line(line, set).ok()
             } else {
@@ -196,6 +201,12 @@ impl CodeHighlighter {
                         HighlightIterator::new(&mut highlight, &ops, line, &highlighter)
                     {
                         push_span(&mut spans, offset, piece.encode_utf16().count(), style);
+                        push_span(
+                            &mut line_styles,
+                            offset - line_start,
+                            piece.encode_utf16().count(),
+                            style,
+                        );
                         offset += piece.encode_utf16().count();
                     }
                 }
@@ -204,12 +215,29 @@ impl CodeHighlighter {
                     parse = lines[index].parse.clone();
                     let len = line.encode_utf16().count();
                     push_span(&mut spans, offset, len, highlighter.get_default());
+                    push_span(&mut line_styles, 0, len, highlighter.get_default());
                     offset += len;
                 }
             }
+            lines[index].styles = line_styles;
             index += 1;
         }
         self.lines = lines;
+        spans
+    }
+
+    /// Full styling for a retained Rust document, with incremental parsing of changed lines.
+    pub fn all_spans(&mut self, text: &str) -> Vec<Span> {
+        self.update(text);
+        let mut offset = 0;
+        let mut spans = Vec::new();
+        for line in &self.lines {
+            spans.extend(line.styles.iter().map(|span| Span {
+                start: span.start + offset,
+                ..*span
+            }));
+            offset += line.text.encode_utf16().count();
+        }
         spans
     }
 }
@@ -239,6 +267,22 @@ fn push_span(spans: &mut Vec<Span>, start: usize, len: usize, style: syntect::hi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_spans_follow_insertions_and_deletions_without_native_formatting() {
+        let mut cached = CodeHighlighter::new("Rust".into(), "Dracula", true);
+        for text in [
+            "let a = 1;\nlet b = 2;\n",
+            "// 😀\nlet a = 1;\nlet b = 2;\n",
+            "let b = 2;\n",
+        ] {
+            let actual = cached.all_spans(text);
+            let mut fresh = CodeHighlighter::new("Rust".into(), "Dracula", true);
+            let expected = fresh.all_spans(text);
+            assert_eq!(actual, expected);
+            assert_eq!(cached.all_spans(text), expected);
+        }
+    }
 
     #[test]
     fn detects_by_extension_and_first_line() {
