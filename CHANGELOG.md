@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-07T16:52:22-05:00 - Stable accessory license bytes across platforms (local/uncommitted CI correction)
+
+- GitHub run 42416927859 passed diagnostics everywhere, and Linux/macOS passed both editor regressions and real pinned font downloads. Windows passed 152 tests; two local-fixture integrity checks exposed checkout CRLF conversion of the OFL license files.
+- Pinned font-license files to LF and font binaries to binary checkout behavior, retaining strict download sizes/hashes. Adopted the GitHub-resolved lockfile for the new direct HTTP/hash dependencies. The application’s downloaded files are unchanged; the fix makes repository fixtures deterministic on Windows.
+- Validation: exact remote failure logs and pinned Git blob inspection. Corrected Windows regressions, download checks and final release payload checks remain pending on GitHub; no local compilation or source tests.
+
 ## 2026-11-07T16:36:11-05:00 - Optional font accessories (local/uncommitted source; GitHub validation pending)
 
 - Kept Pretendard Std, Maple Mono NF and Noto Color Emoji in the GitHub repository but removed their font bytes from compiled assets. Inter remains bundled; new installations use available platform monospace and emoji fallbacks until accessories are downloaded.

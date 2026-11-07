@@ -1,0 +1,4 @@
+# Optional-download hashes refer to the exact GitHub blob bytes on every platform.
+/assets/fonts/**/OFL.txt text eol=lf
+/assets/fonts/**/*.ttf binary
+/assets/accessories/fonts.json text eol=lf
