@@ -162,7 +162,6 @@ pub enum Command {
         original: String,
         replacement: String,
     },
-    Correct(std::ops::Range<usize>, String),
     Complete,
     Speak,
     StopSpeaking,
@@ -2472,10 +2471,6 @@ impl EditorWindow {
                 );
                 editor.select_range(range)?;
                 editor.replace_current(&replacement)?;
-            }
-            Command::Correct(range, text) => {
-                self.editor()?.select_range(range)?;
-                self.editor()?.replace_current(&text)?;
             }
             Command::Complete => {
                 if let Some((_, surface)) = &self.surface {

@@ -49,8 +49,27 @@ fn lease_buffer_in(folder: &Path, id: &str) -> Result<Option<BufferLease>> {
         use std::os::windows::fs::OpenOptionsExt as _;
         options.share_mode(0);
     }
-    #[cfg(not(windows))]
-    anyhow::bail!("Unsaved-buffer ownership is currently supported on Windows only.");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let file = options.open(&path).with_context(|| {
+            format!("Protecting unsaved buffer {id}; its snapshot has not been changed")
+        })?;
+        anyhow::ensure!(
+            file.metadata()?.is_file(),
+            "The unsaved-buffer lease is not a regular file."
+        );
+        match file.try_lock() {
+            Ok(()) => Ok(Some(BufferLease { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => {
+                Err(error).context("Locking the unsaved-buffer lease")
+            }
+        }
+    }
     #[cfg(windows)]
     match options.open(&path) {
         Ok(file) => Ok(Some(BufferLease { _file: file })),
@@ -356,5 +375,37 @@ mod tests {
             restored.buffers[0].document.untitled_name.as_deref(),
             Some("Notes 12")
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_lease_tests {
+    use super::*;
+    #[test]
+    fn recovery_buffer_lease_has_one_owner_and_reopens_after_close() {
+        let directory = tempfile::tempdir().unwrap();
+        let lease = lease_buffer_in(directory.path(), "buffer-1")
+            .unwrap()
+            .unwrap();
+        assert!(
+            lease_buffer_in(directory.path(), "buffer-1")
+                .unwrap()
+                .is_none()
+        );
+        drop(lease);
+        assert!(
+            lease_buffer_in(directory.path(), "buffer-1")
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn recovery_buffer_lease_refuses_symbolic_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        std::fs::write(&original, "unchanged").unwrap();
+        std::os::unix::fs::symlink(&original, directory.path().join("buffer-1.lock")).unwrap();
+        assert!(lease_buffer_in(directory.path(), "buffer-1").is_err());
+        assert_eq!(std::fs::read_to_string(original).unwrap(), "unchanged");
     }
 }

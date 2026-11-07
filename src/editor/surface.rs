@@ -153,10 +153,6 @@ impl EditorSurface {
         }
     }
 
-    pub(crate) fn editor(&self) -> &Rc<Editor> {
-        &self.editor
-    }
-
     fn viewport(&self) -> Bounds<Pixels> {
         Bounds::new(
             self.bounds.origin,
@@ -1413,7 +1409,7 @@ fn render_image(mut rendered: wordcraft_render::Rendered) -> Option<Arc<RenderIm
         return None;
     }
     // WordCraft supplies premultiplied RGBA; GPUI's atlas consumes premultiplied BGRA.
-    for pixel in rendered.pixels.chunks_exact_mut(4) {
+    for pixel in rendered.pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)?;

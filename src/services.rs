@@ -89,16 +89,16 @@ impl Speech {
     /// Stops only the utterance this editor started and reaps its process.
     pub fn stop(&mut self) -> anyhow::Result<()> {
         use anyhow::Context as _;
-        if let Some(mut child) = self.child.take() {
-            if child
+        if let Some(child) = self.child.as_mut()
+            && child
                 .try_wait()
                 .context("checking speech synthesis")?
                 .is_none()
-            {
-                child.kill().context("stopping speech synthesis")?;
-                child.wait().context("finishing speech synthesis")?;
-            }
+        {
+            child.kill().context("stopping speech synthesis")?;
+            child.wait().context("finishing speech synthesis")?;
         }
+        self.child = None;
         Ok(())
     }
 }

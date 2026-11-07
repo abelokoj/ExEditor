@@ -797,13 +797,6 @@ impl Editor {
             self.invalidate_display();
         }
     }
-    pub fn set_margins(&self, left: i32, right: i32) {
-        let margins = (left.max(0), right.max(0));
-        if self.display.borrow().margins != margins {
-            self.display.borrow_mut().margins = margins;
-            self.invalidate_display();
-        }
-    }
     pub fn set_background(&self, color: u32) {
         let color = color & 0xffffff;
         if self.display.borrow().background != color {

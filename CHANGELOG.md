@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-07T15:37:45-05:00 - Portable recovery ownership and strict lint cleanup (local/uncommitted corrections)
+
+- GitHub run 42411020078 reached strict diagnostics on all three platforms. Removed unused native-adapter remnants, limited CF_HTML platform code to Windows while retaining parser tests everywhere, and applied the pinned toolchain’s fixed-size chunk style.
+- Replaced the prior non-Windows recovery lease rejection with real private file locks, including symlink refusal and lease ownership regressions. Normal committed typing uses the editor’s ordinary input rules; composition updates retain grouped raw edits. Native speech keeps its process handle if stopping fails.
+- Validation: GitHub compiler/lint reports and local source formatting only; no local application compilation or tests. Remote regression execution and downloadable release packages remain pending.
+
 ## 2026-11-07T15:17:38-05:00 - First GitHub migration diagnostics (local/uncommitted corrections)
 
 - GitHub run 42409637854 resolved the pinned WordCraft dependencies and passed formatting on macOS/Linux, then reported stale native spelling calls, a menu modifier binding, test trait imports and a missing index type. Corrected those integration errors and adopted GitHub’s resolved Cargo.lock for reproducible builds.

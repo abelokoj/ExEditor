@@ -69,7 +69,14 @@ impl EntityInputHandler for EditorSurface {
             .or_else(|| marked.map(|marked| marked.range))
             .unwrap_or_else(|| self.editor.selection());
         let (range, _) = utf16_range(&self.editor.plain_text_snapshot(), requested);
-        match self.editor.replace_ime(range, text, join) {
+        let result = if join {
+            self.editor.replace_ime(range, text, true)
+        } else {
+            self.editor
+                .select_range(range)
+                .and_then(|()| self.editor.replace_current(text))
+        };
+        match result {
             Ok(()) => {
                 if join {
                     self.editor.session_mut().close_typing();
