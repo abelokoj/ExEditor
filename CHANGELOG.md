@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-07T20:31:36-05:00 - Optional font build ready for user testing (recording time; documentation-only follow-up)
+
+- GitHub run [42418107228](https://github.com/abelokoj/ExEditor/actions/runs/42418107228) completed successfully for application source 9cbdea3f3651ed43c5a84ae1364caf237d88fd59 on Windows x64, Linux x64 and macOS arm64. Formatting, strict diagnostics, all 154 Windows / 140 Linux / 140 macOS regressions, one separate real font-download/cache test per platform, and executable checks excluding all three optional font payloads passed. Windows installer shell integration also passed.
+- Downloaded the Windows installer/portable app, macOS bundle archive, Linux archive and build records under dist/ExEditor-2026-11-7.2. Verified exact source IDs, GitHub artifact digests and all 47 Windows / 23 macOS / 22 Linux packaged file hashes. Earlier pending entries retain their original recording status; their application changes are now committed and validated.
+- Settings > Accessories offers Pretendard Std, Maple Mono NF and Noto Color Emoji as explicit optional downloads from pinned repository assets. Inter remains bundled. The Windows installer is 33.92 MB, compared with 44.34 MB for the pre-accessory WordCraft baseline; the extracted Windows package is 104.97 MB. Font download sizes are separate from the base application.
+- This follow-up changes documentation only; it does not change the validated executable. All compilation and Rust tests ran on GitHub. Local work was source formatting/inspection, archive and checksum verification. Manual UI testing is left for user feedback; broad physical IME, assistive-technology and printer acceptance and the previously documented secondary-story editing limits remain outstanding. Private notes, backups and downloaded builds remain ignored and unpublished.
+
 ## 2026-11-07T16:52:22-05:00 - Stable accessory license bytes across platforms (local/uncommitted CI correction)
 
 - GitHub run 42416927859 passed diagnostics everywhere, and Linux/macOS passed both editor regressions and real pinned font downloads. Windows passed 152 tests; two local-fixture integrity checks exposed checkout CRLF conversion of the OFL license files.
