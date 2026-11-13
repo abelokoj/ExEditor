@@ -1,17 +1,17 @@
-//! Persisted editor settings and explicit optional font downloads.
+//! Persisted TextEdit defaults and explicitly requested optional font downloads.
 use crate::{
-    app::{Command, show_error},
+    app::Command,
     dialogs::{Commands, FormKind},
     document::TextEncoding,
     preferences::{Appearance, Preferences},
-    ui::{Palette, px},
+    ui::{self, Palette, px},
 };
-use gpui_kit::component::{
-    Disableable as _, Sizable as _, Size,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    input::{Input, InputState},
+use nsh_core::{
+    desktop::WindowKind,
+    element::{SignalEquals, signal_with},
+    prelude::*,
 };
-use gpui_kit::{prelude::FluentBuilder as _, *};
+use std::rc::Rc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -19,11 +19,7 @@ enum Tab {
     OpenAndSave,
     Accessories,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FontEditor {
-    Plain,
-    Rich,
-}
+#[derive(Clone, PartialEq)]
 enum DownloadStatus {
     Missing,
     Downloading,
@@ -31,862 +27,457 @@ enum DownloadStatus {
     Failed(String),
 }
 struct Settings {
-    draft: Preferences,
-    untitled_prefix: Entity<InputState>,
-    rich_font: Entity<InputState>,
-    rich_size: Entity<InputState>,
-    plain_font: Entity<InputState>,
-    plain_size: Entity<InputState>,
-    recovery: Entity<InputState>,
-    tab: Tab,
-    font_editor: Option<FontEditor>,
-    accessories: Vec<DownloadStatus>,
-    error: Option<String>,
+    draft: Signal<Preferences>,
+    prefix: Signal<String>,
+    rich_font: Signal<String>,
+    rich_size: Signal<String>,
+    plain_font: Signal<String>,
+    plain_size: Signal<String>,
+    recovery: Signal<String>,
+    tab: Signal<Tab>,
+    accessories: Signal<Vec<DownloadStatus>>,
+    error: Signal<String>,
     commands: Commands,
     colors: Palette,
 }
 
-pub fn open(preferences: Preferences, commands: Commands, colors: Palette, cx: &mut App) {
-    let options = WindowOptions {
-        kind: WindowKind::Dialog,
-        window_bounds: Some(WindowBounds::centered(size(px(590.), px(570.)), cx)),
-        titlebar: None,
-        app_owns_titlebar_drag: true,
-        window_decorations: Some(WindowDecorations::Client),
-        is_resizable: false,
-        is_minimizable: false,
-        ..Default::default()
-    };
-    let result = gpui_kit::open_window(options, cx, move |window, cx| {
-        window.set_window_title("ExEditor Settings");
-        cx.new(|cx| {
-            let untitled_prefix = input(
-                "New document name prefix",
-                &preferences.untitled_prefix,
-                window,
-                cx,
-            );
-            cx.observe(&untitled_prefix, |_, _, cx| cx.notify())
-                .detach();
-            Settings {
-                untitled_prefix,
-                rich_font: input("Rich text font", &preferences.rich_font, window, cx),
-                rich_size: input(
-                    "Rich text font size",
-                    &preferences.rich_size.to_string(),
-                    window,
-                    cx,
+pub fn open(preferences: Preferences, commands: Commands, colors: Palette) {
+    ui::show_panel(
+        "settings",
+        "ExEditor Settings",
+        620.,
+        610.,
+        WindowKind::Dialog,
+        move || {
+            let state = Rc::new(Settings {
+                prefix: signal(preferences.untitled_prefix.clone()),
+                rich_font: signal(preferences.rich_font.clone()),
+                rich_size: signal(preferences.rich_size.to_string()),
+                plain_font: signal(preferences.plain_font.clone()),
+                plain_size: signal(preferences.plain_size.to_string()),
+                recovery: signal(preferences.autosave_seconds.to_string()),
+                draft: signal_with(preferences.clone(), SignalEquals::Never),
+                tab: signal(Tab::NewDocument),
+                accessories: signal(
+                    crate::accessories::manifest()
+                        .packs
+                        .iter()
+                        .map(|pack| {
+                            if crate::fonts::accessory_available(&pack.id) {
+                                DownloadStatus::Available
+                            } else {
+                                DownloadStatus::Missing
+                            }
+                        })
+                        .collect(),
                 ),
-                plain_font: input("Plain text font", &preferences.plain_font, window, cx),
-                plain_size: input(
-                    "Plain text font size",
-                    &preferences.plain_size.to_string(),
-                    window,
-                    cx,
-                ),
-                recovery: input(
-                    "Additional recovery checkpoint interval in seconds",
-                    &preferences.autosave_seconds.to_string(),
-                    window,
-                    cx,
-                ),
-                draft: preferences,
-                tab: Tab::NewDocument,
-                font_editor: None,
-                accessories: crate::accessories::manifest()
-                    .packs
-                    .iter()
-                    .map(|pack| {
-                        if crate::fonts::accessory_available(&pack.id) {
-                            DownloadStatus::Available
-                        } else {
-                            DownloadStatus::Missing
-                        }
-                    })
-                    .collect(),
-                error: None,
-                commands,
+                error: signal(String::new()),
+                commands: commands.clone(),
                 colors,
-            }
-        })
-    });
-    if let Err(error) = result {
-        show_error(&error);
-    }
-}
-
-fn input(
-    label: &'static str,
-    value: &str,
-    window: &mut Window,
-    cx: &mut Context<Settings>,
-) -> Entity<InputState> {
-    cx.new(|cx| {
-        InputState::new(window, cx)
-            .placeholder(label)
-            .default_value(value.to_owned())
-    })
+            });
+            let submit = state.clone();
+            on_key("mod+enter", move |_| submit.submit(true));
+            let content = state.clone();
+            let restore = state.clone();
+            let apply = state.clone();
+            let save = state.clone();
+            ui::surface(colors)
+                .child(ui::heading("Settings"))
+                .child(
+                    ui::radio_group("Settings sections")
+                        .flex_row()
+                        .gap(px(12.))
+                        .children(
+                            [
+                                (Tab::NewDocument, "New Document"),
+                                (Tab::OpenAndSave, "Open and Save"),
+                                (Tab::Accessories, "Accessories"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (tab, label))| {
+                                let selected = state.tab;
+                                ui::radio(
+                                    format!("settings-tab-{index}"),
+                                    label,
+                                    move || selected.get() == tab,
+                                    colors,
+                                    move |_| selected.set(tab),
+                                )
+                            }),
+                        ),
+                )
+                .child(scroll().flex_1().min_h(px(0.)).child(dynamic(
+                    move || match content.tab.get() {
+                        Tab::NewDocument => content.new_document(),
+                        Tab::OpenAndSave => content.open_and_save(),
+                        Tab::Accessories => content.accessories(),
+                    },
+                )))
+                .child(ui::error(state.error, colors))
+                .child(
+                    view()
+                        .flex_row()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(
+                            ui::button("restore-settings", "Restore All Defaults", 12.)
+                                .on_press(move || restore.restore()),
+                        )
+                        .child(
+                            view()
+                                .flex_row()
+                                .gap(px(8.))
+                                .child(
+                                    ui::control("cancel-settings", "Cancel", 66., false, colors)
+                                        .on_press(|| ui::close_panel("settings")),
+                                )
+                                .child(
+                                    ui::control("apply-settings", "Apply", 66., false, colors)
+                                        .on_press(move || apply.submit(false)),
+                                )
+                                .child(
+                                    ui::control("save-settings", "OK", 66., true, colors)
+                                        .on_press(move || save.submit(true)),
+                                ),
+                        ),
+                )
+                .into_element()
+        },
+    );
 }
 
 impl Settings {
-    fn button(&self, id: &'static str, label: &'static str, cx: &App) -> Button {
-        let c = self.colors;
-        crate::ui::button(id, label, 12.)
-            .with_size(Size::Small)
-            .rounded(px(4.))
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .color(rgb(c.field).into())
-                    .foreground(rgb(c.ink).into())
-                    .hover(rgb(c.toolbar).into())
-                    .shadow(false),
-            )
-            .h(px(24.))
-            .text_size(px(12.))
-    }
     fn checkbox(
         &self,
         id: &'static str,
         label: &'static str,
-        checked: bool,
+        read: fn(&Preferences) -> bool,
         update: fn(&mut Preferences, bool),
-        cx: &Context<Self>,
-    ) -> gpui_kit::base::Checkbox {
-        crate::ui::checkbox(
+    ) -> impl IntoElement {
+        let draft = self.draft;
+        let error = self.error;
+        ui::checkbox(
             id,
             label,
-            checked,
+            move || draft.with(read),
             self.colors,
-            cx.listener(move |this, checked, _, cx| {
-                update(&mut this.draft, *checked);
-                this.error = None;
-                cx.notify();
-            }),
+            move |checked| {
+                draft.update(|preferences| update(preferences, checked));
+                error.set(String::new());
+            },
         )
     }
-    fn heading(&self, text: &'static str) -> Div {
-        div()
-            .text_size(px(13.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(text)
-    }
-    fn font_row(&self, kind: FontEditor, cx: &mut Context<Self>) -> Div {
-        let (label, id, font, size) = match kind {
-            FontEditor::Plain => (
-                "Plain text font:",
-                "change-plain-font",
-                &self.plain_font,
-                &self.plain_size,
-            ),
-            FontEditor::Rich => (
-                "Rich text font:",
-                "change-rich-font",
-                &self.rich_font,
-                &self.rich_size,
-            ),
-        };
-        let summary = format!("{} {}", font.read(cx).value(), size.read(cx).value());
-        let expanded = self.font_editor == Some(kind);
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(7.))
+    fn new_document(self: &Rc<Self>) -> AnyElement {
+        let rich = self.draft;
+        let plain = self.draft;
+        let prefix = self.prefix;
+        let queue = self.commands.clone();
+        view()
+            .gap(px(14.))
+            .child(ui::heading("Document Name"))
+            .child(ui::row(
+                "New document name prefix:",
+                ui::input("New document name prefix", self.prefix, self.colors),
+            ))
+            .child(ui::hint(move || name_examples(&prefix.get()), self.colors))
+            .child(ui::heading("Format"))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .min_h(px(27.))
-                    .child(div().w(px(108.)).child(label))
-                    .child(
-                        self.button(id, if expanded { "Done" } else { "Change…" }, cx)
-                            .w(px(79.))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.font_editor = if this.font_editor == Some(kind) {
-                                    None
-                                } else {
-                                    Some(kind)
-                                };
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1().child(summary)),
+                ui::radio_group("Default document format")
+                    .flex_row()
+                    .gap(px(24.))
+                    .child(ui::radio(
+                        "default-rich-text",
+                        "Rich text",
+                        move || rich.with(|p| p.rich_text),
+                        self.colors,
+                        move |_| rich.update(|p| p.rich_text = true),
+                    ))
+                    .child(ui::radio(
+                        "default-plain-text",
+                        "Plain text",
+                        move || plain.with(|p| !p.rich_text),
+                        self.colors,
+                        move |_| plain.update(|p| p.rich_text = false),
+                    )),
             )
-            .when(expanded, |row| {
-                row.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .pl(px(118.))
-                        .child(div().w(px(185.)).child(crate::ui::input(
-                            Input::new(font).with_size(Size::Small),
-                            26.,
-                            12.,
-                        )))
-                        .child(div().w(px(58.)).child(crate::ui::input(
-                            Input::new(size).with_size(Size::Small),
-                            26.,
-                            12.,
-                        )))
-                        .child(div().text_color(rgb(self.colors.muted)).child("pt")),
-                )
-            })
+            .child(self.checkbox(
+                "default-wrap",
+                "Wrap to page",
+                |p| p.wrap_to_page,
+                |p, v| p.wrap_to_page = v,
+            ))
+            .child(ui::heading("Font"))
+            .child(ui::row(
+                "Plain text font:",
+                ui::input("Plain text font", self.plain_font, self.colors),
+            ))
+            .child(ui::row(
+                "Plain text size (pt):",
+                ui::input("Plain text font size", self.plain_size, self.colors),
+            ))
+            .child(ui::row(
+                "Rich text font:",
+                ui::input("Rich text font", self.rich_font, self.colors),
+            ))
+            .child(ui::row(
+                "Rich text size (pt):",
+                ui::input("Rich text font size", self.rich_size, self.colors),
+            ))
+            .child(ui::heading("Options"))
+            .child(self.checkbox(
+                "default-spelling",
+                "Check spelling and grammar",
+                |p| p.spellcheck,
+                |p, v| p.spellcheck = v,
+            ))
+            .child(
+                ui::button("language-tools-settings", "Language Tools…", 12.)
+                    .on_press(move || queue.borrow_mut().push_back(Command::LanguageTools)),
+            )
+            .child(self.checkbox(
+                "default-ruler",
+                "Show ruler",
+                |p| p.show_ruler,
+                |p, v| p.show_ruler = v,
+            ))
+            .child(self.checkbox(
+                "word-suggestions",
+                "Suggest words while typing",
+                |p| p.autocomplete,
+                |p, v| p.autocomplete = v,
+            ))
+            .child(self.checkbox(
+                "default-quotes",
+                "Smart quotes",
+                |p| p.smart_quotes,
+                |p, v| p.smart_quotes = v,
+            ))
+            .child(self.checkbox(
+                "default-dashes",
+                "Smart dashes",
+                |p| p.smart_dashes,
+                |p, v| p.smart_dashes = v,
+            ))
+            .child(self.checkbox(
+                "default-links",
+                "Smart links",
+                |p| p.automatic_links,
+                |p, v| p.automatic_links = v,
+            ))
+            .child(ui::hint(
+                "Defaults apply to new documents. Existing documents keep their formatting.",
+                self.colors,
+            ))
+            .into_element()
     }
-    fn download_accessory(&mut self, index: usize, cx: &mut Context<Self>) {
-        if matches!(
-            self.accessories[index],
-            DownloadStatus::Downloading | DownloadStatus::Available
-        ) {
+    fn open_and_save(self: &Rc<Self>) -> AnyElement {
+        let draft = self.draft;
+        let appearance = self.draft;
+        view().gap(px(14.))
+            .child(ui::heading("Plain Text File Encoding"))
+            .child(ui::hint("Use this encoding when saving new plain-text documents:", self.colors))
+            .child(ui::radio_group("Default plain text encoding")
+                .children([TextEncoding::Utf8, TextEncoding::Utf8Bom, TextEncoding::Utf16Le,
+                    TextEncoding::Utf16Be, TextEncoding::Windows1252].into_iter().enumerate().map(|(index, encoding)| {
+                    ui::radio(format!("default-encoding-{index}"), encoding.label(),
+                        move || draft.with(|p| p.default_encoding == encoding), self.colors,
+                        move |_| draft.update(|p| p.default_encoding = encoding))
+                })))
+            .child(ui::heading("Document Recovery"))
+            .child(ui::row("Checkpoint interval (seconds):", ui::input("Recovery interval in seconds", self.recovery, self.colors)))
+            .child(ui::hint("Unsaved buffers are protected as you edit and restored at startup. Periodic checkpoints never change saved files.", self.colors))
+            .child(ui::heading("Appearance"))
+            .child(ui::radio_group("Application appearance").flex_row().gap(px(20.))
+                .children([(Appearance::System,"System"), (Appearance::Light,"Light"), (Appearance::Dark,"Dark")]
+                    .into_iter().enumerate().map(|(index,(value,label))| {
+                        ui::radio(format!("default-appearance-{index}"), label,
+                            move || appearance.with(|p| p.appearance == value), self.colors,
+                            move |_| appearance.update(|p| p.appearance = value))
+                    })))
+            .into_element()
+    }
+    fn accessories(self: &Rc<Self>) -> AnyElement {
+        let mut panel = view()
+            .gap(px(16.))
+            .child(ui::heading("Font Accessories"))
+            .child(ui::hint(
+                "Download the font families you want. Inter is included with ExEditor.",
+                self.colors,
+            ));
+        for (index, pack) in crate::accessories::manifest().packs.iter().enumerate() {
+            let state = self.clone();
+            let status = self.accessories;
+            let colors = self.colors;
+            panel = panel.child(
+                view()
+                    .gap(px(6.))
+                    .child(ui::heading(pack.name.clone()))
+                    .child(ui::hint(pack.description.clone(), colors))
+                    .child(ui::hint(
+                        format!("{:.1} MB", pack.download_bytes() as f64 / 1_000_000.),
+                        colors,
+                    ))
+                    .child(dynamic(move || {
+                        let current = status.with(|states| states[index].clone());
+                        let available = current == DownloadStatus::Available
+                            || crate::fonts::accessory_available(&pack.id);
+                        let downloading = current == DownloadStatus::Downloading;
+                        let label = if available {
+                            "Available"
+                        } else if downloading {
+                            "Downloading…"
+                        } else if matches!(current, DownloadStatus::Failed(_)) {
+                            "Retry"
+                        } else {
+                            "Download"
+                        };
+                        let state = state.clone();
+                        view()
+                            .gap(px(5.))
+                            .child(
+                                ui::button(format!("download-{}", pack.id), label, 12.)
+                                    .disabled(available || downloading)
+                                    .on_press(move || state.download(index)),
+                            )
+                            .child(ui::hint(
+                                match current {
+                                    DownloadStatus::Available => {
+                                        "Ready to use, including offline.".to_owned()
+                                    }
+                                    DownloadStatus::Failed(error) => error,
+                                    _ => String::new(),
+                                },
+                                colors,
+                            ))
+                    })),
+            );
+        }
+        panel
+            .child(ui::hint(
+                "Choose downloaded fonts in Format > Font or New Document settings.",
+                self.colors,
+            ))
+            .into_element()
+    }
+    fn download(&self, index: usize) {
+        if self.accessories.with_untracked(|states| {
+            matches!(
+                states[index],
+                DownloadStatus::Downloading | DownloadStatus::Available
+            )
+        }) {
             return;
         }
-        self.accessories[index] = DownloadStatus::Downloading;
-        cx.notify();
+        let status = self.accessories;
+        status.update(|states| states[index] = DownloadStatus::Downloading);
         let pack = &crate::accessories::manifest().packs[index];
-        cx.spawn(async move |view, cx| {
-            let result = smol::unblock(move || crate::accessories::download(pack))
-                .await
-                .and_then(|files| {
-                    cx.update(|cx| crate::fonts::register_accessory(pack, files, cx))
-                });
-            let _ = view.update(cx, |this, cx| {
-                this.accessories[index] = match result {
+        spawn(async move {
+            let result = match smol::unblock(move || crate::accessories::download(pack)).await {
+                Ok(files) => crate::fonts::register_accessory(pack, files).await,
+                Err(error) => Err(error),
+            };
+            status.update(|states| {
+                states[index] = match result {
                     Ok(()) => DownloadStatus::Available,
                     Err(error) => DownloadStatus::Failed(error.to_string()),
-                };
-                cx.notify();
+                }
             });
-        })
-        .detach();
+        });
     }
-    fn accessories(&self, cx: &mut Context<Self>) -> Div {
-        let c = self.colors;
-        let mut panel = div()
-            .flex()
-            .flex_col()
-            .gap(px(18.))
-            .child(self.heading("Font Accessories"))
-            .child(
-                div()
-                    .child("Download the font families you want. Inter is included with ExEditor."),
-            );
-        for (index, pack) in crate::accessories::manifest().packs.iter().enumerate() {
-            let state = &self.accessories[index];
-            let available = matches!(state, DownloadStatus::Available)
-                || crate::fonts::accessory_available(&pack.id);
-            let downloading = matches!(state, DownloadStatus::Downloading);
-            let label = if available {
-                "Available"
-            } else if downloading {
-                "Downloading…"
-            } else if matches!(state, DownloadStatus::Failed(_)) {
-                "Retry"
-            } else {
-                "Download"
-            };
-            let row =
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(pack.name.clone()),
-                            )
-                            .child(div().w(px(62.)).text_color(rgb(c.muted)).child(format!(
-                                "{:.1} MB",
-                                pack.download_bytes() as f64 / 1_000_000.
-                            )))
-                            .child(
-                                self.button(
-                                    match index {
-                                        0 => "download-pretendard",
-                                        1 => "download-maple",
-                                        _ => "download-emoji",
-                                    },
-                                    label,
-                                    cx,
-                                )
-                                .w(px(108.))
-                                .disabled(available || downloading)
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| this.download_accessory(index, cx),
-                                )),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(c.muted))
-                            .child(pack.description.clone()),
-                    )
-                    .when(available, |row| {
-                        row.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(c.muted))
-                                .child("Ready to use, including offline."),
-                        )
-                    })
-                    .when(matches!(state, DownloadStatus::Failed(_)), |row| {
-                        let message = if let DownloadStatus::Failed(message) = state {
-                            message.clone()
-                        } else {
-                            String::new()
-                        };
-                        row.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(0xd43a35))
-                                .child(message),
-                        )
-                    });
-            panel = panel.child(row);
-        }
-        panel.child(div().text_size(px(11.)).text_color(rgb(c.muted))
-            .child("Choose downloaded fonts in Format > Font or New Document settings. Existing document formatting stays as you set it."))
-    }
-    fn new_document(&self, cx: &mut Context<Self>) -> Div {
-        let c = self.colors;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(18.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.))
-                    .child(self.heading("Document Name"))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(div().w(px(185.)).child("New document name prefix:"))
-                            .child(div().flex_1().child(crate::ui::input(
-                                Input::new(&self.untitled_prefix).with_size(Size::Small),
-                                26.,
-                                12.,
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(c.muted))
-                            .child(name_examples(
-                                self.untitled_prefix.read(cx).value().as_ref(),
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.))
-                    .child(self.heading("Format"))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .child("Use the Format menu to choose settings for an open document."),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(54.))
-                            .mt(px(3.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(9.))
-                                    .w(px(150.))
-                                    .child(crate::ui::radio(
-                                        "default-rich-text",
-                                        "Rich text",
-                                        self.draft.rich_text,
-                                        c,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.draft.rich_text = true;
-                                            cx.notify();
-                                        }),
-                                    ))
-                                    .child(crate::ui::radio(
-                                        "default-plain-text",
-                                        "Plain text",
-                                        !self.draft.rich_text,
-                                        c,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.draft.rich_text = false;
-                                            cx.notify();
-                                        }),
-                                    )),
-                            )
-                            .child(self.checkbox(
-                                "default-wrap",
-                                "Wrap to page",
-                                self.draft.wrap_to_page,
-                                |p, value| p.wrap_to_page = value,
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.))
-                    .child(self.heading("Font"))
-                    .child(self.font_row(FontEditor::Plain, cx))
-                    .child(self.font_row(FontEditor::Rich, cx)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(11.))
-                    .child(self.heading("Options"))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(22.))
-                            .child(
-                                div()
-                                    .w(px(250.))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(10.))
-                                    .child(self.checkbox(
-                                        "default-spelling",
-                                        "Check spelling and grammar",
-                                        self.draft.spellcheck,
-                                        |p, value| p.spellcheck = value,
-                                        cx,
-                                    ))
-                                    .child(
-                                        self.button(
-                                            "language-tools-settings",
-                                            "Language Tools…",
-                                            cx,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, _| {
-                                                this.commands
-                                                    .borrow_mut()
-                                                    .push_back(Command::LanguageTools);
-                                            }),
-                                        ),
-                                    )
-                                    .child(self.checkbox(
-                                        "default-ruler",
-                                        "Show ruler",
-                                        self.draft.show_ruler,
-                                        |p, value| p.show_ruler = value,
-                                        cx,
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(10.))
-                                    .child(self.checkbox(
-                                        "word-suggestions",
-                                        "Suggest words while typing",
-                                        self.draft.autocomplete,
-                                        |p, value| p.autocomplete = value,
-                                        cx,
-                                    ))
-                                    .child(self.checkbox(
-                                        "default-quotes",
-                                        "Smart quotes",
-                                        self.draft.smart_quotes,
-                                        |p, value| p.smart_quotes = value,
-                                        cx,
-                                    ))
-                                    .child(self.checkbox(
-                                        "default-dashes",
-                                        "Smart dashes",
-                                        self.draft.smart_dashes,
-                                        |p, value| p.smart_dashes = value,
-                                        cx,
-                                    ))
-                                    .child(self.checkbox(
-                                        "default-links",
-                                        "Smart links",
-                                        self.draft.automatic_links,
-                                        |p, value| p.automatic_links = value,
-                                        cx,
-                                    )),
-                            ),
-                    ),
-            )
-            .child(div().text_size(px(11.)).text_color(rgb(c.muted)).child(
-                "Defaults apply to new documents. Existing documents keep their formatting.",
-            ))
-    }
-    fn open_and_save(&self, cx: &mut Context<Self>) -> Div {
-        let c = self.colors;
-        let encodings = [
-            TextEncoding::Utf8,
-            TextEncoding::Utf8Bom,
-            TextEncoding::Utf16Le,
-            TextEncoding::Utf16Be,
-            TextEncoding::Windows1252,
-        ];
-        let appearances = [
-            (Appearance::System, "System"),
-            (Appearance::Light, "Light"),
-            (Appearance::Dark, "Dark"),
-        ];
-        div().flex().flex_col().gap(px(22.))
-            .child(div().flex().flex_col().gap(px(10.))
-                .child(self.heading("Plain Text File Encoding"))
-                .child(div().text_size(px(12.)).child("Use this encoding when saving new plain-text documents:"))
-                .children(encodings.into_iter().enumerate().map(|(index, encoding)| {
-                    crate::ui::radio(("default-encoding",index),encoding.label(),self.draft.default_encoding==encoding,c,
-                        cx.listener(move |this,_,_,cx|{this.draft.default_encoding=encoding;cx.notify();}))
-                })))
-            .child(div().flex().flex_col().gap(px(9.))
-                .child(self.heading("Document Recovery"))
-                .child(div().flex().items_center().gap(px(10.))
-                    .child("Additional checkpoint every")
-                    .child(div().w(px(64.)).child(crate::ui::input(Input::new(&self.recovery).with_size(Size::Small),26.,12.)))
-                    .child("seconds"))
-                .child(div().text_size(px(11.)).text_color(rgb(c.muted))
-                    .child("Unsaved buffers are protected as you edit and restored automatically at startup. This interval adds periodic checkpoints; it never changes your saved files.")))
-            .child(div().flex().flex_col().gap(px(10.))
-                .child(self.heading("Appearance"))
-                .child(div().flex().gap(px(22.)).children(appearances.into_iter().enumerate().map(|(index, (appearance, label))| {
-                    crate::ui::radio(("default-appearance",index),label,self.draft.appearance==appearance,c,
-                        cx.listener(move |this,_,_,cx|{this.draft.appearance=appearance;cx.notify();}))
-                }))))
-    }
-    fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn restore(&self) {
         let defaults = Preferences::default();
-        let fields = [
-            (&self.rich_font, defaults.rich_font.clone()),
-            (&self.rich_size, defaults.rich_size.to_string()),
-            (&self.plain_font, defaults.plain_font.clone()),
-            (&self.plain_size, defaults.plain_size.to_string()),
-            (&self.recovery, defaults.autosave_seconds.to_string()),
-            (&self.untitled_prefix, defaults.untitled_prefix.clone()),
-        ];
-        for (field, value) in fields {
-            field.update(cx, |state, cx| state.set_value(value, window, cx));
-        }
-        self.draft = defaults;
-        self.font_editor = None;
-        self.error = None;
-        cx.notify();
+        self.prefix.set(defaults.untitled_prefix.clone());
+        self.rich_font.set(defaults.rich_font.clone());
+        self.rich_size.set(defaults.rich_size.to_string());
+        self.plain_font.set(defaults.plain_font.clone());
+        self.plain_size.set(defaults.plain_size.to_string());
+        self.recovery.set(defaults.autosave_seconds.to_string());
+        self.draft.set(defaults);
+        self.error.set(String::new());
     }
-    fn values(&self, cx: &App) -> Result<Vec<String>, String> {
-        let untitled_prefix = validated_prefix(self.untitled_prefix.read(cx).value().as_ref())?;
-        let rich_font = self.rich_font.read(cx).value().to_string();
-        let plain_font = self.plain_font.read(cx).value().to_string();
-        for font in [&rich_font, &plain_font] {
-            if font.trim().is_empty() || font.contains('\0') || font.encode_utf16().count() >= 32 {
-                return Err("Choose a font name containing 1–31 characters.".into());
-            }
-        }
-        let rich_size = font_size(self.rich_size.read(cx).value().as_ref())?;
-        let plain_size = font_size(self.plain_size.read(cx).value().as_ref())?;
-        let recovery = self
-            .recovery
-            .read(cx)
-            .value()
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| "Enter a whole number of seconds for document recovery.".to_string())?;
-        if !(5..=3600).contains(&recovery) {
-            return Err("The recovery interval must be between 5 and 3600 seconds.".into());
-        }
-        let appearance = match self.draft.appearance {
-            Appearance::System => "system",
-            Appearance::Light => "light",
-            Appearance::Dark => "dark",
-        };
-        let encoding = match self.draft.default_encoding {
-            TextEncoding::Utf8 => "Utf8",
-            TextEncoding::Utf8Bom => "Utf8Bom",
-            TextEncoding::Utf16Le => "Utf16Le",
-            TextEncoding::Utf16Be => "Utf16Be",
-            TextEncoding::Windows1252 => "Windows1252",
-        };
-        Ok(vec![
-            self.draft.rich_text.to_string(),
-            rich_font.trim().to_owned(),
-            rich_size.to_string(),
-            plain_font.trim().to_owned(),
-            plain_size.to_string(),
-            self.draft.wrap_to_page.to_string(),
-            self.draft.show_ruler.to_string(),
-            self.draft.spellcheck.to_string(),
-            self.draft.smart_quotes.to_string(),
-            self.draft.smart_dashes.to_string(),
-            self.draft.automatic_links.to_string(),
-            recovery.to_string(),
-            appearance.into(),
-            encoding.into(),
-            untitled_prefix,
-            self.draft.autocomplete.to_string(),
-        ])
+    fn values(&self) -> Result<Vec<String>, String> {
+        settings_values(
+            &self.draft.get_untracked(),
+            &self.prefix.get_untracked(),
+            &self.rich_font.get_untracked(),
+            &self.rich_size.get_untracked(),
+            &self.plain_font.get_untracked(),
+            &self.plain_size.get_untracked(),
+            &self.recovery.get_untracked(),
+        )
     }
-    fn submit(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
-        match self.values(cx) {
+    fn submit(&self, close: bool) {
+        match self.values() {
             Ok(values) => {
                 self.commands
                     .borrow_mut()
                     .push_back(Command::Submit(FormKind::Preferences, values));
-                self.error = None;
+                self.error.set(String::new());
                 if close {
-                    window.remove_window();
-                } else {
-                    cx.notify();
+                    ui::close_panel("settings");
                 }
             }
-            Err(error) => {
-                self.error = Some(error);
-                cx.notify();
-            }
+            Err(error) => self.error.set(error),
         }
     }
 }
 
-impl Render for Settings {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-kit components size text in rem; scale it with View > Interface Size.
-        window.set_rem_size(crate::ui::rem_size());
-        let c = self.colors;
-        let tab = self.tab;
-        let tabs = [
-            (Tab::NewDocument, "New Document", "settings-new-document"),
-            (Tab::OpenAndSave, "Open and Save", "settings-open-save"),
-            (Tab::Accessories, "Accessories", "settings-accessories"),
-        ];
-        let panel = match tab {
-            Tab::NewDocument => self.new_document(cx),
-            Tab::OpenAndSave => self.open_and_save(cx),
-            Tab::Accessories => self.accessories(cx),
-        };
-        div()
-            .id("exeditor-settings")
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(c.chrome))
-            .rounded(px(8.))
-            .overflow_hidden()
-            .border_1()
-            .border_color(rgb(c.border))
-            .text_color(rgb(c.ink))
-            .text_size(px(12.))
-            .font_family(crate::fonts::INTER_FONT)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    window.remove_window();
-                    cx.stop_propagation();
-                } else if event.keystroke.key == "enter"
-                    && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
-                {
-                    this.submit(true, window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                div()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .px(px(12.))
-                    .border_b_1()
-                    .border_color(rgb(c.border))
-                    .child(
-                        div()
-                            .w(px(70.))
-                            .flex()
-                            .items_center()
-                            .gap(px(7.))
-                            .child(
-                                Button::new("close-settings")
-                                    .accessibility_label("Close Settings")
-                                    .tooltip("Close Settings")
-                                    .w(px(14.))
-                                    .h(px(14.))
-                                    .p_0()
-                                    .rounded(px(7.))
-                                    .custom(
-                                        ButtonCustomVariant::new(cx)
-                                            .color(rgb(0xff5f57).into())
-                                            .foreground(rgb(0x772018).into())
-                                            .hover(rgb(0xf3544c).into())
-                                            .shadow(false),
-                                    )
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                            .child(
-                                div()
-                                    .size(px(14.))
-                                    .rounded(px(7.))
-                                    .bg(rgb(c.muted))
-                                    .opacity(0.5),
-                            )
-                            .child(
-                                div()
-                                    .size(px(14.))
-                                    .rounded(px(7.))
-                                    .bg(rgb(c.muted))
-                                    .opacity(0.5),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(13.))
-                            .child("Settings")
-                            .window_control_area(WindowControlArea::Drag),
-                    )
-                    .child(div().w(px(70.)).h_full()),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    .flex_col()
-                    .relative()
-                    .px(px(24.))
-                    .pt(px(33.))
-                    .child(
-                        div()
-                            .id("settings-panel")
-                            .flex_1()
-                            .min_h(px(0.))
-                            .overflow_y_scroll()
-                            .border_1()
-                            .border_color(rgb(c.border))
-                            .rounded(px(6.))
-                            .bg(rgb(c.toolbar))
-                            .px(px(25.))
-                            .pt(px(29.))
-                            .pb(px(19.))
-                            .child(panel),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(20.))
-                            .left(px(0.))
-                            .right(px(0.))
-                            .flex()
-                            .justify_center()
-                            .child(
-                                div()
-                                    .flex()
-                                    .p(px(1.))
-                                    .rounded(px(6.))
-                                    .border_1()
-                                    .border_color(rgb(c.border))
-                                    .bg(rgb(c.toolbar))
-                                    .children(tabs.into_iter().map(|(value, label, id)| {
-                                        let selected = value == tab;
-                                        self.button(id, label, cx)
-                                            .w(px(143.))
-                                            .h(px(26.))
-                                            .custom(
-                                                ButtonCustomVariant::new(cx)
-                                                    .color(
-                                                        rgb(if selected {
-                                                            c.field
-                                                        } else {
-                                                            c.toolbar
-                                                        })
-                                                        .into(),
-                                                    )
-                                                    .foreground(rgb(c.ink).into())
-                                                    .hover(rgb(c.field).into())
-                                                    .shadow(selected),
-                                            )
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.tab = value;
-                                                this.error = None;
-                                                cx.notify();
-                                            }))
-                                    })),
-                            ),
-                    ),
-            )
-            .when_some(self.error.clone(), |root, error| {
-                root.child(
-                    div()
-                        .px(px(27.))
-                        .pt(px(9.))
-                        .text_size(px(12.))
-                        .text_color(rgb(0xd43a35))
-                        .child(error),
-                )
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(9.))
-                    .p(px(18.))
-                    .child(
-                        self.button("restore-settings", "Restore All Defaults", cx)
-                            .on_click(cx.listener(|this, _, window, cx| this.restore(window, cx))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                self.button("cancel-settings", "Cancel", cx)
-                                    .w(px(66.))
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                            .child(
-                                self.button("apply-settings", "Apply", cx)
-                                    .w(px(66.))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.submit(false, window, cx)
-                                    })),
-                            )
-                            .child(
-                                self.button("save-settings", "OK", cx)
-                                    .w(px(66.))
-                                    .custom(
-                                        ButtonCustomVariant::new(cx)
-                                            .color(rgb(0x087ef5).into())
-                                            .foreground(rgb(0xffffff).into())
-                                            .hover(rgb(0x006de0).into())
-                                            .shadow(false),
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.submit(true, window, cx)
-                                    })),
-                            ),
-                    ),
-            )
+fn settings_values(
+    draft: &Preferences,
+    prefix: &str,
+    rich_font: &str,
+    rich_size: &str,
+    plain_font: &str,
+    plain_size: &str,
+    recovery: &str,
+) -> Result<Vec<String>, String> {
+    let prefix = validated_prefix(prefix)?;
+    for font in [rich_font, plain_font] {
+        if font.trim().is_empty() || font.contains('\0') || font.encode_utf16().count() >= 32 {
+            return Err("Choose a font name containing 1–31 characters.".into());
+        }
     }
+    let rich_size = font_size(rich_size)?;
+    let plain_size = font_size(plain_size)?;
+    let recovery = recovery
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "Enter a whole number of seconds for document recovery.".to_owned())?;
+    if !(5..=3600).contains(&recovery) {
+        return Err("The recovery interval must be between 5 and 3600 seconds.".into());
+    }
+    let appearance = match draft.appearance {
+        Appearance::System => "system",
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    };
+    let encoding = match draft.default_encoding {
+        TextEncoding::Utf8 => "Utf8",
+        TextEncoding::Utf8Bom => "Utf8Bom",
+        TextEncoding::Utf16Le => "Utf16Le",
+        TextEncoding::Utf16Be => "Utf16Be",
+        TextEncoding::Windows1252 => "Windows1252",
+    };
+    Ok(vec![
+        draft.rich_text.to_string(),
+        rich_font.trim().into(),
+        rich_size.to_string(),
+        plain_font.trim().into(),
+        plain_size.to_string(),
+        draft.wrap_to_page.to_string(),
+        draft.show_ruler.to_string(),
+        draft.spellcheck.to_string(),
+        draft.smart_quotes.to_string(),
+        draft.smart_dashes.to_string(),
+        draft.automatic_links.to_string(),
+        recovery.to_string(),
+        appearance.into(),
+        encoding.into(),
+        prefix,
+        draft.autocomplete.to_string(),
+    ])
 }
-
 fn validated_prefix(value: &str) -> Result<String, String> {
     crate::names::validate_prefix(value).map_err(|error| error.to_string())?;
     Ok(value.trim().to_owned())
@@ -930,5 +521,29 @@ mod tests {
         assert!(validated_prefix("../Notes").is_err());
         assert_eq!(name_examples(" Notes "), "Examples: Notes 1, Notes 2");
         assert_eq!(name_examples(""), "Examples: Untitled 1, Untitled 2");
+    }
+}
+
+#[cfg(test)]
+mod serialization_tests {
+    use super::*;
+    #[test]
+    fn native_preferences_keep_the_existing_submit_field_order() {
+        let preferences = Preferences::default();
+        let values = settings_values(
+            &preferences,
+            " Notes ",
+            "Inter",
+            "12",
+            "Consolas",
+            "11",
+            "30",
+        )
+        .expect("valid settings");
+        assert_eq!(values.len(), 16);
+        assert_eq!(&values[1..5], ["Inter", "12", "Consolas", "11"]);
+        assert_eq!(values[11], "30");
+        assert_eq!(values[14], "Notes");
+        assert_eq!(values[15], preferences.autocomplete.to_string());
     }
 }

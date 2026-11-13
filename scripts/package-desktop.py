@@ -40,7 +40,7 @@ def package(target, commit):
                 "CFBundleIdentifier": "com.abelokoj.ExEditor", "CFBundleExecutable": "exeditor",
                 "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
                 "CFBundleVersion": version, "CFBundleIconFile": "ExEditor.icns",
-                "LSMinimumSystemVersion": "11.0", "NSHighResolutionCapable": True,
+                "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
                 "NSSupportsAutomaticGraphicsSwitching": True,
                 "CFBundleDocumentTypes": [{"CFBundleTypeName": "Text and rich documents", "CFBundleTypeRole": "Editor",
                     "LSHandlerRank": "Alternate", "CFBundleTypeExtensions": ["txt", "rtf", "rtfd", "md", "markdown", "html", "htm", "doc", "docx", "odt"],
@@ -72,7 +72,8 @@ def package(target, commit):
             shutil.copy2(project/"assets/fonts"/font/"OFL.txt", directory/"OFL.txt")
         toolchain = tomllib.loads((project/"rust-toolchain.toml").read_text())["toolchain"]["channel"]
         info = {"application":"ExEditor", "version":version, "source_commit":commit,
-                "target":target, "architecture":platform.machine(), "editor_engine":"WordCraft",
+                "target":target, "architecture":platform.machine(), "editor_engine":"NSH RichEditor", "interface":"Native Shell",
+                "nsh_commit":"f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
                 "wordcraft_commit":"729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b",
                 "rust_toolchain":toolchain, "workflow_run":os.getenv("GITHUB_RUN_ID"),
                 "built_at_utc":datetime.now(timezone.utc).isoformat()}

@@ -73,11 +73,14 @@ foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter', 'noto-color-em
     Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $licenseDirectory 'OFL.txt')
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/wordcraft') -Destination (Join-Path $packageRoot 'licenses/wordcraft') -Recurse
+Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/nsh') -Destination (Join-Path $packageRoot 'licenses/nsh') -Recurse
 $toolchainText = Get-Content -LiteralPath (Join-Path $projectRoot 'rust-toolchain.toml') -Raw
 $rustVersion = [regex]::Match($toolchainText, 'channel\s*=\s*"([^"]+)"').Groups[1].Value
 $buildInfo = [ordered]@{
     application = 'ExEditor'
-    editor_engine = 'WordCraft'
+    editor_engine = 'NSH RichEditor'
+    interface = 'Native Shell'
+    nsh_commit = 'f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1'
     wordcraft_commit = '729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b'
     repository = 'https://github.com/abelokoj/ExEditor'
     source_commit = $Commit.ToLowerInvariant()

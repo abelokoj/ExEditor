@@ -1,9 +1,9 @@
 [package]
 name = "exeditor"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.95"
-description = "A TextEdit-style native document editor built with Rust and GPUI Kit"
+rust-version = "1.97"
+description = "A TextEdit-style native document editor built with Rust and Native Shell"
 repository = "https://github.com/abelokoj/ExEditor"
 license = "MIT"
 
@@ -11,7 +11,8 @@ license = "MIT"
 anyhow = "1"
 ureq = "3.5.1"
 sha2 = "0.10"
-gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "6"
@@ -35,13 +36,10 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff"] }
 
 
-# WordCraft is the sole document engine; GPUI Fast remains the app interface.
-wordcraft-engine = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+# WordCraft codecs are used only for Office/RTF conversion and print output; NSH owns editing.
 wordcraft-doc = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-geom = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-layout = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
-wordcraft-fonts = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
-wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-pdf = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
@@ -52,6 +50,7 @@ arboard = { version = "3.7", default-features = false, features = ["image-data",
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "a3e0b5a9440d18f19422a9dca13516747b7d3181" }
 
 [target.'cfg(windows)'.dependencies]
+nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 clipboard-win = { version = "5.4", features = ["std"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -86,11 +85,12 @@ windows-sys = { version = "0.61", features = [
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-gpui-fast-platform = { version = "0.1.13", features = ["runtime_shaders"] }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 wl-clipboard-rs = "0.9"
 x11rb = "0.13"
 
@@ -103,7 +103,8 @@ strip = "debuginfo"
 unsafe_op_in_unsafe_fn = "deny"
 
 [dev-dependencies]
-gpui-kit = { version = "0.9.0", features = ["gpui-fast", "test-support"] }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 box-format = { path = "vendor/box-format", default-features = false, features = ["writer"] }
 
 [build-dependencies]

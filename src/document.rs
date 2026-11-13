@@ -592,6 +592,9 @@ pub struct RecoveryDocument {
     /// Complete WordCraft model; older recovery snapshots fall back to their text/RTF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_snapshot: Option<wordcraft_doc::Document>,
+    /// Native nsh model; a separate field preserves recovery of older WordCraft buffers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nsh_snapshot: Option<serde_json::Value>,
     pub encoding: TextEncoding,
     pub line_ending: LineEnding,
     pub saved_at: String,

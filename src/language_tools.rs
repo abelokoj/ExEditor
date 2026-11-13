@@ -1,24 +1,18 @@
 //! Offline language-tool settings and bounded background check state.
 use crate::{
-    app::{Command, show_error},
+    app::Command,
     dialogs::Commands,
     proofing::{self, Issue, ProofingOptions, SpellingBackend},
     services::utf16_byte_offset,
     ui::{self, Palette, px},
 };
-use gpui_kit::base::Selectable as _;
-use gpui_kit::component::{
-    Sizable as _, Size,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    input::{Input, InputState},
-};
-use gpui_kit::{prelude::FluentBuilder as _, *};
+use nsh_core::{desktop::WindowKind, prelude::*};
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
-
 struct PendingCheck {
     receiver: mpsc::Receiver<anyhow::Result<Vec<Issue>>>,
     text: Arc<str>,
@@ -136,123 +130,76 @@ pub fn correction_matches(
 }
 
 struct LanguageTools {
-    draft: ProofingOptions,
-    language: Entity<InputState>,
-    dictionary: Entity<InputState>,
+    draft: Signal<ProofingOptions>,
+    language: Signal<String>,
+    dictionary: Signal<String>,
+    error: Signal<String>,
     commands: Commands,
     colors: Palette,
-    error: Option<String>,
 }
-pub fn open(options: ProofingOptions, commands: Commands, colors: Palette, cx: &mut App) {
-    let window_options = WindowOptions {
-        kind: WindowKind::Dialog,
-        window_bounds: Some(WindowBounds::centered(size(px(610.), px(430.)), cx)),
-        titlebar: None,
-        app_owns_titlebar_drag: true,
-        window_decorations: Some(WindowDecorations::Client),
-        is_resizable: false,
-        is_minimizable: false,
-        ..Default::default()
-    };
-    let result = gpui_kit::open_window(window_options, cx, move |window, cx| {
-        window.set_window_title("Spelling and Grammar — ExEditor");
-        cx.new(|cx| {
-            let language = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Spelling language, e.g. en-US")
-                    .default_value(options.language.clone())
-            });
-            let dictionary = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Dictionary file or folder")
-                    .default_value(
-                        options
-                            .dictionary_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    )
-            });
-            LanguageTools {
-                draft: options,
-                language,
-                dictionary,
-                commands,
+pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
+    ui::show_panel(
+        "language-tools",
+        "Spelling and Grammar — ExEditor",
+        620.,
+        490.,
+        WindowKind::Dialog,
+        move || {
+            let state = Rc::new(LanguageTools {
+                language: signal(options.language.clone()),
+                dictionary: signal(
+                    options
+                        .dictionary_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ),
+                draft: signal(options.clone()),
+                error: signal(String::new()),
+                commands: commands.clone(),
                 colors,
-                error: None,
-            }
-        })
-    });
-    if let Err(error) = result {
-        show_error(&error);
-    }
+            });
+            let draft = state.draft;
+            let error = state.error;
+            let content = state.clone();
+            let apply = state.clone();
+            let shortcut = state.clone();
+            on_key("mod+enter", move |_| shortcut.submit());
+            ui::surface(colors).child(ui::heading("Spelling and Grammar"))
+            .child(scroll().flex_1().min_h(px(0.)).child(view().gap(px(13.))
+                .child(ui::checkbox("harper-grammar", "Check English grammar with Harper",
+                    move || draft.with(|options| options.grammar), colors,
+                    move |grammar| { draft.update(|options| options.grammar = grammar); error.set(String::new()); }))
+                .child(ui::hint("Harper is built in and works offline. Turn it off for non-English documents.", colors))
+                .child(ui::heading("Spelling engine"))
+                .child(ui::radio_group("Spelling engine").flex_row().gap(px(12.))
+                    .children([
+                        (SpellingBackend::System,"System"), (SpellingBackend::Hunspell,"Hunspell"),
+                        (SpellingBackend::Divvunspell,"Divvunspell"), (SpellingBackend::Voikko,"Voikko"),
+                    ].into_iter().enumerate().map(|(index,(engine,label))| {
+                        ui::radio(format!("spelling-engine-{index}"), label,
+                            move || draft.with(|options| options.spelling == engine), colors,
+                            move |_| { draft.update(|options| options.spelling = engine); error.set(String::new()); })
+                    })))
+                .child(ui::row("Spelling language:", ui::input("Spelling language, for example en-US", state.language, colors)))
+                .child(dynamic(move || content.dictionary_controls()))
+                .child(ui::error(state.error, colors))))
+            .child(view().flex_row().justify_end().gap(px(8.))
+                .child(ui::control("cancel-language-tools", "Cancel", 80., false, colors)
+                    .on_press(|| ui::close_panel("language-tools")))
+                .child(ui::control("apply-language-tools", "Apply", 80., true, colors)
+                    .on_press(move || apply.submit())))
+            .into_element()
+        },
+    );
 }
 impl LanguageTools {
-    fn button(&self, id: &'static str, label: &'static str, cx: &App) -> Button {
-        let c = self.colors;
-        ui::button(id, label, 12.)
-            .with_size(Size::Small)
-            .h(px(26.))
-            .rounded(px(4.))
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .color(rgb(c.field).into())
-                    .foreground(rgb(c.ink).into())
-                    .hover(rgb(c.toolbar).into())
-                    .shadow(false),
-            )
-    }
-    fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dialog = rfd::FileDialog::new().set_title("Choose spelling dictionary");
-        let path = match self.draft.spelling {
-            SpellingBackend::System => None,
-            SpellingBackend::Hunspell => dialog
-                .add_filter("Hunspell dictionary", &["aff", "dic"])
-                .pick_file(),
-            SpellingBackend::Divvunspell => dialog
-                .add_filter("Divvun dictionary", &["bhfst", "zhfst"])
-                .pick_file(),
-            SpellingBackend::Voikko => dialog.pick_folder(),
-        };
-        if let Some(path) = path {
-            self.dictionary.update(cx, |input, cx| {
-                input.set_value(path.to_string_lossy().into_owned(), window, cx)
-            });
-            self.error = None;
-            cx.notify();
-        }
-    }
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.dictionary.read(cx).value().trim().to_owned();
-        let options = ProofingOptions {
-            language: self.language.read(cx).value().trim().replace('_', "-"),
-            dictionary_path: if self.draft.spelling == SpellingBackend::System || path.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(path))
-            },
-            ..self.draft.clone()
-        };
-        match options.validate() {
-            Ok(()) => {
-                self.commands
-                    .borrow_mut()
-                    .push_back(Command::ApplyLanguageTools(options));
-                window.remove_window();
+    fn dictionary_controls(self: &Rc<Self>) -> AnyElement {
+        let engine = self.draft.with(|options| options.spelling);
+        let hint = match engine {
+            SpellingBackend::System => {
+                "Uses the operating system's spelling dictionary for this language."
             }
-            Err(error) => {
-                self.error = Some(error.to_string());
-                cx.notify();
-            }
-        }
-    }
-}
-impl Render for LanguageTools {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(ui::rem_size());
-        let c = self.colors;
-        let hint = match self.draft.spelling {
-            SpellingBackend::System => "Uses the Windows dictionary for the spelling language.",
             SpellingBackend::Hunspell => {
                 "Choose an .aff or .dic file; its matching partner must be beside it."
             }
@@ -261,37 +208,76 @@ impl Render for LanguageTools {
                 "Choose the folder containing your Voikko dictionary packages."
             }
         };
-        let engines = [
-            (SpellingBackend::System, "Windows", "engine-system"),
-            (SpellingBackend::Hunspell, "Hunspell", "engine-hunspell"),
-            (SpellingBackend::Divvunspell, "Divvunspell", "engine-divvun"),
-            (SpellingBackend::Voikko, "Voikko", "engine-voikko"),
-        ];
-        div().id("language-tools").font_family(crate::fonts::INTER_FONT).size_full().flex().flex_col().bg(rgb(c.chrome)).text_color(rgb(c.ink)).text_size(px(12.)).rounded(px(8.)).border_1().border_color(rgb(c.border)).overflow_hidden()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" { window.remove_window(); cx.stop_propagation(); }
-                else if event.keystroke.key == "enter" && event.keystroke.modifiers.control { this.submit(window, cx); cx.stop_propagation(); }
-            }))
-            .child(div().h(px(35.)).flex_shrink_0().px(px(14.)).flex().items_center().window_control_area(WindowControlArea::Drag).border_b_1().border_color(rgb(c.border))
-                .child(div().flex_1().child("Spelling and Grammar"))
-                .child(self.button("close-language-tools", "Close", cx).on_click(|_, window, _| window.remove_window())))
-            .child(div().id("language-tools-content").flex_1().min_h_0().overflow_y_scroll().p(px(18.)).flex().flex_col().gap(px(13.))
-                .child(ui::checkbox("harper-grammar","Check English grammar with Harper",self.draft.grammar,c,cx.listener(|this,value,_,cx|{this.draft.grammar=*value;this.error=None;cx.notify();})))
-                .child(div().text_color(rgb(c.muted)).child("Harper is built in and works offline. Turn it off for non-English documents."))
-                .child(div().child("Spelling engine"))
-                .child(div().flex().gap(px(6.)).children(engines.into_iter().map(|(engine, label, id)| {
-                    self.button(id, label, cx).selected(self.draft.spelling == engine).on_click(cx.listener(move |this, _, _, cx| { this.draft.spelling = engine; this.error = None; cx.notify(); }))
-                })))
-                .child(div().flex().items_center().gap(px(10.)).child(div().w(px(125.)).child("Spelling language:"))
-                    .child(div().flex_1().child(ui::input(Input::new(&self.language).with_size(Size::Small),26.,12.))))
-                .child(div().text_color(rgb(c.muted)).child(hint))
-                .when(self.draft.spelling != SpellingBackend::System, |panel| panel.child(div().flex().items_center().gap(px(8.))
-                    .child(div().flex_1().child(ui::input(Input::new(&self.dictionary).with_size(Size::Small),26.,12.)))
-                    .child(self.button("browse-dictionary", "Browse…", cx).on_click(cx.listener(|this, _, window, cx| this.browse(window, cx))))))
-                .when_some(self.error.clone(), |panel, error| panel.child(div().child(error))))
-            .child(div().flex_shrink_0().border_t_1().border_color(rgb(c.border)).p(px(12.)).flex().items_center().justify_end().gap(px(8.))
-                .child(self.button("cancel-language-tools", "Cancel", cx).on_click(|_, window, _| window.remove_window()))
-                .child(self.button("apply-language-tools", "Apply", cx).on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))))
+        let mut content = view().gap(px(10.)).child(ui::hint(hint, self.colors));
+        if engine != SpellingBackend::System {
+            let state = self.clone();
+            content = content.child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        ui::input("Dictionary file or folder", self.dictionary, self.colors)
+                            .flex_1(),
+                    )
+                    .child(
+                        ui::button("browse-dictionary", "Browse…", 12.)
+                            .on_press(move || state.browse()),
+                    ),
+            );
+        }
+        content.into_element()
+    }
+    fn browse(&self) {
+        let engine = self.draft.with_untracked(|options| options.spelling);
+        let dictionary = self.dictionary;
+        let error = self.error;
+        spawn(async move {
+            let dialog = rfd::AsyncFileDialog::new().set_title("Choose spelling dictionary");
+            let selected = match engine {
+                SpellingBackend::System => None,
+                SpellingBackend::Hunspell => {
+                    dialog
+                        .add_filter("Hunspell dictionary", &["aff", "dic"])
+                        .pick_file()
+                        .await
+                }
+                SpellingBackend::Divvunspell => {
+                    dialog
+                        .add_filter("Divvun dictionary", &["bhfst", "zhfst"])
+                        .pick_file()
+                        .await
+                }
+                SpellingBackend::Voikko => dialog.pick_folder().await,
+            };
+            if let Some(selected) = selected {
+                dictionary.set(selected.path().to_string_lossy().into_owned());
+                error.set(String::new());
+            }
+        });
+    }
+    fn submit(&self) {
+        let path = self.dictionary.get_untracked();
+        let draft = self.draft.get_untracked();
+        let options = ProofingOptions {
+            language: self.language.get_untracked().trim().replace('_', "-"),
+            dictionary_path: if draft.spelling == SpellingBackend::System || path.trim().is_empty()
+            {
+                None
+            } else {
+                Some(PathBuf::from(path.trim()))
+            },
+            ..draft
+        };
+        match options.validate() {
+            Ok(()) => {
+                self.commands
+                    .borrow_mut()
+                    .push_back(Command::ApplyLanguageTools(options));
+                ui::close_panel("language-tools");
+            }
+            Err(error) => self.error.set(error.to_string()),
+        }
     }
 }
 #[cfg(test)]

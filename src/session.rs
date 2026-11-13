@@ -226,6 +226,7 @@ mod tests {
             saved_at: saved_at.into(),
             untitled_name: None,
             editor_snapshot: None,
+            nsh_snapshot: None,
         }
     }
 
@@ -407,5 +408,47 @@ mod unix_lease_tests {
         std::os::unix::fs::symlink(&original, directory.path().join("buffer-1.lock")).unwrap();
         assert!(lease_buffer_in(directory.path(), "buffer-1").is_err());
         assert_eq!(std::fs::read_to_string(original).unwrap(), "unchanged");
+    }
+}
+
+#[cfg(test)]
+mod native_recovery_tests {
+    use super::*;
+    use crate::document::{DocumentContent, DocumentFormat, LineEnding, TextEncoding};
+    #[test]
+    fn native_rich_snapshot_round_trips_with_legacy_fallback_and_exclusive_lease() {
+        let folder = tempfile::tempdir().expect("temporary recovery folder");
+        let native = serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Unsaved café 😀","marks":[{"type":"bold"}]}]}]});
+        let buffer = RecoveryDocument {
+            id: "native-draft".into(),
+            original_path: None,
+            format: DocumentFormat::PlainText,
+            content: DocumentContent::Plain("Unsaved café 😀".into()),
+            editor_snapshot: None,
+            nsh_snapshot: Some(native.clone()),
+            encoding: TextEncoding::Utf8,
+            line_ending: LineEnding::Lf,
+            saved_at: "2026-11-13T18:00:00-05:00".into(),
+            untitled_name: Some("Untitled 7".into()),
+        };
+        let path = folder.path().join("native-draft.json");
+        document::atomic_write(
+            &path,
+            &serde_json::to_vec(&buffer).expect("serialize buffer"),
+        )
+        .expect("write buffer");
+        let restored = restore_buffers_in(folder.path()).expect("restore native snapshot");
+        assert_eq!(restored.buffers.len(), 1);
+        assert_eq!(restored.buffers[0].document.nsh_snapshot, Some(native));
+        assert_eq!(
+            restored.buffers[0].document.content,
+            DocumentContent::Plain("Unsaved café 😀".into())
+        );
+        assert!(
+            lease_buffer_in(folder.path(), "native-draft")
+                .expect("check lease")
+                .is_none()
+        );
+        assert!(path.exists(), "recovery never deletes the source snapshot");
     }
 }

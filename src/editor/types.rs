@@ -63,7 +63,7 @@ pub struct FormatState {
     pub background: u32,
     pub alignment: Alignment,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageSettings {
     pub width_twips: i32,
     pub height_twips: i32,

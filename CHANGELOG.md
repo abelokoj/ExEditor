@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-13T18:20:41-05:00 - Native Shell interface and rich editor migration (rust-nsh source; GitHub validation pending)
+
+- Pushed the previous unbuilt control/Markdown/dictionary snapshot as 3e31535 on nsh-edit with CI skipped, and created the rust-nsh branch as its preserved migration fork. Replaced the GPUI Kit/GPUI Fast application shell and live WordCraft editor with NSH 0.5.0 native Rust components and RichEditor, pinned to f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1. Selects Win32/DirectWrite, AppKit/CoreText and GTK 4/Pango backends with JavaScript/GPUI backend features disabled.
+- Ported document windows, tab/file handoff and transfers, command menus, settings, font accessories, spelling/grammar panels, command palette, color controls, rich/plain schemas, formatting and clipboard operations. Native sessions retain history/selection across tab moves; offline suggestions use a caret popup with keyboard acceptance/dismissal. Source-code coloring and spelling marks are display-only native decorations.
+- Added distinct native JSON recovery with page setup while preserving reads of older WordCraft/text/RTF recovery snapshots, exclusive buffer leases and protected saves. Office/RTF/PDF codecs remain outside live editing; importing/saving rich files crosses HTML and may simplify unsupported office features, so overwriting an imported original requires confirmation.
+- NSH 0.5.0 does not expose custom tab stops, first-line/hanging indents, app-controlled scroll restoration or custom scrolling; those controls are unavailable, while native scrollbars/wheel/Page Up/Down remain. No-wrap expands native content width within the documented bound. Superscript/subscript use the SDK's available reduced-text/top-bottom alignment. Native visual fidelity and broad format roundtrip acceptance are not yet established.
+- Added regression source for native UTF-16 edits, rich/plain schemas, selection/history, formatting, completion, native recovery, shortcut translation, panel state and print page ranges. Updated three-platform CI, package provenance, GTK 4/macOS 14 requirements and dependency licenses. Validation so far: source/API inspection and Rust formatting only; no local compilation, Rust tests or application launch. GitHub diagnostics/tests/packages are pending. Private notes, backups and downloaded builds remain excluded. The separate dictionary download catalog remains unfinished.
+
 ## 2026-11-13T17:45:47-05:00 - Control alignment and Markdown memory changes (source snapshot; not built)
 
 - Centered shared checkbox/radio marks, labels, button content and text fields across settings, language tools, dialogs, the color panel and command palette while retaining keyboard and accessibility behavior.

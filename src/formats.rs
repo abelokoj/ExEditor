@@ -77,6 +77,25 @@ pub(crate) fn markdown_document(source: &str, directory: &Path) -> Result<Docume
 
 /// Clipboard markup has no permission to read neighbouring files or remote media.
 pub(crate) fn clipboard_document(source: &str) -> Result<Document> {
+    validate_clipboard_html(source)?;
+    let mut document = wordcraft_formats::html::import_page(source, &|_| None);
+    document.ensure_nonempty();
+    ensure!(
+        !wordcraft_formats::txt::export(&document)
+            .iter()
+            .all(u8::is_ascii_whitespace)
+            || !document.media.is_empty()
+            || document
+                .body
+                .iter()
+                .any(|block| matches!(block.as_ref(), wordcraft_doc::Block::Table(_))),
+        "Clipboard HTML contains no supported text, images or tables."
+    );
+    Ok(document)
+}
+
+/// Validates untrusted clipboard markup before either document parser sees it.
+pub(crate) fn validate_clipboard_html(source: &str) -> Result<()> {
     ensure!(
         source.len() <= crate::clipboard_html::MAX_BYTES,
         "Clipboard HTML exceeds the 16 MiB safety limit."
@@ -96,20 +115,12 @@ pub(crate) fn clipboard_document(source: &str) -> Result<Document> {
             "Clipboard HTML is nested too deeply."
         );
     }
-    let mut document = wordcraft_formats::html::import_page(source, &|_| None);
-    document.ensure_nonempty();
-    ensure!(
-        !wordcraft_formats::txt::export(&document)
-            .iter()
-            .all(u8::is_ascii_whitespace)
-            || !document.media.is_empty()
-            || document
-                .body
-                .iter()
-                .any(|block| matches!(block.as_ref(), wordcraft_doc::Block::Table(_))),
-        "Clipboard HTML contains no supported text, images or tables."
-    );
-    Ok(document)
+    Ok(())
+}
+/// Import/export boundary sanitization: HTML has no access to local or remote files.
+pub(crate) fn safe_native_html(source: &str) -> Result<String> {
+    let document = clipboard_document(source)?;
+    Ok(wordcraft_formats::html::export(&document))
 }
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {

@@ -1,44 +1,22 @@
-//! CotEditor-style shared Colors panel: native GPUI controls and CSS color codes.
+//! CotEditor-style Colors in a shared native NSH tool window.
 use crate::{
     app::{Command, show_error},
     color::{ColorFormat, ColorTarget, PickerState, Rgba, named_colors},
     dialogs::Commands,
-    ui::px,
+    ui::{self, Palette, px, rgb},
 };
-use gpui_kit::base::{Disableable as _, IndexPath, Slider as BaseSlider, SliderThumb, SliderTrack};
-use gpui_kit::component::{
-    Icon, Sizable as _, Size,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    input::{Input, InputEvent, InputState},
-    select::{Select, SelectEvent, SelectState},
-    slider::{SliderEvent, SliderState},
+use nsh_core::{
+    desktop::WindowKind,
+    element::{ImageSrc, desktop},
+    prelude::*,
 };
-use gpui_kit::{prelude::FluentBuilder as _, *};
-use std::{cell::Cell, f32::consts::TAU, path::Path, rc::Rc, sync::Arc};
+use std::{
+    f32::consts::TAU,
+    path::Path,
+    rc::{Rc, Weak},
+    sync::Arc,
+};
 
-/// White, for compositing colors; panel surfaces use [`paper`].
-const PAPER: u32 = 0xffffff;
-/// Follows the app theme; set at the start of each panel render.
-static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-fn tone(light: u32, dark: u32) -> u32 {
-    if DARK.load(std::sync::atomic::Ordering::Relaxed) {
-        dark
-    } else {
-        light
-    }
-}
-fn paper() -> u32 {
-    tone(0xffffff, 0x262626)
-}
-fn ink() -> u32 {
-    tone(0x292929, 0xe8e8e8)
-}
-fn muted() -> u32 {
-    tone(0x737373, 0xa3a3a3)
-}
-fn field() -> u32 {
-    tone(0xf3f3f3, 0x3a3a3a)
-}
 const WHEEL_SIZE: f32 = 190.;
 const CHANNEL_MODELS: [&str; 4] = [
     "RGB Sliders",
@@ -46,8 +24,6 @@ const CHANNEL_MODELS: [&str; 4] = [
     "CMYK Sliders",
     "Gray Scale Slider",
 ];
-type Choice = SelectState<Vec<&'static str>>;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Wheel,
@@ -65,77 +41,56 @@ impl Mode {
         (Self::Pencils, "Colored Pencils"),
     ];
 }
-#[derive(Clone)]
-struct PickerWindow {
-    handle: AnyWindowHandle,
-    panel: WeakEntity<ColorsPanel>,
-}
-impl Global for PickerWindow {}
 struct SampleImage {
     pixels: image::RgbaImage,
-    rendered: Arc<RenderImage>,
+    source: ImageSrc,
     name: String,
 }
+#[derive(Default)]
+struct ActiveColors {
+    panel: Weak<ColorsPanel>,
+    window: Option<desktop::WindowRef>,
+}
 struct ColorsPanel {
-    color: Rgba,
-    target: ColorTarget,
-    commands: Commands,
-    saved: PickerState,
-    mode: Mode,
-    slider_model: usize,
-    uppercase: bool,
-    code_dirty: bool,
-    hue: f32,
-    saturation: f32,
-    selected_swatch: usize,
-    code: Entity<InputState>,
-    search: Entity<InputState>,
-    formats: Entity<Choice>,
-    models: Entity<Choice>,
-    opacity: Entity<SliderState>,
-    brightness: Entity<SliderState>,
-    channels: [Entity<SliderState>; 4],
-    focus: FocusHandle,
-    wheel_focus: FocusHandle,
-    slider_focus: [FocusHandle; 6],
-    wheel_bounds: Rc<Cell<Bounds<Pixels>>>,
-    image_bounds: Rc<Cell<Bounds<Pixels>>>,
-    wheel: Arc<RenderImage>,
-    image: Option<SampleImage>,
-    image_dragging: bool,
-    wheel_dragging: bool,
-    screen_sampling: bool,
-    error: Option<String>,
-    subscriptions: Vec<Subscription>,
+    color: Signal<Rgba>,
+    target: Signal<ColorTarget>,
+    commands: Stored<Commands>,
+    format: Signal<ColorFormat>,
+    uppercase: Signal<bool>,
+    code: Signal<String>,
+    dirty: Signal<bool>,
+    query: Signal<String>,
+    mode: Signal<Mode>,
+    model: Signal<usize>,
+    hue: Signal<f32>,
+    saturation: Signal<f32>,
+    selected_swatch: Signal<usize>,
+    swatches: Signal<Vec<Rgba>>,
+    image: Stored<Option<SampleImage>>,
+    image_version: Signal<u64>,
+    pixel_x: Signal<String>,
+    pixel_y: Signal<String>,
+    sampling: Signal<bool>,
+    error: Signal<String>,
+    colors: Palette,
 }
-
-/// Opens the shared Colors panel for text formatting or literal color-code insertion.
-pub fn open(initial: Rgba, target: ColorTarget, commands: Commands, cx: &mut App) {
-    open_with_code(initial, target, commands, None, cx);
+pub fn open(initial: Rgba, target: ColorTarget, commands: Commands) {
+    open_with_code(initial, target, commands, None);
 }
-
-/// Retains a selected color code's detected syntax and uppercase hex letters.
 pub fn open_with_code(
     initial: Rgba,
     target: ColorTarget,
     commands: Commands,
     initial_code: Option<String>,
-    cx: &mut App,
 ) {
-    if let Some(previous) = cx.try_global::<PickerWindow>().cloned()
-        && let Some(panel) = previous.panel.upgrade()
-        && previous
-            .handle
-            .update(cx, |_, window, cx| {
-                panel.update(cx, |panel, cx| {
-                    panel.target = target;
-                    panel.commands = commands.clone();
-                    panel.initial_color(initial, initial_code.as_deref(), window, cx);
-                });
-                window.activate_window();
-            })
-            .is_ok()
+    if let Some((panel, window)) = global::<ActiveColors>()
+        .with_untracked(|active| active.panel.upgrade().zip(active.window.clone()))
     {
+        panel.target.set(target);
+        panel.commands.replace(commands);
+        panel.initial_color(initial, initial_code.as_deref());
+        window.show();
+        window.focus();
         return;
     }
     let saved = match PickerState::load() {
@@ -145,1284 +100,836 @@ pub fn open_with_code(
             return;
         }
     };
-    let options = WindowOptions {
-        kind: WindowKind::Dialog,
-        window_bounds: Some(WindowBounds::centered(size(px(400.), px(630.)), cx)),
-        titlebar: None,
-        app_owns_titlebar_drag: true,
-        window_decorations: Some(WindowDecorations::Client),
-        is_resizable: false,
-        is_minimizable: true,
-        ..Default::default()
-    };
-    match gpui_kit::open_window(options, cx, move |window, cx| {
-        window.set_window_title("Colors");
-        cx.new(|cx| {
-            ColorsPanel::new(
-                initial,
-                target,
-                commands,
-                saved,
-                initial_code.as_deref(),
-                window,
-                cx,
-            )
-        })
-    }) {
-        Ok((handle, panel)) => cx.set_global(PickerWindow {
-            handle,
-            panel: panel.downgrade(),
-        }),
-        Err(error) => show_error(&error),
-    }
+    ui::show_panel(
+        "colors",
+        "Colors",
+        450.,
+        770.,
+        WindowKind::Panel,
+        move || {
+            let state = Rc::new(ColorsPanel {
+                color: signal(initial),
+                target: signal(target),
+                commands: stored(commands.clone()),
+                format: signal(saved.format),
+                uppercase: signal(false),
+                code: signal(String::new()),
+                dirty: signal(false),
+                query: signal(String::new()),
+                mode: signal(Mode::Wheel),
+                model: signal(0),
+                hue: signal(initial.hsv().0),
+                saturation: signal(initial.hsv().1),
+                selected_swatch: signal(0),
+                swatches: signal(saved.swatches.clone()),
+                image: stored(None),
+                image_version: signal(0),
+                pixel_x: signal("0".into()),
+                pixel_y: signal("0".into()),
+                sampling: signal(false),
+                error: signal(String::new()),
+                colors: Palette::current(),
+            });
+            state.initial_color(initial, initial_code.as_deref());
+            global::<ActiveColors>().update(|active| {
+                active.panel = Rc::downgrade(&state);
+                active.window = Some(desktop::current_window());
+            });
+            state.render()
+        },
+    );
 }
-
 impl ColorsPanel {
-    fn new(
-        initial: Rgba,
-        target: ColorTarget,
-        commands: Commands,
-        mut saved: PickerState,
-        initial_code: Option<&str>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        saved.swatches.resize(24, Rgba::from_rgb(PAPER));
-        saved.swatches.truncate(24);
-        let selected_format = ColorFormat::ALL
-            .iter()
-            .position(|candidate| *candidate == saved.format)
-            .unwrap_or(0);
-        let formats = cx.new(|cx| {
-            SelectState::new(
-                ColorFormat::ALL
-                    .iter()
-                    .map(|format| format.label())
-                    .collect::<Vec<_>>(),
-                Some(IndexPath::default().row(selected_format)),
-                window,
-                cx,
-            )
-        });
-        let models = cx.new(|cx| {
-            SelectState::new(
-                CHANNEL_MODELS.to_vec(),
-                Some(IndexPath::default()),
-                window,
-                cx,
-            )
-        });
-        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Color code"));
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search stylesheet colors"));
-        let slider =
-            |cx: &mut Context<Self>| cx.new(|_| SliderState::new().min(0.).max(100.).step(0.1));
-        let opacity = slider(cx);
-        let brightness = slider(cx);
-        let channels = std::array::from_fn(|_| slider(cx));
-        let mut panel = Self {
-            color: initial,
-            target,
-            commands,
-            saved,
-            mode: Mode::Wheel,
-            slider_model: 0,
-            uppercase: false,
-            code_dirty: false,
-            hue: initial.hsv().0,
-            saturation: initial.hsv().1,
-            selected_swatch: 0,
-            code,
-            search,
-            formats,
-            models,
-            opacity,
-            brightness,
-            channels,
-            focus: cx.focus_handle(),
-            wheel_focus: cx.focus_handle(),
-            slider_focus: std::array::from_fn(|_| cx.focus_handle()),
-            wheel_bounds: Rc::new(Cell::new(Bounds::default())),
-            image_bounds: Rc::new(Cell::new(Bounds::default())),
-            wheel: wheel_image(initial.hsv().2),
-            image: None,
-            image_dragging: false,
-            wheel_dragging: false,
-            screen_sampling: false,
-            error: None,
-            subscriptions: Vec::new(),
-        };
-        panel.initial_color(initial, initial_code, window, cx);
-        panel.subscriptions.push(cx.subscribe_in(
-            &panel.opacity,
-            window,
-            |this, _, event: &SliderEvent, window, cx| {
-                if let SliderEvent::Change(value) = event {
-                    let mut color = this.color;
-                    color.a = (value.end() * 2.55).round().clamp(0., 255.) as u8;
-                    this.set_color(color, window, cx);
-                }
-            },
-        ));
-        panel.subscriptions.push(cx.subscribe_in(
-            &panel.brightness,
-            window,
-            |this, _, event: &SliderEvent, window, cx| {
-                if let SliderEvent::Change(value) = event {
-                    let (hue, saturation) = (this.hue, this.saturation);
-                    this.set_color(
-                        Rgba::from_hsv(hue, saturation, 1. - value.end() / 100., this.color.a),
-                        window,
-                        cx,
-                    );
-                }
-            },
-        ));
-        for (index, state) in panel.channels.iter().enumerate() {
-            panel.subscriptions.push(cx.subscribe_in(
-                state,
-                window,
-                move |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Change(value) = event {
-                        let mut channels = this.channel_values();
-                        channels[index] = value.end() / 100.;
-                        this.set_color(
-                            from_channels(this.slider_model, channels, this.color.a),
-                            window,
-                            cx,
-                        );
-                    }
-                },
-            ));
-        }
-        panel.subscriptions.push(cx.subscribe_in(
-            &panel.formats,
-            window,
-            |this, _, event: &SelectEvent<Vec<&'static str>>, window, cx| {
-                if let SelectEvent::Confirm(Some(label)) = event
-                    && let Some(format) = ColorFormat::ALL
-                        .into_iter()
-                        .find(|format| format.label() == *label)
-                {
-                    this.saved.format = format;
-                    this.sync_code(window, cx);
-                    this.persist(cx);
-                }
-            },
-        ));
-        panel.subscriptions.push(cx.subscribe_in(
-            &panel.models,
-            window,
-            |this, _, event: &SelectEvent<Vec<&'static str>>, window, cx| {
-                if let SelectEvent::Confirm(Some(label)) = event {
-                    this.slider_model = CHANNEL_MODELS
-                        .iter()
-                        .position(|candidate| candidate == label)
-                        .unwrap_or(0);
-                    this.sync_sliders(window, cx);
-                    cx.notify();
-                }
-            },
-        ));
-        panel.subscriptions.push(cx.subscribe_in(
-            &panel.code,
-            window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::Change => {
-                    this.code_dirty = true;
-                    this.error = None;
-                    cx.notify();
-                }
-                InputEvent::PressEnter { .. } => {
-                    this.parse_code(window, cx);
-                }
-                InputEvent::Blur => {
-                    let _ = this.parse_code(window, cx);
-                }
-                InputEvent::Focus => {}
-            },
-        ));
-        panel
-            .subscriptions
-            .push(cx.subscribe(&panel.search, |_, _, _: &InputEvent, cx| cx.notify()));
-        window.focus(&panel.wheel_focus, cx);
-        panel
-    }
-    fn initial_color(
-        &mut self,
-        initial: Rgba,
-        source: Option<&str>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.uppercase =
-            source.is_some_and(|code| code.chars().any(|character| character.is_ascii_uppercase()));
-        if let Some((color, format)) = source.and_then(|source| Rgba::parse(source).ok()) {
-            self.saved.format = format;
-            self.color = color;
+    fn initial_color(&self, color: Rgba, code: Option<&str>) {
+        self.uppercase
+            .set(code.is_some_and(|value| value.bytes().any(|byte| byte.is_ascii_uppercase())));
+        let color = if let Some((parsed, format)) = code.and_then(|value| Rgba::parse(value).ok()) {
+            self.format.set(format);
+            parsed
         } else {
-            self.color = initial;
-        }
-        self.hue = self.color.hsv().0;
-        self.saturation = self.color.hsv().1;
-        self.wheel = wheel_image(self.color.hsv().2);
-        self.sync_sliders(window, cx);
-        self.sync_code(window, cx);
-        self.error = None;
-        cx.notify();
+            color
+        };
+        self.set_color(color);
     }
-    fn set_color(&mut self, color: Rgba, window: &mut Window, cx: &mut Context<Self>) {
-        if (self.color.hsv().2 - color.hsv().2).abs() > 0.002 {
-            self.wheel = wheel_image(color.hsv().2);
-        }
+    fn set_color(&self, color: Rgba) {
         let (hue, saturation, value) = color.hsv();
         if value > 0. {
-            self.saturation = saturation;
+            self.saturation.set(saturation);
             if saturation > 0. {
-                self.hue = hue;
+                self.hue.set(hue);
             }
         }
-        self.color = color;
-        self.saved.last_color = color;
-        self.error = None;
-        self.sync_sliders(window, cx);
-        self.sync_code(window, cx);
-        cx.notify();
+        self.color.set(color);
+        self.error.set(String::new());
+        self.sync_code();
     }
-    fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let values = self.channel_values();
-        for (index, channel) in self.channels.iter().enumerate() {
-            channel.update(cx, |state, cx| {
-                state.set_value(values[index] * 100., window, cx)
-            });
-        }
-        self.opacity.update(cx, |state, cx| {
-            state.set_value(f32::from(self.color.a) / 2.55, window, cx)
-        });
-        self.brightness.update(cx, |state, cx| {
-            state.set_value((1. - self.color.hsv().2) * 100., window, cx)
-        });
-    }
-    fn sync_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Like CotEditor, keywords ignore alpha and fall back to hex when no name matches.
-        if self.saved.format == ColorFormat::Keyword
+    fn sync_code(&self) {
+        let color = self.color.get_untracked();
+        let mut format = self.format.get_untracked();
+        if format == ColorFormat::Keyword
             && !named_colors()
                 .iter()
-                .any(|(_, rgb)| *rgb == self.color.rgb())
+                .any(|(_, value)| *value == color.rgb())
         {
-            self.saved.format = ColorFormat::Hex;
+            format = ColorFormat::Hex;
+            self.format.set(format);
         }
-        self.code_dirty = false;
-        let text = self.saved.format.format(self.color, self.uppercase);
-        // Hex case follows the field's current text, so lowercase CSS output resets it.
-        self.uppercase = text.bytes().any(|byte| byte.is_ascii_uppercase());
-        self.code
-            .update(cx, |state, cx| state.set_value(text, window, cx));
-        let index = ColorFormat::ALL
-            .iter()
-            .position(|format| *format == self.saved.format)
-            .unwrap_or(0);
-        self.formats.update(cx, |state, cx| {
-            state.set_selected_index(Some(IndexPath::default().row(index)), window, cx)
-        });
+        let code = format.format(color, self.uppercase.get_untracked());
+        self.uppercase
+            .set(code.bytes().any(|byte| byte.is_ascii_uppercase()));
+        self.code.set(code);
+        self.dirty.set(false);
     }
-    fn parse_code(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.code_dirty {
+    fn parse_code(&self) -> bool {
+        if !self.dirty.get_untracked() {
             return true;
         }
-        let value = self.code.read(cx).value().to_string();
-        match Rgba::parse(value.trim()) {
+        let code = self.code.get_untracked();
+        match Rgba::parse(code.trim()) {
             Ok((color, format)) => {
-                self.uppercase = value
-                    .chars()
-                    .any(|character| character.is_ascii_uppercase());
-                self.saved.format = format;
-                self.set_color(color, window, cx);
+                self.uppercase
+                    .set(code.bytes().any(|byte| byte.is_ascii_uppercase()));
+                self.format.set(format);
+                self.set_color(color);
                 true
             }
             Err(error) => {
-                self.error = Some(format!("{error}"));
-                cx.notify();
+                self.error.set(error.to_string());
                 false
             }
         }
     }
-    fn persist(&mut self, cx: &mut Context<Self>) -> bool {
-        self.saved.last_color = self.color;
-        match self.saved.save() {
+    fn persist(&self) -> bool {
+        let saved = PickerState {
+            swatches: self.swatches.get_untracked(),
+            format: self.format.get_untracked(),
+            last_color: self.color.get_untracked(),
+        };
+        match saved.save() {
             Ok(()) => true,
             Err(error) => {
-                self.error = Some(format!("Saving colors: {error}"));
-                cx.notify();
+                self.error.set(format!("Saving colors: {error}"));
                 false
             }
         }
     }
-    fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.parse_code(window, cx) || !self.persist(cx) {
-            return;
-        }
-        let code = self.code.read(cx).value().to_string();
-        self.commands
-            .borrow_mut()
-            .push_back(Command::ApplyColor(self.target, self.color, code));
-    }
-    fn save_swatch(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(slot) = self.saved.swatches.get_mut(index) {
-            *slot = self.color;
-            self.selected_swatch = index;
-            self.persist(cx);
-            cx.notify();
+    fn apply(&self) {
+        if self.parse_code() && self.persist() {
+            let queue = self.commands.get();
+            queue.borrow_mut().push_back(Command::ApplyColor(
+                self.target.get_untracked(),
+                self.color.get_untracked(),
+                self.code.get_untracked(),
+            ));
         }
     }
-    fn channel_values(&self) -> [f32; 4] {
-        to_channels(self.slider_model, self.color)
+    fn save_swatch(&self) {
+        let color = self.color.get_untracked();
+        let selected = self.selected_swatch.get_untracked();
+        self.swatches.update(|swatches| {
+            if let Some(swatch) = swatches.get_mut(selected) {
+                *swatch = color;
+            }
+        });
+        self.persist();
     }
-}
-
-impl ColorsPanel {
-    fn button(&self, id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-        crate::ui::button(id, label, 12.)
-            .with_size(Size::Small)
-            .compact()
-            .rounded(px(6.))
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .color(rgb(field()).into())
-                    .foreground(rgb(ink()).into())
-                    .hover(rgb(tone(0xe8e8e8, 0x4a4a4a)).into())
-                    .shadow(false),
-            )
-            .h(px(30.))
-            .min_w(px(0.))
-            .text_size(px(12.))
-    }
-    fn wheel_view(&self, cx: &mut Context<Self>) -> Div {
-        let (hue, saturation) = (self.hue, self.saturation);
-        let angle = hue / 360. * TAU;
-        let x = (1. + angle.cos() * saturation) * WHEEL_SIZE / 2.;
-        let y = (1. - angle.sin() * saturation) * WHEEL_SIZE / 2.;
-        let bounds = self.wheel_bounds.clone();
-        let (h, s, _) = self.color.hsv();
-        let gradient = gradient_image(|t| Rgba::from_hsv(h, s, 1. - t, 255), false);
-        div().flex().flex_col().items_center().gap(px(16.)).pt(px(10.))
-            .child(div().id("color-wheel").role(Role::Slider).aria_label("Hue and saturation")
-                .aria_value(format!("Hue {:.0} degrees, saturation {:.0} percent", hue, saturation * 100.))
-                .aria_description("Left and Right change hue. Up and Down change saturation. Shift makes larger changes.")
-                .track_focus(&self.wheel_focus).size(px(WHEEL_SIZE)).relative()
-                .focus_visible(|style| style.border_1().border_color(rgb(0x76aebd)).rounded(px(95.)))
-                .cursor(CursorStyle::Crosshair)
-                .child(img(self.wheel.clone()).size_full())
-                .child(canvas(move |rectangle, _, _| { bounds.set(rectangle); }, |_, _, _, _| {}).absolute().size_full())
-                .child(div().absolute().left(px(x - 9.)).top(px(y - 9.)).size(px(18.))
-                    .child(symbol(CROSSHAIR, if self.color.hsv().2 > 0.45 { 0x263918 } else { PAPER }).size(px(18.))))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.wheel_focus, cx); this.wheel_dragging = true;
-                    this.choose_wheel(event.position, window, cx);
-                }))
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    if this.wheel_dragging && event.dragging() { this.choose_wheel(event.position, window, cx); }
-                }))
-                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.wheel_dragging = false))
-                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, _| this.wheel_dragging = false))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    let (mut hue, mut saturation, value) = (this.hue, this.saturation, wheel_value(this.color));
-                    let step = if event.keystroke.modifiers.shift { 10. } else { 1. };
-                    match event.keystroke.key.as_str() {
-                        "left" => hue = (hue - step).rem_euclid(360.), "right" => hue = (hue + step).rem_euclid(360.),
-                        "up" => saturation = (saturation + step / 100.).min(1.),
-                        "down" => saturation = (saturation - step / 100.).max(0.), _ => return,
-                    }
-                    this.hue = hue; this.saturation = saturation;
-                    this.set_color(Rgba::from_hsv(hue, saturation, value, this.color.a), window, cx);
-                    cx.stop_propagation();
-                })))
-            .child(gradient_slider("brightness-slider", "Brightness", &self.brightness, &self.slider_focus[0], gradient, cx).w_full())
-    }
-    fn choose_wheel(
-        &mut self,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let bounds = self.wheel_bounds.get();
-        if f32::from(bounds.size.width) <= 0. {
-            return;
-        }
-        let dx = f32::from(position.x - bounds.origin.x) / f32::from(bounds.size.width) * 2. - 1.;
-        let dy = f32::from(position.y - bounds.origin.y) / f32::from(bounds.size.height) * 2. - 1.;
-        let saturation = dx.hypot(dy).min(1.);
-        let hue = (-dy).atan2(dx).to_degrees().rem_euclid(360.);
-        self.hue = hue;
-        self.saturation = saturation;
-        self.set_color(
-            Rgba::from_hsv(hue, saturation, wheel_value(self.color), self.color.a),
-            window,
-            cx,
-        );
-    }
-    fn sliders_view(&self, cx: &mut Context<Self>) -> Div {
-        let model = self.slider_model;
-        let values = self.channel_values();
-        let labels: &[&str] = match model {
-            1 => &["Hue", "Saturation", "Brightness"],
-            2 => &["Cyan", "Magenta", "Yellow", "Black"],
-            3 => &["Brightness"],
-            _ => &["Red", "Green", "Blue"],
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .pt(px(8.))
+    fn render(self: &Rc<Self>) -> AnyElement {
+        let c = self.colors;
+        let mode = self.mode;
+        let content = self.clone();
+        let alpha = self.color;
+        let change_alpha = self.clone();
+        let edit_code = self.clone();
+        let blur_code = self.clone();
+        let parse_code = self.clone();
+        let format = self.format;
+        let format_choice = self.clone();
+        let apply = self.clone();
+        let copy = self.clone();
+        let save = self.clone();
+        let sample = self.clone();
+        let shortcut = self.clone();
+        on_key("mod+enter", move |_| shortcut.apply());
+        ui::surface(c)
+            .p(px(12.))
+            .child(ui::heading("Colors"))
             .child(
-                Select::new(&self.models)
-                    .accessibility_label("Color slider model")
-                    .with_size(Size::Small)
-                    .w_full(),
-            )
-            .children(labels.iter().enumerate().map(|(index, label)| {
-                let mut base = values;
-                let alpha = self.color.a;
-                let gradient = gradient_image(
-                    move |t| {
-                        base[index] = t;
-                        from_channels(model, base, alpha)
-                    },
-                    false,
-                );
-                let number = if model == 0 {
-                    format!("{:.0}", values[index] * 255.)
-                } else if model == 1 && index == 0 {
-                    format!("{:.0}°", values[index] * 360.)
-                } else {
-                    format!("{:.0}%", values[index] * 100.)
-                };
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .text_size(px(12.))
-                            .child(*label)
-                            .child(div().text_color(rgb(muted())).child(number)),
-                    )
-                    .child(gradient_slider(
-                        ("color-channel", index),
-                        label,
-                        &self.channels[index],
-                        &self.slider_focus[index + 2],
-                        gradient,
-                        cx,
-                    ))
-            }))
-    }
-    fn palette_view(&self, cx: &mut Context<Self>) -> Div {
-        let query = self.search.read(cx).value().to_lowercase();
-        let colors: Vec<_> = named_colors()
-            .iter()
-            .filter(|(name, _)| name.contains(&query))
-            .copied()
-            .collect();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .pt(px(8.))
-            .child(
-                crate::ui::input(Input::new(&self.search), 28., 12.)
-                    .with_size(Size::Small)
-                    .cleanable(true),
-            )
-            .child(
-                div()
-                    .id("stylesheet-palette")
-                    .role(Role::ListBox)
-                    .aria_label("Stylesheet keyword colors")
-                    .h(px(202.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .when(colors.is_empty(), |list| {
-                        list.child(
-                            div()
-                                .text_color(rgb(muted()))
-                                .child("No matching color names."),
-                        )
-                    })
-                    .children(
-                        colors
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (name, rgb_value))| {
-                                self.button(("named-color", index), name, cx)
-                                    .w_full()
-                                    .h(px(25.))
-                                    .justify_start()
-                                    .icon(symbol(SWATCH, rgb_value))
-                                    .accessibility_label(format!("{name}, #{rgb_value:06x}"))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        let mut color = Rgba::from_rgb(rgb_value);
-                                        color.a = this.color.a;
-                                        this.set_color(color, window, cx);
-                                    }))
-                            }),
-                    ),
-            )
-    }
-    fn image_view(&self, cx: &mut Context<Self>) -> Div {
-        let mut view = div().flex().flex_col().gap(px(9.)).pt(px(8.)).child(
-            self.button("load-palette-image", "Open Image…", cx)
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| this.load_image(window, cx))),
-        );
-        if let Some(image) = &self.image {
-            let width = image.pixels.width() as f32;
-            let height = image.pixels.height() as f32;
-            let scale = (344. / width).min(183. / height);
-            let bounds = self.image_bounds.clone();
-            view = view
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(183.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
+                scroll().flex_1().min_h(px(0.)).child(
+                    view()
+                        .gap(px(12.))
+                        .child(ui::select(
+                            "Color picker mode",
+                            Mode::ALL
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (_, label))| {
+                                    nsh_base::SelectItem::new(index.to_string(), *label)
+                                })
+                                .collect(),
+                            move || {
+                                Some(
+                                    Mode::ALL
+                                        .iter()
+                                        .position(|(value, _)| *value == mode.get())
+                                        .unwrap_or(0)
+                                        .to_string()
+                                        .into(),
+                                )
+                            },
+                            c,
+                            move |selected| {
+                                if let Some((value, _)) = selected
+                                    .and_then(|s| s.parse::<usize>().ok())
+                                    .and_then(|index| Mode::ALL.get(index))
+                                {
+                                    mode.set(*value);
+                                }
+                            },
+                        ))
+                        .child(view().min_h(px(290.)).child(dynamic(
+                            move || match content.mode.get() {
+                                Mode::Wheel => content.wheel_view(),
+                                Mode::Sliders => content.sliders_view(),
+                                Mode::Palette => content.palette_view(),
+                                Mode::Image => content.image_view(),
+                                Mode::Pencils => content.pencils_view(),
+                            },
+                        )))
+                        .child(ui::heading("Opacity"))
                         .child(
-                            div()
-                                .id("image-color-sampler")
-                                .relative()
-                                .w(px(width * scale))
-                                .h(px(height * scale))
-                                .role(Role::Image)
-                                .aria_label(format!("Sample colors from {}", image.name))
-                                .cursor(CursorStyle::Crosshair)
-                                .child(img(image.rendered.clone()).size_full())
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(12.))
                                 .child(
-                                    canvas(
-                                        move |rectangle, _, _| bounds.set(rectangle),
-                                        |_, _, _, _| {},
+                                    ui::slider(
+                                        "Opacity",
+                                        move || f64::from(alpha.get().a) / 2.55,
+                                        c,
+                                        move |value| {
+                                            let mut color = change_alpha.color.get_untracked();
+                                            color.a = (value * 2.55).round().clamp(0., 255.) as u8;
+                                            change_alpha.set_color(color);
+                                        },
                                     )
-                                    .absolute()
-                                    .size_full(),
+                                    .flex_1(),
                                 )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                                        this.image_dragging = true;
-                                        this.choose_image(event.position, window, cx);
-                                    }),
+                                .child(
+                                    text(move || {
+                                        format!("{:.0}%", f32::from(alpha.get().a) / 2.55)
+                                    })
+                                    .w(px(50.))
+                                    .text_size(px(12.)),
+                                ),
+                        )
+                        .child(
+                            ui::input("Color code", self.code, c)
+                                .text_size(px(16.))
+                                .font_family(crate::fonts::default_plain_font())
+                                .on_change(move |value: &str| {
+                                    edit_code.code.set(value.to_owned());
+                                    edit_code.dirty.set(true);
+                                    edit_code.error.set(String::new());
+                                })
+                                .on_submit(move |_: &str| {
+                                    parse_code.parse_code();
+                                })
+                                .on_blur(move || {
+                                    blur_code.parse_code();
+                                }),
+                        )
+                        .child(ui::select(
+                            "Color code format",
+                            ColorFormat::ALL
+                                .iter()
+                                .enumerate()
+                                .map(|(index, format)| {
+                                    nsh_base::SelectItem::new(index.to_string(), format.label())
+                                })
+                                .collect(),
+                            move || {
+                                Some(
+                                    ColorFormat::ALL
+                                        .iter()
+                                        .position(|value| *value == format.get())
+                                        .unwrap_or(0)
+                                        .to_string()
+                                        .into(),
                                 )
-                                .on_mouse_move(cx.listener(
-                                    |this, event: &MouseMoveEvent, window, cx| {
-                                        if this.image_dragging && event.dragging() {
-                                            this.choose_image(event.position, window, cx);
+                            },
+                            c,
+                            move |selected| {
+                                if let Some(format) = selected
+                                    .and_then(|s| s.parse::<usize>().ok())
+                                    .and_then(|index| ColorFormat::ALL.get(index))
+                                {
+                                    format_choice.format.set(*format);
+                                    format_choice.sync_code();
+                                    format_choice.persist();
+                                }
+                            },
+                        ))
+                        .child(ui::error(self.error, c))
+                        .child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    ui::button("apply-color", "Apply", 12.)
+                                        .flex_1()
+                                        .on_press(move || apply.apply()),
+                                )
+                                .child(ui::button("copy-color-code", "Copy Code", 12.).on_press(
+                                    move || {
+                                        if copy.parse_code() {
+                                            set_clipboard(copy.code.get_untracked());
                                         }
                                     },
-                                ))
-                                .on_mouse_up(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, _| this.image_dragging = false),
+                                )),
+                        )
+                        .child(when(
+                            {
+                                let target = self.target;
+                                move || {
+                                    alpha.get().a < 255 && target.get() != ColorTarget::InsertCode
+                                }
+                            },
+                            move || {
+                                ui::hint("Text formatting blends opacity into its background.", c)
+                            },
+                        ))
+                        .child(ui::heading("Saved Swatches"))
+                        .child(self.swatches_view())
+                        .child(
+                            view()
+                                .flex_row()
+                                .gap(px(8.))
+                                .child(
+                                    ui::button(
+                                        "save-current-color",
+                                        "Save to Selected Swatch",
+                                        12.,
+                                    )
+                                    .flex_1()
+                                    .on_press(move || save.save_swatch()),
                                 )
-                                .on_mouse_up_out(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, _| this.image_dragging = false),
+                                .child(
+                                    ui::button("screen-color-sampler", "Pick from Screen", 12.)
+                                        .disabled({
+                                            let sampling = self.sampling;
+                                            move || {
+                                                sampling.get()
+                                                    || !(cfg!(target_os = "windows")
+                                                        || can_pick_screen_color())
+                                            }
+                                        })
+                                        .on_press(move || sample.sample_screen()),
                                 ),
                         ),
+                ),
+            )
+            .into_element()
+    }
+    fn wheel_view(self: &Rc<Self>) -> AnyElement {
+        let c = self.colors;
+        let color = self.color;
+        let hue = self.hue;
+        let saturation = self.saturation;
+        let focused = signal(false);
+        let size = stored(Size::<Points>::default());
+        let state = self.clone();
+        let dragging = self.clone();
+        let keyboard = self.clone();
+        let brightness = computed(move || color.get().hsv().2);
+        let wheel = computed(move || wheel_image(brightness.get()));
+        let thumb_hue = hue;
+        let thumb_saturation = saturation;
+        view().gap(px(8.)).items_center()
+            .child(view().size(px(WHEEL_SIZE)).relative().focusable(true)
+                .label("Hue and saturation").role(AccessibilityRole::Adjustable)
+                .hint("Left and Right change hue. Up and Down change saturation. Shift changes by ten.")
+                .accessibility_value(move ||Some(nsh_core::AccessibilityValue {
+                    min:Some(0.),max:Some(360.),now:Some(hue.get()),
+                    text:Some(format!("Hue {:.0} degrees, saturation {:.0} percent",hue.get(),saturation.get()*100.).into()),
+                }))
+                .focus_visible(move |s|s.outline(px(2.)).outline_color(rgb(c.accent)).rounded_full())
+                .on_focus(move ||focused.set(true)).on_blur(move ||focused.set(false))
+                .on_layout(move |bounds:&Bounds<Points>|{size.replace(bounds.size);})
+                .on_press(move |event:&PressEvent|state.choose_wheel(event.position,size.get()))
+                .on_mouse_move(move |event:&MouseEvent| {
+                    if event.pressed_button==Some(MouseButton::Left) {dragging.choose_wheel(event.position,size.get());}
+                })
+                .child(image(move ||wheel.get()).size_full().pointer_events(PointerEvents::None))
+                .child(view().absolute().size(px(12.)).rounded_full().border_2().border_color(rgb(c.ink))
+                    .left(move ||px((1.+(thumb_hue.get()/360.*TAU).cos()*thumb_saturation.get())*WHEEL_SIZE/2.-6.))
+                    .top(move ||px((1.-(thumb_hue.get()/360.*TAU).sin()*thumb_saturation.get())*WHEEL_SIZE/2.-6.))
+                    .pointer_events(PointerEvents::None))
+                .child(when(focused,move || {
+                    for (key,dh,ds) in [("left",-1.,0.),("right",1.,0.),("up",0.,0.01),("down",0.,-0.01),
+                        ("shift+left",-10.,0.),("shift+right",10.,0.),("shift+up",0.,0.1),("shift+down",0.,-0.1)]
+                    {
+                        let state=keyboard.clone();
+                        on_key(key,move |_|state.nudge_wheel(dh,ds));
+                    }
+                    view()
+                })))
+            .child(self.hsv_slider("Hue",0))
+            .child(self.hsv_slider("Saturation",1))
+            .child(self.hsv_slider("Brightness",2)).into_element()
+    }
+    fn choose_wheel(&self, position: Point<Points>, size: Size<Points>) {
+        if size.width.0 <= 0. || size.height.0 <= 0. {
+            return;
+        }
+        let dx = position.x.0 / size.width.0 * 2. - 1.;
+        let dy = position.y.0 / size.height.0 * 2. - 1.;
+        let hue = (-dy).atan2(dx).to_degrees().rem_euclid(360.);
+        let saturation = dx.hypot(dy).min(1.);
+        self.hue.set(hue);
+        self.saturation.set(saturation);
+        let color = self.color.get_untracked();
+        self.set_color(Rgba::from_hsv(hue, saturation, wheel_value(color), color.a));
+    }
+    fn nudge_wheel(&self, dh: f32, ds: f32) {
+        let hue = (self.hue.get_untracked() + dh).rem_euclid(360.);
+        let saturation = (self.saturation.get_untracked() + ds).clamp(0., 1.);
+        self.hue.set(hue);
+        self.saturation.set(saturation);
+        let color = self.color.get_untracked();
+        self.set_color(Rgba::from_hsv(hue, saturation, wheel_value(color), color.a));
+    }
+    fn hsv_slider(self: &Rc<Self>, label: &'static str, index: usize) -> AnyElement {
+        let color = self.color;
+        let hue = self.hue;
+        let saturation = self.saturation;
+        let state = self.clone();
+        view()
+            .w_full()
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .child(text(label).w(px(74.)).text_size(px(11.)))
+            .child(
+                ui::slider(
+                    label,
+                    move || {
+                        f64::from(match index {
+                            0 => hue.get() / 3.6,
+                            1 => saturation.get() * 100.,
+                            _ => color.get().hsv().2 * 100.,
+                        })
+                    },
+                    self.colors,
+                    move |value| {
+                        let color = state.color.get_untracked();
+                        let mut channels = [
+                            state.hue.get_untracked(),
+                            state.saturation.get_untracked(),
+                            color.hsv().2,
+                        ];
+                        channels[index] = value as f32 / if index == 0 { 1. / 3.6 } else { 100. };
+                        state.hue.set(channels[0]);
+                        state.saturation.set(channels[1]);
+                        state.set_color(Rgba::from_hsv(
+                            channels[0],
+                            channels[1],
+                            channels[2],
+                            color.a,
+                        ));
+                    },
                 )
+                .flex_1(),
+            )
+            .into_element()
+    }
+    fn sliders_view(self: &Rc<Self>) -> AnyElement {
+        let model = self.model;
+        let state = self.clone();
+        view()
+            .gap(px(10.))
+            .child(ui::select(
+                "Color slider model",
+                CHANNEL_MODELS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| nsh_base::SelectItem::new(index.to_string(), *label))
+                    .collect(),
+                move || Some(model.get().to_string().into()),
+                self.colors,
+                move |value| {
+                    if let Some(index) = value
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|index| *index < 4)
+                    {
+                        model.set(index);
+                    }
+                },
+            ))
+            .child(dynamic(move || {
+                let model = state.model.get();
+                let labels: &[&'static str] = match model {
+                    1 => &["Hue", "Saturation", "Brightness"],
+                    2 => &["Cyan", "Magenta", "Yellow", "Black"],
+                    3 => &["Brightness"],
+                    _ => &["Red", "Green", "Blue"],
+                };
+                view()
+                    .gap(px(12.))
+                    .children(labels.iter().enumerate().map(|(index, label)| {
+                        let color = state.color;
+                        let set = state.clone();
+                        view()
+                            .gap(px(2.))
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .justify_between()
+                                    .child(text(*label).text_size(px(12.)))
+                                    .child(
+                                        text(move || {
+                                            let value = to_channels(model, color.get())[index];
+                                            if model == 0 {
+                                                format!("{:.0}", value * 255.)
+                                            } else if model == 1 && index == 0 {
+                                                format!("{:.0}°", value * 360.)
+                                            } else {
+                                                format!("{:.0}%", value * 100.)
+                                            }
+                                        })
+                                        .text_size(px(11.)),
+                                    ),
+                            )
+                            .child(ui::slider(
+                                *label,
+                                move || f64::from(to_channels(model, color.get())[index]) * 100.,
+                                state.colors,
+                                move |value| {
+                                    let color = set.color.get_untracked();
+                                    let mut channels = to_channels(model, color);
+                                    channels[index] = value as f32 / 100.;
+                                    set.set_color(from_channels(model, channels, color.a));
+                                },
+                            ))
+                    }))
+            }))
+            .into_element()
+    }
+    fn palette_view(self: &Rc<Self>) -> AnyElement {
+        let query = self.query;
+        let state = self.clone();
+        let colors = self.colors;
+        view()
+            .gap(px(8.))
+            .child(ui::input("Search stylesheet colors", self.query, colors))
+            .child(
+                virtual_list(
+                    move || matching_colors(&query.get()).len(),
+                    move |at| {
+                        let state = state.clone();
+                        let select = state.clone();
+                        let query = state.query;
+                        ui::button("named-color", "", 12.)
+                            .h(px(28.))
+                            .justify_start()
+                            .accessibility_label(move || {
+                                matching_colors(&query.get())
+                                    .get(at.index())
+                                    .map(|(name, value)| format!("{name}, #{value:06x}"))
+                                    .unwrap_or_default()
+                            })
+                            .child(view().size(px(16.)).rounded(px(2.)).bg(move || {
+                                rgb(matching_colors(&query.get())
+                                    .get(at.index())
+                                    .map(|(_, value)| *value)
+                                    .unwrap_or(colors.field))
+                            }))
+                            .child(
+                                text(move || {
+                                    matching_colors(&query.get())
+                                        .get(at.index())
+                                        .map(|(name, _)| *name)
+                                        .unwrap_or_default()
+                                })
+                                .text_size(px(12.)),
+                            )
+                            .on_press(move || {
+                                if let Some((_, value)) =
+                                    matching_colors(&query.get_untracked()).get(at.index())
+                                {
+                                    let mut color = Rgba::from_rgb(*value);
+                                    color.a = select.color.get_untracked().a;
+                                    select.set_color(color);
+                                }
+                            })
+                    },
+                )
+                .estimated_item_size(px(28.))
+                .h(px(238.))
+                .empty(ui::hint("No matching color names.", colors)),
+            )
+            .into_element()
+    }
+    fn image_view(self: &Rc<Self>) -> AnyElement {
+        self.image_version.get();
+        let state = self.clone();
+        let mut panel = view().gap(px(8.)).child(
+            ui::button("load-palette-image", "Open Image…", 12.)
+                .on_press(move || state.load_image()),
+        );
+        let sample = self.image.with(|image| {
+            image.as_ref().map(|sample| {
+                (
+                    sample.source.clone(),
+                    sample.name.clone(),
+                    sample.pixels.width(),
+                    sample.pixels.height(),
+                )
+            })
+        });
+        if let Some((source, name, width, height)) = sample {
+            let scale = (390. / width as f32).min(190. / height as f32);
+            let size = Size {
+                width: px(width as f32 * scale),
+                height: px(height as f32 * scale),
+            };
+            let click = self.clone();
+            let drag = self.clone();
+            let choose = self.clone();
+            panel = panel
                 .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(muted()))
-                        .truncate()
-                        .child(image.name.clone()),
+                    image(source)
+                        .w(size.width)
+                        .h(size.height)
+                        .label(format!("Sample colors from {name}"))
+                        .on_press(move |event: &PressEvent| {
+                            click.choose_image(event.position, size)
+                        })
+                        .on_mouse_move(move |event: &MouseEvent| {
+                            if event.pressed_button == Some(MouseButton::Left) {
+                                drag.choose_image(event.position, size);
+                            }
+                        }),
+                )
+                .child(ui::hint(name, self.colors))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(text("X:").text_size(px(12.)))
+                        .child(ui::input("Image pixel X", self.pixel_x, self.colors).w(px(64.)))
+                        .child(text("Y:").text_size(px(12.)))
+                        .child(ui::input("Image pixel Y", self.pixel_y, self.colors).w(px(64.)))
+                        .child(
+                            ui::button("sample-image-pixel", "Sample Pixel", 12.)
+                                .on_press(move || choose.choose_pixel()),
+                        ),
                 );
         } else {
-            view = view.child(
-                div()
-                    .h(px(183.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgb(muted()))
-                    .text_size(px(12.))
-                    .child("Open an image, then click a pixel to sample its color."),
-            );
+            panel = panel.child(ui::hint(
+                "Open an image, then click a pixel to sample its color.",
+                self.colors,
+            ));
         }
-        view
+        panel.into_element()
     }
-    fn load_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose a Color Palette Image")
-            .add_filter(
-                "Images",
-                &["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff"],
-            )
-            .pick_file()
-        else {
-            return;
-        };
-        match read_sample_image(&path) {
-            Ok(image) => {
-                self.image = Some(image);
-                self.error = None;
-                cx.notify();
+    fn load_image(self: &Rc<Self>) {
+        let state = self.clone();
+        spawn(async move {
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_title("Choose a Color Palette Image")
+                .add_filter(
+                    "Images",
+                    &["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff"],
+                )
+                .pick_file()
+                .await
+            else {
+                return;
+            };
+            let path = file.path().to_owned();
+            match smol::unblock(move || read_sample_image(&path)).await {
+                Ok(image) => {
+                    state.image.replace(Some(image));
+                    state.image_version.update(|v| *v += 1);
+                    state.error.set(String::new());
+                }
+                Err(error) => state.error.set(format!("Opening image: {error}")),
             }
-            Err(error) => {
-                self.error = Some(format!("Opening image: {error}"));
-                cx.notify();
-            }
-        }
-        window.activate_window();
+        });
     }
-    fn choose_image(
-        &mut self,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(image) = &self.image else {
-            return;
-        };
-        let bounds = self.image_bounds.get();
-        let w = f32::from(bounds.size.width);
-        let h = f32::from(bounds.size.height);
-        if w <= 0. || h <= 0. {
+    fn choose_image(&self, position: Point<Points>, size: Size<Points>) {
+        if size.width.0 <= 0. || size.height.0 <= 0. {
             return;
         }
-        let x = ((f32::from(position.x - bounds.origin.x) / w).clamp(0., 0.999999)
-            * image.pixels.width() as f32) as u32;
-        let y = ((f32::from(position.y - bounds.origin.y) / h).clamp(0., 0.999999)
-            * image.pixels.height() as f32) as u32;
-        let pixel = image.pixels.get_pixel(x, y).0;
-        self.set_color(
-            Rgba {
-                r: pixel[0],
-                g: pixel[1],
-                b: pixel[2],
-                a: pixel[3],
-            },
-            window,
-            cx,
-        );
+        let color = self.image.with(|sample| {
+            sample.as_ref().map(|sample| {
+                let x = ((position.x.0 / size.width.0).clamp(0., 0.999999)
+                    * sample.pixels.width() as f32) as u32;
+                let y = ((position.y.0 / size.height.0).clamp(0., 0.999999)
+                    * sample.pixels.height() as f32) as u32;
+                self.pixel_x.set(x.to_string());
+                self.pixel_y.set(y.to_string());
+                pixel_color(sample.pixels.get_pixel(x, y).0)
+            })
+        });
+        if let Some(color) = color {
+            self.set_color(color);
+        }
     }
-    fn pencils_view(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .flex_col()
+    fn choose_pixel(&self) {
+        let point = self
+            .pixel_x
+            .get_untracked()
+            .parse::<u32>()
+            .ok()
+            .zip(self.pixel_y.get_untracked().parse::<u32>().ok());
+        let color = point.and_then(|(x, y)| {
+            self.image.with(|image| {
+                image.as_ref().and_then(|image| {
+                    (x < image.pixels.width() && y < image.pixels.height())
+                        .then(|| pixel_color(image.pixels.get_pixel(x, y).0))
+                })
+            })
+        });
+        if let Some(color) = color {
+            self.set_color(color);
+        } else {
+            self.error
+                .set("Enter pixel coordinates within the image.".into());
+        }
+    }
+    fn pencils_view(self: &Rc<Self>) -> AnyElement {
+        view()
             .gap(px(8.))
-            .pt(px(12.))
             .children((0..3).map(|row| {
-                div()
-                    .flex()
+                view()
+                    .flex_row()
                     .justify_between()
                     .children((0..12).map(|column| {
                         let index = row * 12 + column;
                         let color = pencil_color(index);
-                        Button::new(("pencil-color", index))
+                        let state = self.clone();
+                        ui::button(format!("pencil-{index}"), "", 12.)
                             .accessibility_label(format!(
                                 "Pencil color {}: {}",
                                 index + 1,
                                 color.hex(false, false)
                             ))
                             .tooltip(color.hex(false, false))
-                            .ghost()
-                            .compact()
                             .w(px(24.))
-                            .h(px(59.))
-                            .p_0()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(rgb(if self.color.rgb() == color.rgb() {
-                                ink()
-                            } else {
-                                paper()
-                            }))
+                            .h(px(56.))
+                            .px(px(2.))
                             .child(
-                                div()
-                                    .w(px(18.))
-                                    .h(px(52.))
-                                    .child(symbol(PENCIL, color.rgb()).w(px(18.)).h(px(52.))),
+                                view()
+                                    .w(px(14.))
+                                    .h(px(44.))
+                                    .rounded(px(2.))
+                                    .bg(rgb(color.rgb())),
                             )
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                            .on_press(move || {
                                 let mut color = color;
-                                color.a = this.color.a;
-                                this.set_color(color, window, cx);
-                            }))
+                                color.a = state.color.get_untracked().a;
+                                state.set_color(color);
+                            })
                     }))
             }))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(muted()))
-                    .text_center()
-                    .child("Choose a pencil color."),
-            )
+            .child(ui::hint("Choose a pencil color.", self.colors))
+            .into_element()
     }
-}
-
-impl Render for ColorsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-kit components size text in rem; scale it with View > Interface Size.
-        window.set_rem_size(crate::ui::rem_size());
-        DARK.store(
-            gpui_kit::component::Theme::global(cx).mode.is_dark(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        let color = self.color;
-        let accent = action_color(color);
-        let mode = self.mode;
-        let content = match mode {
-            Mode::Wheel => self.wheel_view(cx),
-            Mode::Sliders => self.sliders_view(cx),
-            Mode::Palette => self.palette_view(cx),
-            Mode::Image => self.image_view(cx),
-            Mode::Pencils => self.pencils_view(cx),
-        };
-        let opacity = gradient_image(
-            move |t| Rgba {
-                a: (t * 255.).round() as u8,
-                ..color
-            },
-            true,
-        );
-        let preview = gradient_image(move |_| color, true);
-        let apply_label = if matches!(self.target, ColorTarget::InsertCode) {
-            "Insert"
-        } else {
-            "Apply"
-        };
-        div()
-            .id("colors-panel")
-            .role(Role::Dialog)
-            .aria_label("Colors")
-            .track_focus(&self.focus)
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(paper()))
-            .text_color(rgb(ink()))
-            .font_family(crate::fonts::INTER_FONT)
-            .text_size(px(13.))
-            .rounded(px(18.))
-            .border_1()
-            .border_color(rgb(tone(0xc5c5c5, 0x505050)))
-            .overflow_hidden()
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    if this.persist(cx) {
-                        window.remove_window();
-                    }
-                    cx.stop_propagation();
-                } else if event.keystroke.key == "enter"
-                    && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
-                {
-                    this.apply(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                div()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .px(px(13.))
-                    .child(
-                        div()
-                            .w(px(65.))
-                            .flex()
-                            .gap(px(9.))
-                            .items_center()
-                            .child(
-                                Button::new("close-colors")
-                                    .accessibility_label("Close Colors")
-                                    .tooltip("Close Colors")
-                                    .ghost()
-                                    .compact()
-                                    .size(px(15.))
-                                    .p_0()
-                                    .rounded(px(8.))
-                                    .bg(rgb(0xff6059))
-                                    .border_1()
-                                    .border_color(rgb(0xe44039))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if this.persist(cx) {
-                                            window.remove_window();
-                                        }
-                                    })),
-                            )
-                            .child(
-                                Button::new("minimize-colors")
-                                    .accessibility_label("Minimize Colors")
-                                    .tooltip("Minimize Colors")
-                                    .ghost()
-                                    .compact()
-                                    .size(px(15.))
-                                    .p_0()
-                                    .rounded(px(8.))
-                                    .bg(rgb(0xd9d9d9))
-                                    .on_click(|_, window, _| window.minimize_window()),
-                            )
-                            .child(
-                                div()
-                                    .size(px(15.))
-                                    .rounded(px(8.))
-                                    .bg(rgb(0x28c840))
-                                    .border_1()
-                                    .border_color(rgb(0x1dad34)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(14.))
-                            .child("Colors")
-                            .window_control_area(WindowControlArea::Drag),
-                    )
-                    .child(div().w(px(65.))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(25.))
-                    .pb(px(7.))
-                    .h(px(58.))
-                    .flex_shrink_0()
-                    .children(
-                        Mode::ALL
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (tab, label))| {
-                                let selected = mode == tab;
-                                Button::new(("color-mode", index))
-                                    .accessibility_label(label)
-                                    .tooltip(label)
-                                    .role(Role::Tab)
-                                    .toggled(selected)
-                                    .ghost()
-                                    .compact()
-                                    .w(px(57.))
-                                    .h(px(44.))
-                                    .p(px(6.))
-                                    .rounded(px(11.))
-                                    .bg(rgb(if selected {
-                                        tone(0xf5f5f5, 0x3d3d3d)
-                                    } else {
-                                        paper()
-                                    }))
-                                    .child(if tab == Mode::Wheel {
-                                        img(self.wheel.clone()).size(px(29.)).into_any_element()
-                                    } else {
-                                        // Full-color image: `svg()` paints a one-color mask.
-                                        img(Arc::new(Image::from_bytes(
-                                            ImageFormat::Svg,
-                                            match tab {
-                                                Mode::Sliders => SLIDERS,
-                                                Mode::Palette => PALETTE,
-                                                Mode::Image => PHOTO,
-                                                Mode::Pencils => PENCILS,
-                                                Mode::Wheel => CROSSHAIR,
-                                            }
-                                            .as_bytes()
-                                            .to_vec(),
-                                        )))
-                                        .size(px(32.))
-                                        .into_any_element()
-                                    })
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.mode = tab;
-                                        this.error = None;
-                                        if tab == Mode::Wheel {
-                                            window.focus(&this.wheel_focus, cx);
-                                        }
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(1.))
-                    .w_full()
-                    .bg(rgb(tone(0xe7e7e7, 0x3a3a3a)))
-                    .flex_shrink_0(),
-            )
-            .child(div().px(px(30.)).h(px(256.)).flex_shrink_0().child(content))
-            .child(
-                div()
-                    .px(px(30.))
-                    .pt(px(10.))
-                    .pb(px(12.))
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(9.))
-                    .child(div().text_size(px(14.)).child("Opacity"))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(17.))
-                            .child(
-                                gradient_slider(
-                                    "opacity-slider",
-                                    "Opacity",
-                                    &self.opacity,
-                                    &self.slider_focus[1],
-                                    opacity,
-                                    cx,
+    fn swatches_view(self: &Rc<Self>) -> AnyElement {
+        let swatches = self.swatches;
+        let selected = self.selected_swatch;
+        let colors = self.colors;
+        view()
+            .gap(px(4.))
+            .children((0..2).map(|row| {
+                view()
+                    .flex_row()
+                    .gap(px(4.))
+                    .children((0..12).map(|column| {
+                        let index = row * 12 + column;
+                        let state = self.clone();
+                        ui::button(format!("saved-color-{index}"), "", 12.)
+                            .w(px(25.))
+                            .h(px(25.))
+                            .px(px(0.))
+                            .accessibility_label(move || {
+                                format!(
+                                    "Saved color {}: {}",
+                                    index + 1,
+                                    swatches.with(|colors| colors[index].hex(true, false))
                                 )
-                                .flex_1(),
-                            )
-                            .child(
-                                div()
-                                    .w(px(73.))
-                                    .h(px(33.))
-                                    .border_1()
-                                    .border_color(rgb(tone(0xe7e7e7, 0x3a3a3a)))
-                                    .rounded(px(9.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(16.))
-                                    .child(format!("{:.0}%", f32::from(color.a) / 2.55)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .px(px(25.))
-                    .pt(px(4.))
-                    .pb(px(15.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(9.))
-                    .flex_shrink_0()
-                    .child(
-                        div()
-                            .border_2()
-                            .border_color(rgb(if self.error.is_some() {
-                                0xc74b43
-                            } else {
-                                color.composite(0xffffff)
-                            }))
-                            .rounded(px(12.))
-                            .p(px(2.))
-                            .h(px(44.))
-                            .child(
-                                crate::ui::input(Input::new(&self.code), 40., 18.)
-                                    .h_full()
-                                    .appearance(false)
-                                    .bordered(false)
-                                    .focus_bordered(false)
-                                    .text_center()
-                                    .text_size(px(18.))
-                                    .font_family(crate::fonts::default_plain_font()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .child(
-                                Select::new(&self.formats)
-                                    .accessibility_label("Color code format")
-                                    .with_size(Size::Small)
-                                    .h(px(31.))
-                                    .flex_1(),
-                            )
-                            .child(
-                                self.button("apply-color", apply_label, cx)
-                                    .w(px(78.))
-                                    .h(px(31.))
-                                    .custom(
-                                        ButtonCustomVariant::new(cx)
-                                            .color(rgb(accent).into())
-                                            .foreground(rgb(PAPER).into())
-                                            .hover(rgb(darken(accent, 0.88)).into())
-                                            .shadow(false),
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.apply(window, cx)),
-                                    ),
-                            ),
-                    ),
-            )
-            .when_some(self.error.clone(), |root, error| {
-                root.child(
-                    div()
-                        .id("color-error")
-                        .role(Role::Alert)
-                        .px(px(25.))
-                        .text_size(px(10.))
-                        .text_color(rgb(0xb83f38))
-                        .child(error),
-                )
-            })
-            .when(
-                color.a < 255 && !matches!(self.target, ColorTarget::InsertCode),
-                |root| {
-                    root.child(
-                        div()
-                            .px(px(25.))
-                            .text_size(px(10.))
-                            .text_color(rgb(muted()))
-                            .child("Text formatting blends opacity into its background."),
-                    )
-                },
-            )
-            .child(div().flex_1().min_h(px(3.)))
-            .child(
-                div()
-                    .mx(px(17.))
-                    .h(px(1.))
-                    .bg(rgb(tone(0xe0e0e0, 0x444444)))
-                    .flex_shrink_0(),
-            )
-            .child(
-                div()
-                    .px(px(25.))
-                    .py(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("save-current-color")
-                            .accessibility_label("Save current color to the selected swatch")
-                            .tooltip("Save current color in the selected swatch")
-                            .ghost()
-                            .compact()
-                            .w(px(48.))
-                            .h(px(46.))
-                            .p_0()
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(rgb(darken(color.composite(PAPER), 0.7)))
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .size_full()
-                                    .relative()
-                                    .child(img(preview).size_full())
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .bottom(px(2.))
-                                            .right(px(2.))
-                                            .size(px(12.))
-                                            .rounded(px(3.))
-                                            .bg(rgb(paper()))
-                                            .child(symbol(PLUS, ink()).size(px(12.))),
-                                    ),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.save_swatch(this.selected_swatch, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("screen-color-sampler")
-                            .accessibility_label("Pick a color from the screen")
-                            .tooltip("Pick a color from the screen")
-                            .ghost()
-                            .compact()
-                            .w(px(24.))
-                            .h(px(30.))
-                            .p_0()
-                            .child(symbol(EYEDROPPER, 0x858585).size(px(21.)))
-                            .disabled(self.screen_sampling)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.screen_sampling {
-                                    return;
-                                }
-                                this.screen_sampling = true;
-                                cx.notify();
-                                let handle = Window::window_handle(window);
-                                cx.spawn(async move |panel, cx| {
-                                    // The overlay pumps messages on its own thread, keeping GPUI responsive.
-                                    let result =
-                                        smol::unblock(crate::color::pick_screen_color).await;
-                                    let _ = handle.update(cx, |_, window, cx| {
-                                        panel.update(cx, |this, cx| {
-                                            this.screen_sampling = false;
-                                            match result {
-                                                Ok(Some(color)) => {
-                                                    this.set_color(color, window, cx)
-                                                }
-                                                Ok(None) => {}
-                                                Err(error) => {
-                                                    this.error = Some(format!(
-                                                        "Sampling screen color: {error}"
-                                                    ))
-                                                }
-                                            }
-                                            window.activate_window();
-                                            cx.notify();
-                                        })
-                                    });
+                            })
+                            .bg(move || {
+                                rgb(swatches.with(|colors| colors[index].composite(0xffffff)))
+                            })
+                            .border_color(move || {
+                                rgb(if selected.get() == index {
+                                    colors.accent
+                                } else {
+                                    colors.border
                                 })
-                                .detach();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .children((0..2).map(|row| {
-                                div().flex().gap(px(3.)).children((0..12).map(|column| {
-                                    let index = row * 12 + column;
-                                    let swatch = self.saved.swatches[index];
-                                    Button::new(("saved-color", index))
-                                        .accessibility_label(format!(
-                                            "Saved color {}: {}",
-                                            index + 1,
-                                            swatch.hex(true, false)
-                                        ))
-                                        .tooltip(format!(
-                                            "{} — right-click to replace",
-                                            swatch.hex(true, false)
-                                        ))
-                                        .ghost()
-                                        .compact()
-                                        .w(px(16.))
-                                        .h(px(18.))
-                                        .min_w(px(0.))
-                                        .p_0()
-                                        .rounded(px(3.))
-                                        .border_1()
-                                        .border_color(rgb(if index == self.selected_swatch {
-                                            tone(0x555555, 0xdddddd)
-                                        } else {
-                                            tone(0xbfc0c1, 0x5a5a5a)
-                                        }))
-                                        .bg(rgb(swatch.composite(PAPER)))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.selected_swatch = index;
-                                            this.set_color(swatch, window, cx);
-                                        }))
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.save_swatch(index, cx);
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                }))
-                            })),
-                    ),
-            )
+                            })
+                            .on_press(move || {
+                                selected.set(index);
+                                state.set_color(swatches.with_untracked(|colors| colors[index]));
+                            })
+                    }))
+            }))
+            .into_element()
+    }
+    fn sample_screen(self: &Rc<Self>) {
+        if self.sampling.get_untracked() {
+            return;
+        }
+        self.sampling.set(true);
+        let state = self.clone();
+        spawn(async move {
+            #[cfg(target_os = "windows")]
+            let result = smol::unblock(crate::color::pick_screen_color).await;
+            #[cfg(not(target_os = "windows"))]
+            let result: anyhow::Result<Option<Rgba>> =
+                Ok(nsh_core::element::pick_screen_color().await.map(|color| {
+                    let color: nsh_core::Rgba = color.into();
+                    Rgba {
+                        r: (color.r * 255.).round() as u8,
+                        g: (color.g * 255.).round() as u8,
+                        b: (color.b * 255.).round() as u8,
+                        a: 255,
+                    }
+                }));
+            state.sampling.set(false);
+            match result {
+                Ok(Some(color)) => state.set_color(color),
+                Ok(None) => {}
+                Err(error) => state.error.set(format!("Sampling screen color: {error}")),
+            }
+        });
     }
 }
-
-/// Uses Kit's real slider track and thumb so pointer, touch and accessibility
-/// actions share its authoritative value; the wrapper supplies keyboard movement.
-fn gradient_slider(
-    id: impl Into<ElementId>,
-    label: &str,
-    state: &Entity<SliderState>,
-    focus: &FocusHandle,
-    gradient: Arc<RenderImage>,
-    cx: &App,
-) -> Stateful<Div> {
-    let percentage = state.read(cx).percentage().end;
-    let keyboard = state.clone();
-    let focus_on_pointer = focus.clone();
-    div()
-        .id(id)
-        .track_focus(focus)
-        .h(px(25.))
-        .min_w(px(0.))
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            window.focus(&focus_on_pointer, cx)
-        })
-        .on_key_down(move |event: &KeyDownEvent, window, cx| {
-            let delta = if event.keystroke.modifiers.shift {
-                10.
-            } else {
-                1.
-            };
-            let current = keyboard.read(cx).value().end();
-            let value = match event.keystroke.key.as_str() {
-                "left" | "down" => (current - delta).max(0.),
-                "right" | "up" => (current + delta).min(100.),
-                "home" => 0.,
-                "end" => 100.,
-                _ => return,
-            };
-            keyboard.update(cx, |state, cx| {
-                state.set_value(value, window, cx);
-                cx.emit(SliderEvent::Change(value.into()));
-            });
-            cx.stop_propagation();
-        })
-        .child(
-            BaseSlider::new(state)
-                .accessibility_label(label.to_owned())
-                .w_full()
-                .h_full()
-                .child(
-                    SliderTrack::new(state)
-                        .relative()
-                        .w_full()
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .w_full()
-                                .h(px(16.))
-                                .rounded(px(4.))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(rgb(tone(0xbcbcbc, 0x5a5a5a)))
-                                .child(img(gradient).size_full()),
-                        )
-                        .child(
-                            SliderThumb::new(state)
-                                .absolute()
-                                .left(relative(percentage))
-                                .ml(px(-6.))
-                                .top(px(0.))
-                                .w(px(12.))
-                                .h(px(25.))
-                                .rounded(px(6.))
-                                .bg(rgb(PAPER))
-                                .border_1()
-                                .border_color(rgb(0xe0e0e0)),
-                        ),
-                ),
-        )
-}
-
-fn render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
-    // GPUI's RenderImage consumes BGRA frames, while image decoding is RGBA.
-    for pixel in rgba.pixels_mut() {
-        pixel.0.swap(0, 2);
+fn pixel_color(pixel: [u8; 4]) -> Rgba {
+    Rgba {
+        r: pixel[0],
+        g: pixel[1],
+        b: pixel[2],
+        a: pixel[3],
     }
-    Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
 }
-/// Brightness for a wheel pick: like the macOS color panel, choosing on a black
-/// wheel restores full brightness so the hues become visible and selectable.
+fn matching_colors(query: &str) -> Vec<(&'static str, u32)> {
+    let query = query.to_lowercase();
+    named_colors()
+        .iter()
+        .filter(|(name, _)| name.contains(&query))
+        .copied()
+        .collect()
+}
 fn wheel_value(color: Rgba) -> f32 {
     let value = color.hsv().2;
     if value < 0.01 { 1. } else { value }
 }
-fn wheel_image(value: f32) -> Arc<RenderImage> {
+fn wheel_image(value: f32) -> ImageSrc {
     let side = 380;
     let mut pixels = image::RgbaImage::new(side, side);
     for (x, y, pixel) in pixels.enumerate_pixels_mut() {
@@ -1432,30 +939,20 @@ fn wheel_image(value: f32) -> Arc<RenderImage> {
         if radius > 1. {
             continue;
         }
-        let hue = (-dy).atan2(dx).to_degrees().rem_euclid(360.);
-        let color = Rgba::from_hsv(hue, radius, value, 255);
-        let alpha = ((1. - radius) * side as f32).clamp(0., 1.) * 255.;
-        *pixel = image::Rgba([color.r, color.g, color.b, alpha as u8]);
+        let color = Rgba::from_hsv(
+            (-dy).atan2(dx).to_degrees().rem_euclid(360.),
+            radius,
+            value,
+            255,
+        );
+        *pixel = image::Rgba([
+            color.r,
+            color.g,
+            color.b,
+            (((1. - radius) * side as f32).clamp(0., 1.) * 255.) as u8,
+        ]);
     }
-    render_image(pixels)
-}
-fn gradient_image(mut color: impl FnMut(f32) -> Rgba, checkerboard: bool) -> Arc<RenderImage> {
-    let mut pixels = image::RgbaImage::new(320, 16);
-    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
-        let color = color(x as f32 / 319.);
-        if checkerboard {
-            let background = if (x / 8 + y / 8) % 2 == 0 {
-                PAPER
-            } else {
-                0xdcdcdc
-            };
-            let value = color.composite(background);
-            *pixel = image::Rgba([(value >> 16) as u8, (value >> 8) as u8, value as u8, 255]);
-        } else {
-            *pixel = image::Rgba([color.r, color.g, color.b, 255]);
-        }
-    }
-    render_image(pixels)
+    ImageSrc::rgba(side, side, pixels.into_raw())
 }
 fn read_sample_image(path: &Path) -> anyhow::Result<SampleImage> {
     use anyhow::{Context as _, ensure};
@@ -1473,10 +970,11 @@ fn read_sample_image(path: &Path) -> anyhow::Result<SampleImage> {
         pixels.width() > 0 && pixels.height() > 0,
         "The image contains no pixels."
     );
-    let rendered = render_image(pixels.clone());
+    let bytes: Arc<[u8]> = pixels.as_raw().clone().into();
+    let source = ImageSrc::rgba(pixels.width(), pixels.height(), bytes);
     Ok(SampleImage {
         pixels,
-        rendered,
+        source,
         name: path
             .file_name()
             .unwrap_or_default()
@@ -1550,33 +1048,37 @@ fn pencil_color(index: usize) -> Rgba {
         }
     }
 }
-fn action_color(color: Rgba) -> u32 {
-    let rgb = color.composite(PAPER);
-    let r = ((rgb >> 16) & 0xff) as f32 / 255.;
-    let g = ((rgb >> 8) & 0xff) as f32 / 255.;
-    let b = (rgb & 0xff) as f32 / 255.;
-    // The selected hue stays visible while the white action label stays legible.
-    let lightness = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    if lightness > 0.52 {
-        darken(rgb, 0.52 / lightness)
-    } else {
-        rgb
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn channel_models_preserve_opaque_primaries_and_alpha() {
+        for model in [0, 1, 2] {
+            for rgb in [0xff0000, 0x00ff00, 0x0000ff, 0xffffff, 0] {
+                let mut color = Rgba::from_rgb(rgb);
+                color.a = 128;
+                let roundtrip = from_channels(model, to_channels(model, color), color.a);
+                assert_eq!(roundtrip, color, "model {model}, {rgb:06x}");
+            }
+        }
+        assert_eq!(
+            from_channels(3, [0.5, 0., 0., 0.], 64),
+            Rgba {
+                r: 128,
+                g: 128,
+                b: 128,
+                a: 64
+            }
+        );
+    }
+    #[test]
+    fn black_wheel_picks_restore_visible_brightness_and_names_search_without_case() {
+        assert_eq!(wheel_value(Rgba::from_rgb(0)), 1.);
+        assert!(
+            matching_colors("REBECCA")
+                .iter()
+                .any(|(name, _)| *name == "rebeccapurple")
+        );
     }
 }
-fn darken(color: u32, scale: f32) -> u32 {
-    let channel =
-        |shift: u32| ((((color >> shift) & 0xff_u32) as f32 * scale).round() as u32).min(255);
-    (channel(16) << 16) | (channel(8) << 8) | channel(0)
-}
-fn symbol(svg: &'static str, color: u32) -> Icon {
-    Icon::default().data(svg.as_bytes()).text_color(rgb(color))
-}
-const CROSSHAIR: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1"><circle cx="10" cy="10" r="6"/><path d="M10 0v20M0 10h20"/></svg>"##;
-const SWATCH: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect x="1" y="1" width="18" height="18" rx="3" fill="currentColor"/></svg>"##;
-const PLUS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>"##;
-const EYEDROPPER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 9 7 7m-5-5-6 6-1 4 4-1 6-6m-1-5 4-4a3 3 0 0 1 4 4l-4 4-4-4Z"/></svg>"##;
-const SLIDERS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke-width="1"><rect x="2" y="6" width="32" height="5" rx="2" fill="#ffc8c8" stroke="#dc9696"/><rect x="2" y="16" width="32" height="5" rx="2" fill="#c7efcb" stroke="#94c29a"/><rect x="2" y="26" width="32" height="5" rx="2" fill="#ccccff" stroke="#9e9ed6"/><rect x="10" y="4" width="7" height="9" rx="2" fill="#ff595c" stroke="#f5f5f5"/><rect x="23" y="14" width="7" height="9" rx="2" fill="#56c869" stroke="#f5f5f5"/><rect x="14" y="24" width="7" height="9" rx="2" fill="#6962e4" stroke="#f5f5f5"/></svg>"##;
-const PALETTE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36"><path d="M9 7h24v27H9Z" fill="#eee" stroke="#999"/><path d="M3 2h24v27H3Z" fill="#fff" stroke="#aaa"/><rect x="6" y="5" width="8" height="8" rx="1" fill="#ff2e32"/><rect x="17" y="5" width="7" height="8" rx="1" fill="#16c84b"/><rect x="6" y="16" width="8" height="8" rx="1" fill="#ffd000"/><rect x="17" y="16" width="7" height="8" rx="1" fill="#4164ee"/><rect x="27" y="25" width="5" height="7" fill="#333"/></svg>"##;
-const PHOTO: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36"><path d="M1 2h34v31H1Z" fill="#eee" stroke="#aaa"/><path d="M4 5h28v24H4Z" fill="#b1b7e4"/><path d="M4 16h28v13H4Z" fill="#f4b4a1"/><circle cx="25" cy="12" r="3" fill="#f7e7b0"/><path d="m4 26 10-10 8 7 4-4 6 8v2H4Z" fill="#65526f"/><path d="m4 29 12-8 8 7 8-3v4Z" fill="#354255"/></svg>"##;
-const PENCILS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36"><path d="M3 32V9l3-6 3 6v23" fill="#ef5552"/><path d="M9 32V9l3-6 3 6v23" fill="#edb13d"/><path d="M15 32V9l3-6 3 6v23" fill="#6fbd46"/><path d="M21 32V9l3-6 3 6v23" fill="#45aed2"/><path d="M27 32V9l3-6 3 6v23" fill="#a768c5"/><path d="M2 23h32v11H2Z" fill="#eee" stroke="#aaa"/></svg>"##;
-const PENCIL: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 52"><path d="m3 12 6-11 6 11v37H3Z" fill="currentColor"/><path d="m3 12 6-11 6 11Z" fill="#e9cba2"/><path d="m7 5 2-4 2 4Z" fill="currentColor"/><path d="M3 12h4v37H3Z" fill="#ffffff" opacity=".22"/><path d="M12 12h3v37h-3Z" fill="#000000" opacity=".16"/><path d="M3 49h12v2H3Z" fill="#e2e2e2"/></svg>"##;

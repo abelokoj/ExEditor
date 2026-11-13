@@ -1,4 +1,4 @@
-//! Document windows and commands shared by menus, toolbar, and editor shortcuts.
+//! Native NSH document windows; commands, safe saves and recovery are shared by every desktop.
 use crate::{
     color::{ColorTarget, Rgba},
     color_picker,
@@ -8,10 +8,7 @@ use crate::{
         TextEncoding,
     },
     editing::LineAction,
-    editor::{
-        Alignment, Case, EditCommand, Editor, FormatState, ListKind, PageSettings,
-        surface::EditorSurface,
-    },
+    editor::{Alignment, Case, EditCommand, Editor, FormatState, ListKind, PageSettings},
     preferences::{Appearance, Preferences},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
@@ -19,7 +16,9 @@ use crate::{
     ui::{self, Palette, px},
 };
 use anyhow::{Context as _, Result, bail, ensure};
-use gpui_kit::{prelude::FluentBuilder as _, *};
+use nsh_core::desktop::{WindowAttributes, WindowKind, WindowMode};
+use nsh_core::element::desktop::{self, WindowRef as Window};
+use nsh_core::prelude::*;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::{
     cell::RefCell,
@@ -71,7 +70,7 @@ pub enum Command {
     ToggleTabs,
     CloseWindow,
     MoveTabs {
-        target: EntityId,
+        target: u64,
         scope: TransferScope,
     },
     Open,
@@ -290,7 +289,11 @@ fn shortcut_entries() -> Vec<MenuEntry> {
             if let Some(first) = label.get_mut(..1) {
                 first.make_ascii_uppercase();
             }
-            Some(MenuEntry::item(&label, binding.label, command))
+            let mut entry = MenuEntry::item(&label, binding.label, command);
+            if binding.action.starts_with("scroll-") {
+                entry.enabled = false;
+            }
+            Some(entry)
         })
         .collect()
 }
@@ -407,209 +410,807 @@ fn confirm(title: &str, message: &str) -> bool {
         == MessageDialogResult::Ok
 }
 
-pub fn open_document(path: Option<PathBuf>, cx: &mut App) {
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
-        window_min_size: Some(size(px(590.), px(300.))),
-        titlebar: None,
-        app_owns_titlebar_drag: true,
-        app_id: Some("ExEditor".into()),
-        window_decorations: Some(WindowDecorations::Client),
-        ..Default::default()
-    };
-    let result = gpui_kit::open_window(options, cx, move |window, cx| {
-        cx.new(|cx| EditorWindow::new(path, window, cx))
-    });
-    if let Err(error) = result {
-        show_error(&error);
-    }
+type Boot = (Vec<PathBuf>, std::sync::Arc<crate::instance::Instance>);
+static BOOT: std::sync::Mutex<Option<Boot>> = std::sync::Mutex::new(None);
+pub fn configure(paths: Vec<PathBuf>, instance: std::sync::Arc<crate::instance::Instance>) {
+    *BOOT.lock().expect("startup transfer lock poisoned") = Some((paths, instance));
 }
-
-/// Routes launch requests into existing document windows instead of starting more windows.
-pub fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
-    let editors = cx
-        .try_global::<OpenEditors>()
-        .map(|open| open.0.clone())
-        .unwrap_or_default();
-    if paths.is_empty() {
-        if let Some((handle, editor)) = editors
-            .iter()
-            .rev()
-            .find(|(_, editor)| editor.upgrade().is_some())
-        {
-            let _ = handle.update(cx, |_, window, cx| {
-                window.activate_window();
-                let _ = editor.update(cx, |view, _| {
-                    if let Some(editor) = &view.doc.editor {
-                        editor.focus();
-                    }
-                });
-            });
-            cx.activate(true);
-        } else {
-            open_document(None, cx);
-        }
-        return;
+#[derive(Clone)]
+struct Entry {
+    id: u64,
+    model: Rc<RefCell<EditorWindow>>,
+    revision: Signal<u64>,
+    handle: Rc<RefCell<Option<Window>>>,
+    open: Signal<bool>,
+}
+struct Workspace {
+    owner: Owner,
+    entries: RefCell<Vec<Entry>>,
+    ids: Signal<Vec<u64>>,
+    next: std::cell::Cell<u64>,
+    closed: RefCell<Vec<PathBuf>>,
+    instance: std::sync::Arc<crate::instance::Instance>,
+    pending: RefCell<Vec<Vec<PathBuf>>>,
+}
+#[derive(Clone)]
+struct AppContext {
+    workspace: Rc<Workspace>,
+    id: u64,
+    revision: Signal<u64>,
+}
+impl AppContext {
+    fn notify(&self) {
+        self.revision.update(|value| *value = value.wrapping_add(1));
     }
-    for path in paths {
-        let editors = cx
-            .try_global::<OpenEditors>()
-            .map(|open| open.0.clone())
-            .unwrap_or_default();
-        let existing = editors.iter().find_map(|(handle, editor)| {
-            let view = editor.upgrade()?;
-            let index = view.read(cx).tab_for_path(&path)?;
-            Some((*handle, editor.clone(), index))
-        });
-        if let Some((handle, editor, index)) = existing {
-            let result = handle.update(cx, |_, window, cx| {
-                editor.update(cx, |view, cx| {
-                    view.switch_tab(index)?;
-                    window.activate_window();
-                    cx.notify();
-                    Ok::<_, anyhow::Error>(())
-                })?
-            });
-            if let Err(error) = result.and_then(|result| result) {
-                show_error(&error);
-            }
-        } else if let Some((handle, editor)) = editors
+    fn close(&self, window: &Window) {
+        if let Some(entry) = self
+            .workspace
+            .entries
+            .borrow()
             .iter()
-            .rev()
-            .find(|(_, editor)| editor.upgrade().is_some())
+            .find(|entry| entry.id == self.id)
         {
-            let result = handle.update(cx, |_, window, cx| {
-                editor.update(cx, |view, cx| {
-                    view.open_file_tab(&path, window, cx)?;
-                    window.activate_window();
-                    cx.notify();
-                    Ok::<_, anyhow::Error>(())
-                })?
-            });
-            if let Err(error) = result.and_then(|result| result) {
-                show_error(&error);
-            }
+            entry.open.set(false);
+        }
+        self.workspace
+            .entries
+            .borrow_mut()
+            .retain(|entry| entry.id != self.id);
+        self.workspace.ids.set(
+            self.workspace
+                .entries
+                .borrow()
+                .iter()
+                .map(|entry| entry.id)
+                .collect(),
+        );
+        if self.workspace.entries.borrow().is_empty() {
+            desktop::quit();
+        } else if window.is_main() {
+            window.hide();
         } else {
-            open_document(Some(path), cx);
+            window.close();
         }
     }
-    cx.activate(true);
+    fn refresh_windows(&self) {
+        for entry in self.workspace.entries.borrow().iter() {
+            entry
+                .revision
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    }
 }
-
-struct FileRequests {
-    instance: Rc<crate::instance::Instance>,
-    os_requests: Rc<RefCell<Vec<Vec<PathBuf>>>>,
-    pending: Vec<Vec<PathBuf>>,
+impl Workspace {
+    fn add(self: &Rc<Self>, model: EditorWindow) -> Entry {
+        self.owner.run(|| {
+            let id = self.next.get();
+            self.next.set(id + 1);
+            let entry = Entry {
+                id,
+                model: Rc::new(RefCell::new(model)),
+                revision: signal(0),
+                handle: Rc::new(RefCell::new(None)),
+                open: signal(true),
+            };
+            self.entries.borrow_mut().push(entry.clone());
+            self.ids
+                .set(self.entries.borrow().iter().map(|entry| entry.id).collect());
+            entry
+        })
+    }
+    fn route(self: &Rc<Self>, paths: Vec<PathBuf>) {
+        let entries = self.entries.borrow().clone();
+        if entries.is_empty() {
+            self.add(EditorWindow::new(None));
+        }
+        for path in paths {
+            let entries = self.entries.borrow().clone();
+            if let Some((entry, index)) = entries.iter().rev().find_map(|entry| {
+                entry
+                    .model
+                    .borrow()
+                    .tab_for_path(&path)
+                    .map(|index| (entry.clone(), index))
+            }) {
+                entry
+                    .model
+                    .borrow_mut()
+                    .queue
+                    .borrow_mut()
+                    .push_back(Command::SwitchTab(index));
+                if let Some(window) = entry.handle.borrow().as_ref() {
+                    window.show();
+                    window.focus();
+                }
+            } else if let Some(entry) = entries
+                .iter()
+                .rev()
+                .find(|entry| {
+                    entry
+                        .handle
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|window| window.state().is_some_and(|state| state.focused))
+                })
+                .or(entries.last())
+            {
+                entry
+                    .model
+                    .borrow_mut()
+                    .queue
+                    .borrow_mut()
+                    .push_back(Command::OpenPath(path));
+                if let Some(window) = entry.handle.borrow().as_ref() {
+                    window.show();
+                    window.focus();
+                }
+            }
+        }
+    }
 }
-impl Global for FileRequests {}
-
-pub fn listen_for_files(
-    instance: Rc<crate::instance::Instance>,
-    os_requests: Rc<RefCell<Vec<Vec<PathBuf>>>>,
-    cx: &mut App,
-) {
-    cx.set_global(FileRequests {
+fn open_document(path: Option<PathBuf>, cx: &AppContext) {
+    cx.workspace.add(EditorWindow::new(path));
+}
+fn last_document_window(cx: &AppContext) -> bool {
+    cx.workspace.entries.borrow().len() <= 1
+}
+fn prepare_instance_exit(cx: &AppContext) -> bool {
+    let received = cx.workspace.instance.stop_accepting();
+    cx.workspace.pending.borrow_mut().extend(received);
+    if cx.workspace.pending.borrow().is_empty() {
+        true
+    } else {
+        cx.workspace.instance.resume_accepting();
+        false
+    }
+}
+/// Native Rust root; every secondary document window shares this one workspace.
+#[component]
+pub fn App() -> impl IntoElement {
+    let (paths, instance) = BOOT
+        .lock()
+        .expect("startup transfer lock poisoned")
+        .take()
+        .expect("main configures ExEditor before mounting its root");
+    let workspace = Rc::new(Workspace {
+        owner: Owner::current(),
+        entries: RefCell::new(Vec::new()),
+        ids: signal(Vec::new()),
+        next: std::cell::Cell::new(1),
+        closed: RefCell::new(Vec::new()),
         instance,
-        os_requests,
-        pending: Vec::new(),
+        pending: RefCell::new(Vec::new()),
     });
-}
-fn dispatch_file_requests(cx: &mut App) {
-    let pending = std::mem::take(&mut cx.global_mut::<FileRequests>().pending);
-    for paths in pending {
-        open_paths(paths, cx);
-    }
-}
-fn prepare_instance_exit(cx: &mut App) -> bool {
-    let Some(instance) = cx
-        .try_global::<FileRequests>()
-        .map(|requests| requests.instance.clone())
-    else {
-        return true;
-    };
-    let received = instance.stop_accepting();
-    let requests = cx.global_mut::<FileRequests>();
-    requests.pending.extend(received);
-    let os_requests = std::mem::take(&mut *requests.os_requests.borrow_mut());
-    requests.pending.extend(os_requests);
-    if requests.pending.is_empty() {
-        return true;
-    }
-    instance.resume_accepting();
-    cx.defer(dispatch_file_requests);
-    false
-}
-fn last_document_window(cx: &App) -> bool {
-    cx.try_global::<OpenEditors>().is_none_or(|open| {
-        open.0
-            .iter()
-            .filter(|(_, editor)| editor.upgrade().is_some())
-            .count()
-            <= 1
-    })
-}
-
-/// Restores protected buffers automatically, even when startup also opens files.
-pub fn restore_session(cx: &mut App) -> bool {
-    let restored = match session::restore_buffers() {
-        Ok(restored) => restored,
-        Err(error) => {
-            show_error(&error);
-            return false;
-        }
-    };
-    if !restored.warnings.is_empty() {
-        show_error(&anyhow::anyhow!(restored.warnings.join("\n\n")));
-    }
-    if restored.buffers.is_empty() {
-        return false;
-    }
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
-        window_min_size: Some(size(px(590.), px(300.))),
-        titlebar: None,
-        app_owns_titlebar_drag: true,
-        app_id: Some("ExEditor".into()),
-        window_decorations: Some(WindowDecorations::Client),
-        ..Default::default()
-    };
-    match gpui_kit::open_window(options, cx, move |window, cx| {
-        cx.new(|cx| {
-            let mut view = EditorWindow::new(None, window, cx);
+    let mut model = EditorWindow::new(None);
+    let restored = session::restore_buffers();
+    match restored {
+        Ok(restored) => {
+            for warning in restored.warnings {
+                show_error(&anyhow::anyhow!(warning));
+            }
             let mut count = 0;
             for buffer in restored.buffers {
-                let result = DocumentTab::restore(&view.prefs, buffer);
-                match result {
+                match DocumentTab::restore(&model.prefs, buffer) {
                     Ok(tab) => {
                         if count == 0 {
-                            view.doc = tab;
+                            model.doc = tab;
                         } else {
-                            if let Some(editor) = &tab.editor {
-                                editor.set_visible(false);
-                            }
-                            view.tabs.push(Some(tab));
+                            model.tabs.push(Some(tab));
                         }
                         count += 1;
                     }
                     Err(error) => show_error(
-                        &error.context("The unsaved snapshot is still protected on disk"),
+                        &error.context("The original recovery snapshot remains protected on disk"),
                     ),
                 }
             }
-            view.show_tabs = count > 1;
-            if let Some(editor) = &view.doc.editor {
-                editor.set_visible(true);
-                editor.focus();
+            model.show_tabs = count > 1;
+        }
+        Err(error) => show_error(&error),
+    }
+    let main = workspace.add(model);
+    for path in paths {
+        main.model
+            .borrow()
+            .queue
+            .borrow_mut()
+            .push_back(Command::OpenPath(path));
+    }
+    let files = workspace.clone();
+    spawn(async move {
+        loop {
+            let paths = next_open_files().await;
+            if !paths.is_empty() {
+                files.route(paths);
             }
-            view
-        })
-    }) {
-        Ok(_) => true,
-        Err(error) => {
+        }
+    });
+    let incoming = workspace.clone();
+    set_interval(Duration::from_millis(80), move || {
+        let mut requests = incoming.instance.take_requests();
+        requests.extend(std::mem::take(&mut *incoming.pending.borrow_mut()));
+        for paths in requests {
+            incoming.route(paths);
+        }
+    });
+    let closing = workspace.clone();
+    desktop::on_app_quit(move || {
+        for entry in closing.entries.borrow().iter() {
+            let mut model = entry.model.borrow_mut();
+            if let Err(error) = model.persist_all() {
+                eprintln!("Protecting unsaved documents: {error:#}");
+            }
+        }
+        async {}
+    });
+    let font_workspace = workspace.clone();
+    spawn(async move {
+        if let Err(error) = crate::fonts::register().await {
             show_error(&error);
-            false
+        }
+        for entry in font_workspace.entries.borrow().iter() {
+            entry
+                .revision
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    });
+    let others = workspace.clone();
+    let main_open = main.open;
+    let main_workspace = workspace.clone();
+    view()
+        .flex_1()
+        .child(when(main_open, move || {
+            editor_view(main.clone(), main_workspace.clone())
+        }))
+        .child(each(
+            move || {
+                workspace
+                    .ids
+                    .get()
+                    .into_iter()
+                    .filter(|id| *id != 1)
+                    .collect::<Vec<_>>()
+            },
+            |id| *id,
+            move |id, _| {
+                let entry = others
+                    .entries
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.id == id.get_untracked())
+                    .cloned()
+                    .expect("live window id");
+                let store = others.clone();
+                let model = entry.model.clone();
+                let live = entry.open;
+                desktop::window()
+                    .id(format!("document-{}", entry.id))
+                    .kind(WindowKind::Normal)
+                    .title(move || model.borrow().name())
+                    .default_size(size(px(760.), px(620.)))
+                    .attributes(window_attributes(None))
+                    .open(live)
+                    .content(move || editor_view(entry.clone(), store.clone()))
+                    .into_element()
+            },
+        ))
+        .child(ui::panel_host())
+}
+
+fn window_attributes(title: Option<String>) -> WindowAttributes {
+    let mut attributes = WindowAttributes::default();
+    attributes.title = title;
+    attributes.close_on_press = Some(false);
+    let mut bar = nsh_core::desktop::TitleBarOptions::default();
+    bar.style = nsh_core::desktop::TitleBarStyle::Hidden;
+    bar.height = Some(px(31.));
+    attributes.title_bar = Some(bar);
+    attributes.frame = Some(nsh_core::desktop::WindowFrameStyle::None);
+    attributes.min_size = Some(Some(size(px(590.), px(300.))));
+    attributes
+}
+fn enqueue(queue: &Commands, command: Command) {
+    queue.borrow_mut().push_back(command);
+}
+fn bind_shortcuts(model: Rc<RefCell<EditorWindow>>, pending: Signal<bool>, chord_only: bool) {
+    use crate::keyboard::{self, Binding, Modifiers, Outcome};
+    use nsh_core::keymap::{Keystroke, When};
+    let mut bindings = keyboard::BINDINGS
+        .iter()
+        .filter(|binding| !binding.chord || chord_only)
+        .copied()
+        .collect::<Vec<_>>();
+    if chord_only {
+        // Only the pending chord owns ordinary letter keys; normal typing stays native.
+        bindings.extend((0x20..=0x7e).map(|key| Binding {
+            key,
+            modifiers: Modifiers::default(),
+            chord: true,
+            action: "",
+            label: "",
+        }));
+        bindings.push(Binding {
+            key: 0x1b,
+            modifiers: Modifiers::default(),
+            chord: true,
+            action: "",
+            label: "",
+        });
+    }
+    let mut installed = std::collections::BTreeSet::new();
+    for binding in bindings {
+        if binding.action.starts_with("scroll-") {
+            continue;
+        }
+        let Some(name) = keyboard::native_binding(&binding) else {
+            continue;
+        };
+        if !chord_only && binding.chord && !binding.modifiers.control && !binding.modifiers.alt {
+            continue;
+        }
+        if !installed.insert(name.clone()) {
+            continue;
+        }
+        let Ok(parsed) = Keystroke::parse_with(&name, apple_keys()) else {
+            continue;
+        };
+        if parsed.reserved(os()).is_some() {
+            continue;
+        }
+        let model = model.clone();
+        on_key_with(
+            &name,
+            KeyOptions {
+                when: When::Always,
+                repeat: true,
+                pass_through: false,
+            },
+            move |_| {
+                let mut model = model.borrow_mut();
+                match model.chord.resolve_keystroke(&parsed, Instant::now()) {
+                    Outcome::Action(action) => {
+                        pending.set(false);
+                        if let Some(command) = shortcut_command(action) {
+                            enqueue(&model.queue, command);
+                        }
+                    }
+                    Outcome::Prefix => {
+                        pending.set(true);
+                        spawn(async move {
+                            timer(Duration::from_secs(3)).await;
+                            pending.set(false);
+                        });
+                    }
+                    Outcome::Cancelled => pending.set(false),
+                    Outcome::Ignored => {}
+                }
+            },
+        );
+    }
+}
+fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
+    let window = desktop::current_window();
+    window.set(window_attributes(None));
+    *entry.handle.borrow_mut() = Some(window.clone());
+    let cx = AppContext {
+        workspace,
+        id: entry.id,
+        revision: entry.revision,
+    };
+    let model = entry.model.clone();
+    let close_model = model.clone();
+    let close_window = window.clone();
+    let close_cx = cx.clone();
+    window.on_close_press(move |_| {
+        let mut context = close_cx.clone();
+        let mut window = close_window.clone();
+        close_model
+            .borrow_mut()
+            .command(Command::CloseWindow, &mut window, &mut context);
+    });
+    let poll_model = model.clone();
+    let poll_window = window.clone();
+    let poll_cx = cx.clone();
+    set_interval(Duration::from_millis(80), move || {
+        let mut context = poll_cx.clone();
+        let mut window = poll_window.clone();
+        poll_model.borrow_mut().tick(&mut window, &mut context);
+    });
+    let pending = signal(false);
+    bind_shortcuts(model.clone(), pending, false);
+    let chord_model = model.clone();
+    let chords = when(pending, move || {
+        bind_shortcuts(chord_model.clone(), pending, true);
+        view().h(px(0.)).w(px(0.))
+    });
+    let chrome_model = model.clone();
+    let chrome_window = window.clone();
+    let chrome_cx = cx.clone();
+    let chrome = dynamic(move || {
+        entry.revision.get();
+        render_chrome(chrome_model.clone(), &chrome_window, &chrome_cx)
+    });
+    let body_model = model.clone();
+    let surface_model = model.clone();
+    let body = each(
+        move || {
+            entry.revision.get();
+            body_model
+                .borrow()
+                .doc
+                .editor
+                .as_ref()
+                .map(|editor| vec![Rc::as_ptr(editor) as usize])
+                .unwrap_or_default()
+        },
+        |id| *id,
+        move |_, _| {
+            let editor = surface_model
+                .borrow()
+                .doc
+                .editor
+                .clone()
+                .expect("a live document surface");
+            crate::editor::surface::surface(editor)
+        },
+    );
+    let paper_model = model.clone();
+    let queue = model.borrow().queue.clone();
+    view()
+        .flex_1()
+        .min_h(px(0.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(move || {
+            entry.revision.get();
+            ui::rgb(paper_model.borrow().colors(&window).border)
+        })
+        .font_family(crate::fonts::INTER_FONT)
+        .child(chrome)
+        .child(view().flex_1().min_h(px(1.)).w_full().child(body))
+        .on_file_drop(move |event: &FileDropEvent| {
+            for uri in &event.uris {
+                if let Ok(url) = url::Url::parse(uri)
+                    && let Ok(path) = url.to_file_path()
+                {
+                    enqueue(&queue, Command::OpenPath(path));
+                }
+            }
+        })
+        .child(chords)
+        .into_element()
+}
+fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppContext) -> AnyElement {
+    let current = model.borrow();
+    let colors = current.colors(window);
+    let queue = current.queue.clone();
+    let name = current.name();
+    let dirty = current.doc.dirty;
+    let rich = current.doc.rich;
+    let mut title = view()
+        .flex_row()
+        .items_center()
+        .h(px(31.))
+        .flex_shrink_0()
+        .bg(ui::rgb(colors.chrome))
+        .window_drag(true);
+    let mut lights = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .w(px(86.))
+        .px(px(12.));
+    for (label, color, command) in [
+        ("Close", 0xff5f57, 0),
+        ("Minimize", 0xffbd2e, 1),
+        ("Zoom", 0x28c840, 2),
+    ] {
+        let queue = queue.clone();
+        let window = window.clone();
+        lights = lights.child(
+            nsh_base::button()
+                .accessibility_label(label)
+                .size(px(12.))
+                .rounded_full()
+                .bg(ui::rgb(color))
+                .window_drag(false)
+                .on_press(move || match command {
+                    0 => enqueue(&queue, Command::CloseWindow),
+                    1 => window.minimize(),
+                    _ => window.set_mode(
+                        if window
+                            .state()
+                            .is_some_and(|state| state.mode == WindowMode::Maximized)
+                        {
+                            WindowMode::Normal
+                        } else {
+                            WindowMode::Maximized
+                        },
+                    ),
+                }),
+        );
+    }
+    title = title
+        .child(lights)
+        .child(
+            view().flex_1().items_center().justify_center().child(
+                text(format!("{name}{}", if dirty { " — Edited" } else { "" }))
+                    .text_size(px(13.))
+                    .text_color(ui::rgb(colors.ink)),
+            ),
+        )
+        .child(view().w(px(86.)));
+    let mut menu = view()
+        .flex_row()
+        .h(px(24.))
+        .items_center()
+        .px(px(8.))
+        .gap(px(2.))
+        .bg(ui::rgb(colors.chrome))
+        .border_b_1()
+        .border_color(ui::rgb(colors.border));
+    for (label, kind) in [
+        ("ExEditor", MenuKind::App),
+        ("File", MenuKind::File),
+        ("Edit", MenuKind::Edit),
+        ("Format", MenuKind::Format),
+        ("View", MenuKind::View),
+        ("Window", MenuKind::Window),
+        ("Help", MenuKind::Help),
+    ] {
+        let queue = queue.clone();
+        menu = menu.child(
+            ui::control(
+                label,
+                label,
+                if label == "ExEditor" { 76. } else { 55. },
+                false,
+                colors,
+            )
+            .h(px(22.))
+            .on_press(move || enqueue(&queue, Command::Menu(kind.clone()))),
+        );
+    }
+    let mut chrome = view().flex_shrink_0().child(title).child(menu);
+    if current.show_tabs || current.tabs.len() > 1 {
+        let active = current.active_tab;
+        let mut strip = view().flex_row();
+        for (index, tab) in current.tabs.iter().enumerate() {
+            let name = tab
+                .as_ref()
+                .map(DocumentTab::name)
+                .unwrap_or_else(|| current.name());
+            let queue = queue.clone();
+            strip = strip.child(
+                ui::control(format!("tab-{index}"), name, 160., index == active, colors)
+                    .h(px(28.))
+                    .flex_shrink_0()
+                    .on_press(move || enqueue(&queue, Command::SwitchTab(index))),
+            );
+        }
+        let add_queue = queue.clone();
+        chrome = chrome.child(
+            view()
+                .flex_row()
+                .h(px(29.))
+                .bg(ui::rgb(colors.toolbar))
+                .child(scroll().horizontal().flex_1().min_w(px(0.)).child(strip))
+                .child(
+                    ui::control("new-tab", "+", 28., false, colors)
+                        .h(px(28.))
+                        .on_press(move || enqueue(&add_queue, Command::NewTab)),
+                ),
+        );
+    }
+    if rich {
+        let format = current.doc.formatting.clone();
+        let mut toolbar = view()
+            .flex_row()
+            .items_center()
+            .h(px(29.))
+            .px(px(6.))
+            .gap(px(3.))
+            .bg(ui::rgb(colors.toolbar));
+        let controls = vec![
+            (
+                "Paragraph",
+                "¶".to_string(),
+                28.,
+                false,
+                Command::Menu(MenuKind::Format),
+            ),
+            (
+                "Font family",
+                format.font.clone(),
+                130.,
+                false,
+                Command::Menu(MenuKind::Fonts),
+            ),
+            (
+                "Font weight",
+                if format.bold { "Bold" } else { "Regular" }.into(),
+                80.,
+                false,
+                Command::Menu(MenuKind::Weights),
+            ),
+            (
+                "Font size",
+                format!("{:.0}", format.size),
+                42.,
+                false,
+                Command::Menu(MenuKind::Sizes),
+            ),
+            ("Text color", "A".into(), 25., false, Command::Foreground),
+            (
+                "Text background",
+                "▣".into(),
+                25.,
+                false,
+                Command::Background,
+            ),
+            (
+                "Bold",
+                "B".into(),
+                23.,
+                format.bold,
+                Command::Edit(EditCommand::Bold),
+            ),
+            (
+                "Italic",
+                "I".into(),
+                23.,
+                format.italic,
+                Command::Edit(EditCommand::Italic),
+            ),
+            (
+                "Underline",
+                "U".into(),
+                23.,
+                format.underline,
+                Command::Edit(EditCommand::Underline),
+            ),
+            (
+                "Strikethrough",
+                "S".into(),
+                23.,
+                format.strikethrough,
+                Command::Edit(EditCommand::Strikethrough),
+            ),
+            (
+                "Align left",
+                "≡".into(),
+                23.,
+                format.alignment == Alignment::Left,
+                Command::Edit(EditCommand::Align(Alignment::Left)),
+            ),
+            (
+                "Align center",
+                "≡".into(),
+                23.,
+                format.alignment == Alignment::Center,
+                Command::Edit(EditCommand::Align(Alignment::Center)),
+            ),
+            (
+                "Align right",
+                "≡".into(),
+                23.,
+                format.alignment == Alignment::Right,
+                Command::Edit(EditCommand::Align(Alignment::Right)),
+            ),
+            (
+                "Justify",
+                "☰".into(),
+                23.,
+                format.alignment == Alignment::Justify,
+                Command::Edit(EditCommand::Align(Alignment::Justify)),
+            ),
+            (
+                "Line spacing",
+                "↕".into(),
+                29.,
+                false,
+                Command::Menu(MenuKind::Spacing),
+            ),
+            (
+                "Lists",
+                "•".into(),
+                29.,
+                false,
+                Command::Menu(MenuKind::Lists),
+            ),
+        ];
+        for (label, value, width, selected, command) in controls {
+            let queue = queue.clone();
+            let path = match label {
+                "Align left" => Some(r#"<path d="M2 3h12M2 6h8M2 9h12M2 12h8"/>"#),
+                "Align center" => Some(r#"<path d="M2 3h12M4 6h8M2 9h12M4 12h8"/>"#),
+                "Align right" => Some(r#"<path d="M2 3h12M6 6h8M2 9h12M6 12h8"/>"#),
+                "Justify" => Some(r#"<path d="M2 3h12M2 6h12M2 9h12M2 12h12"/>"#),
+                "Line spacing" => {
+                    Some(r#"<path d="M3 2v12M1 4l2-2 2 2M1 12l2 2 2-2M8 3h7M8 8h7M8 13h7"/>"#)
+                }
+                "Lists" => Some(
+                    r#"<circle cx="2" cy="3" r=".7"/><circle cx="2" cy="8" r=".7"/><circle cx="2" cy="13" r=".7"/><path d="M6 3h9M6 8h9M6 13h9"/>"#,
+                ),
+                _ => None,
+            };
+            let button = if let Some(path) = path {
+                let svg = format!(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round">{path}</svg>"#
+                );
+                ui::icon_control(label, &svg, width, selected, colors)
+            } else {
+                ui::control(label, value, width, selected, colors).accessibility_label(label)
+            };
+            toolbar = toolbar.child(button.on_press(move || enqueue(&queue, command.clone())));
+        }
+        chrome = chrome.child(
+            scroll()
+                .horizontal()
+                .h(px(29.))
+                .scrollbar(false)
+                .child(toolbar),
+        );
+        if current.doc.ruler {
+            let queue = queue.clone();
+            chrome = chrome.child(
+                ui::ruler(colors, current.doc.zoom, move |position| {
+                    enqueue(
+                        &queue,
+                        Command::Edit(EditCommand::TabStop(
+                            ((position - 12.).max(0.) * 15.).round() as i32,
+                        )),
+                    )
+                })
+                .pointer_events(PointerEvents::None)
+                .focusable(false)
+                .label("Ruler, measured in inches (read only)"),
+            );
         }
     }
+    // macOS keeps the system menu usable; other desktops use the compact in-window bar.
+    if os() == nsh_core::platform::Os::MacOs {
+        let menus = [
+            ("ExEditor", MenuKind::App),
+            ("File", MenuKind::File),
+            ("Edit", MenuKind::Edit),
+            ("Format", MenuKind::Format),
+            ("View", MenuKind::View),
+            ("Window", MenuKind::Window),
+            ("Help", MenuKind::Help),
+        ];
+        desktop::set_application_menu(Some(
+            menus
+                .into_iter()
+                .map(|(title, kind)| {
+                    let entries = current.menu_entries(kind, cx).unwrap_or_default();
+                    desktop::MenuItem::submenu(
+                        title,
+                        entries.into_iter().map(|entry| {
+                            if entry.command.is_none() {
+                                return desktop::MenuItem::separator();
+                            }
+                            let command = entry.command.expect("action entry");
+                            let queue = queue.clone();
+                            if matches!(command, Command::Quit) {
+                                return desktop::MenuItem::role(nsh_core::desktop::MenuRole::Quit);
+                            }
+                            let mut item = desktop::MenuItem::new(entry.label)
+                                .enabled(entry.enabled)
+                                .on_select(move || enqueue(&queue, command.clone()));
+                            let shortcut =
+                                entry.shortcut.to_ascii_lowercase().replace("ctrl+", "mod+");
+                            if nsh_core::keymap::Keystroke::parse_with(&shortcut, true).is_ok() {
+                                item = item.shortcut(&shortcut);
+                            }
+                            item
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    chrome.into_element()
 }
 
 struct DocumentTab {
@@ -637,6 +1238,7 @@ struct DocumentTab {
     retain_buffer: bool,
     buffer_error_reported: bool,
     restored_buffer: bool,
+    codec_import: bool,
     last_recovery: Instant,
     last_text: String,
     find_text: String,
@@ -665,20 +1267,17 @@ struct EditorWindow {
     was_active: bool,
     /// Code theme shown while browsing the Code Theme menu; `None` shows the saved one.
     preview_theme: Option<String>,
-    /// Horizontal scroll of the document tab strip.
-    tab_scroll: ScrollHandle,
     chord: crate::keyboard::State,
-    focus: Option<FocusHandle>,
-    surface: Option<(Rc<Editor>, Entity<EditorSurface>)>,
-    _poll: Task<()>,
+    ui_stamp: String,
 }
 
 impl EditorWindow {
-    fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(path: Option<PathBuf>) -> Self {
         let prefs = Preferences::load().unwrap_or_else(|error| {
             show_error(&error);
             Preferences::default()
         });
+        ui::set_scale_percent(prefs.interface_scale);
         let doc = DocumentTab::new(&prefs);
         let mut this = Self {
             doc,
@@ -690,61 +1289,22 @@ impl EditorWindow {
             speech: Speech::default(),
             was_active: false,
             preview_theme: None,
-            tab_scroll: ScrollHandle::new(),
             chord: crate::keyboard::State::default(),
-            focus: None,
-            surface: None,
-            _poll: Task::ready(()),
+            ui_stamp: String::new(),
         };
         if let Some(path) = path
             && let Err(error) = this.read_file(&path)
         {
             show_error(&error);
         }
-        if !cx.has_global::<OpenEditors>() {
-            cx.set_global(OpenEditors::default());
-        }
-        if !cx.has_global::<RecentlyClosed>() {
-            cx.set_global(RecentlyClosed::default());
-        }
-        let registration = (Window::window_handle(window), cx.entity().downgrade());
-        cx.global_mut::<OpenEditors>().0.push(registration);
-        // Hidden helper windows (menus, color panel) must not keep the process alive.
-        let own = cx.entity().entity_id();
-        cx.on_release(move |_, cx| {
-            let editors = &mut cx.global_mut::<OpenEditors>().0;
-            editors.retain(|(_, editor)| editor.entity_id() != own && editor.upgrade().is_some());
-            if editors.is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        let weak = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |window, cx| {
-            weak.update(cx, |this, cx| this.confirm_close(window, cx))
-                .unwrap_or(true)
-        });
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
-        this.focus = Some(focus);
-        if let Some(editor) = &this.doc.editor {
-            editor.focus();
-        }
-        let handle = Window::window_handle(window);
-        this._poll = cx.spawn(async move |this, cx| {
-            loop {
-                smol::Timer::after(Duration::from_millis(100)).await;
-                // A modal dialog's message loop can run this while the window is busy;
-                // skip that tick instead of stopping, or queued menu commands never run.
-                let _ = handle.update(cx, |_, window, cx| {
-                    this.update(cx, |this, cx| this.tick(window, cx))
-                });
-                if this.upgrade().is_none() {
-                    break;
-                }
-            }
-        });
         this
+    }
+    fn persist_all(&mut self) -> Result<()> {
+        self.doc.persist_buffer()?;
+        for tab in self.tabs.iter_mut().flatten() {
+            tab.persist_buffer()?;
+        }
+        Ok(())
     }
     fn editor(&self) -> Result<Rc<Editor>> {
         self.doc
@@ -752,14 +1312,11 @@ impl EditorWindow {
             .clone()
             .context("The document editor could not be created")
     }
-    fn is_dark(&self, window: &Window) -> bool {
+    fn is_dark(&self, _window: &Window) -> bool {
         match self.prefs.appearance {
             Appearance::Dark => true,
             Appearance::Light => false,
-            Appearance::System => matches!(
-                window.appearance(),
-                WindowAppearance::Dark | WindowAppearance::VibrantDark
-            ),
+            Appearance::System => dark(),
         }
     }
     fn colors(&self, window: &Window) -> Palette {
@@ -925,6 +1482,7 @@ impl EditorWindow {
         self.doc.rich = !loaded.format.is_plain();
         self.doc.path = Some(loaded.path.clone());
         self.doc.format = loaded.format;
+        self.doc.codec_import = !loaded.format.is_plain();
         self.doc.encoding = loaded.encoding;
         self.doc.line_ending = loaded.line_ending;
         self.doc.fingerprint = Some(loaded.fingerprint);
@@ -934,6 +1492,7 @@ impl EditorWindow {
         self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
+        self.doc.codec_import = false;
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
@@ -948,22 +1507,16 @@ impl EditorWindow {
         }
         Ok(())
     }
-    fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(requests) = cx.try_global::<FileRequests>() {
-            let mut pending = requests.instance.take_requests();
-            pending.extend(std::mem::take(&mut *requests.os_requests.borrow_mut()));
-            if !pending.is_empty() {
-                // Keep staged requests visible to the close guard until the entity update ends.
-                cx.global_mut::<FileRequests>().pending.extend(pending);
-                App::defer(cx, dispatch_file_requests);
-            }
-        }
+    fn tick(&mut self, window: &mut Window, cx: &mut AppContext) {
         while let Some(command) = { self.queue.borrow_mut().pop_front() } {
             self.command(command, window, cx);
         }
         let Some(editor) = self.doc.editor.clone() else {
             return;
         };
+        while let Some(error) = editor.take_error() {
+            show_error(&anyhow::anyhow!(error));
+        }
         while let Some(shortcut) = editor.take_shortcut() {
             if let Some(command) = shortcut_command(&shortcut) {
                 self.command(command, window, cx);
@@ -972,25 +1525,23 @@ impl EditorWindow {
         let Some(editor) = self.doc.editor.clone() else {
             return;
         };
-        let active = window.is_window_active();
+        editor.set_wrap(self.doc.word_wrap);
+        editor.set_wrap_to_page(self.doc.wrap_page);
+        let active = window.state().is_some_and(|state| state.focused);
         let activated = active && !self.was_active;
-        if activated {
-            let own = cx.entity().entity_id();
-            let editors = &mut cx.global_mut::<OpenEditors>().0;
-            if let Some(index) = editors
-                .iter()
-                .position(|(_, editor)| editor.entity_id() == own)
-            {
-                let entry = editors.remove(index);
-                editors.push(entry);
-            }
-        }
         // Another window may have changed a preference.
         if active
             && !self.was_active
             && let Ok(prefs) = Preferences::load()
         {
             self.prefs = prefs;
+        }
+        if activated {
+            set_color_scheme(match self.prefs.appearance {
+                Appearance::Light => nsh_core::platform::Appearance::Light,
+                Appearance::Dark => nsh_core::platform::Appearance::Dark,
+                Appearance::System => nsh_core::platform::Appearance::System,
+            });
         }
         self.was_active = active;
         if activated {
@@ -999,22 +1550,7 @@ impl EditorWindow {
         if !active {
             self.chord.reset();
         }
-        let dark = self.is_dark(window);
-        if gpui_kit::component::Theme::global(cx).mode.is_dark() != dark {
-            gpui_kit::component::Theme::change(
-                if dark {
-                    gpui_kit::component::ThemeMode::Dark
-                } else {
-                    gpui_kit::component::ThemeMode::Light
-                },
-                None,
-                cx,
-            );
-        }
-        let composing = self
-            .surface
-            .as_ref()
-            .is_some_and(|(_, surface)| surface.read(cx).is_composing());
+        let composing = editor.is_composing();
         self.doc.dirty = editor.is_modified() || self.doc.dirty;
         self.doc.formatting = editor.formatting();
         if editor.take_text_changed()
@@ -1108,18 +1644,37 @@ impl EditorWindow {
             }
             self.doc.last_external_check = Instant::now();
         }
-        window.set_window_title(&format!(
-            "{}{} — ExEditor",
+        let stamp = format!(
+            "{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}",
             self.name(),
-            if self.doc.dirty { " — Edited" } else { "" }
-        ));
-        cx.notify();
+            self.doc.dirty,
+            self.tabs.len(),
+            self.active_tab,
+            self.show_tabs,
+            self.doc.formatting,
+            self.prefs.appearance,
+            self.doc.rich,
+            self.doc.ruler,
+            self.doc.zoom
+        );
+        window.set(WindowAttributes {
+            title: Some(format!(
+                "{}{} — ExEditor",
+                self.name(),
+                if self.doc.dirty { " — Edited" } else { "" }
+            )),
+            ..Default::default()
+        });
+        if self.ui_stamp != stamp {
+            self.ui_stamp = stamp;
+            cx.notify();
+        }
     }
     fn update_proofing(
         &mut self,
         immediate: Option<&str>,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut AppContext,
     ) -> Result<()> {
         if self.doc.markdown_source.is_some() {
             return Ok(());
@@ -1158,7 +1713,7 @@ impl EditorWindow {
         }
         Ok(())
     }
-    fn show_proofing_result(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+    fn show_proofing_result(&mut self, window: &mut Window, cx: &mut AppContext) -> Result<()> {
         if let Some(error) = &self.doc.proofing.error {
             bail!("{error}");
         }
@@ -1257,6 +1812,16 @@ impl EditorWindow {
                 .clone()
                 .context("A saved document must have a path")?
         };
+        if self.doc.codec_import
+            && self.doc.path.as_ref() == Some(&path)
+            && path.exists()
+            && !confirm(
+                "Replace imported document?",
+                "This native editor may simplify advanced file formatting such as headers, footers and text boxes. Save As keeps the original file. Replace this file with the edited document?",
+            )
+        {
+            return Ok(false);
+        }
         let changed_on_disk = match (&self.doc.fingerprint, document::fingerprint(&path)) {
             (Some(old), Ok(now)) => old != &now,
             _ => false,
@@ -1295,7 +1860,7 @@ impl EditorWindow {
         } else {
             DocumentContent::Rich(self.editor()?.rtf()?)
         };
-        let snapshot = self.editor()?.snapshot();
+        let snapshot = self.editor()?.document_snapshot()?;
         let fingerprint = if format.is_plain() {
             document::save(
                 &path,
@@ -1333,6 +1898,7 @@ impl EditorWindow {
         self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
+        self.doc.codec_import = false;
         self.prefs.add_recent(path);
         self.prefs.save()?;
         Ok(true)
@@ -1368,14 +1934,8 @@ impl EditorWindow {
         }
         Ok(saved)
     }
-    fn confirm_close(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let result = self.doc.persist_buffer().and_then(|()| {
-            for tab in self.tabs.iter_mut().flatten() {
-                tab.persist_buffer()?;
-            }
-            Ok(())
-        });
-        match result {
+    fn confirm_close(&mut self, _window: &mut Window, cx: &mut AppContext) -> bool {
+        match self.persist_all() {
             Ok(()) => !last_document_window(cx) || prepare_instance_exit(cx),
             Err(error) => {
                 confirm(
@@ -1392,7 +1952,6 @@ impl EditorWindow {
             index < self.tabs.len(),
             "That document tab is no longer open"
         );
-        self.tab_scroll.scroll_to_item(index);
         if index == self.active_tab {
             return Ok(());
         }
@@ -1412,7 +1971,7 @@ impl EditorWindow {
         }
         Ok(())
     }
-    fn new_tab(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Result<()> {
+    fn new_tab(&mut self, _window: &mut Window, _cx: &mut AppContext) -> Result<()> {
         let doc = DocumentTab::new(&self.prefs);
         if let Some(editor) = &doc.editor {
             editor.set_visible(false);
@@ -1441,7 +2000,7 @@ impl EditorWindow {
         &mut self,
         path: &Path,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut AppContext,
     ) -> Result<()> {
         if let Some(index) = self.tab_for_path(path) {
             return self.switch_tab(index);
@@ -1496,7 +2055,6 @@ impl EditorWindow {
             self.tabs.push(None);
         }
         self.show_tabs = true;
-        self.tab_scroll.scroll_to_item(self.active_tab);
         if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
@@ -1504,45 +2062,43 @@ impl EditorWindow {
     }
     fn move_tabs(
         &mut self,
-        target: EntityId,
+        target: u64,
         scope: TransferScope,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut AppContext,
     ) -> Result<()> {
-        ensure!(
-            target != cx.entity().entity_id(),
-            "Choose another document window"
-        );
-        let (handle, destination) = cx
-            .global::<OpenEditors>()
-            .0
+        ensure!(target != cx.id, "Choose another document window");
+        let destination = cx
+            .workspace
+            .entries
+            .borrow()
             .iter()
-            .find(|(_, editor)| editor.entity_id() == target && editor.upgrade().is_some())
+            .find(|entry| entry.id == target)
             .cloned()
             .context("The destination window has closed; your documents have not moved")?;
         let close_source = scope == TransferScope::AllTabs || self.tabs.len() == 1;
-        handle.update(cx, |_, target_window, cx| {
-            destination.update(cx, |destination, cx| {
-                destination.doc.queue_buffer()?;
-                let (incoming, active) = self.take_transfer(scope);
-                destination.receive_transfer(incoming, active);
-                target_window.activate_window();
-                cx.notify();
-                Ok::<_, anyhow::Error>(())
-            })?
-        })??;
-        if close_source {
-            window.remove_window();
+        let mut model = destination.model.borrow_mut();
+        model.doc.queue_buffer()?;
+        let (tabs, active) = self.take_transfer(scope);
+        model.receive_transfer(tabs, active);
+        destination
+            .revision
+            .update(|value| *value = value.wrapping_add(1));
+        if let Some(handle) = destination.handle.borrow().as_ref() {
+            handle.show();
+            handle.focus();
         }
-        cx.activate(true);
+        if close_source {
+            cx.close(window);
+        }
         Ok(())
     }
-    fn close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+    fn close_tab(&mut self, window: &mut Window, cx: &mut AppContext) -> Result<()> {
         if !self.confirm_current()? {
             return Ok(());
         }
         if let Some(path) = self.doc.path.clone() {
-            let closed = &mut cx.global_mut::<RecentlyClosed>().0;
+            let mut closed = cx.workspace.closed.borrow_mut();
             closed.push(path);
             if closed.len() > 20 {
                 closed.remove(0);
@@ -1550,7 +2106,7 @@ impl EditorWindow {
         }
         if self.tabs.len() == 1 {
             if !last_document_window(cx) || prepare_instance_exit(cx) {
-                window.remove_window();
+                cx.close(window);
             }
             return Ok(());
         }
@@ -1586,10 +2142,9 @@ impl EditorWindow {
         if let Some(target) = target {
             self.tabs.swap(self.active_tab, target);
             self.active_tab = target;
-            self.tab_scroll.scroll_to_item(target);
         }
     }
-    fn command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    fn command(&mut self, command: Command, window: &mut Window, cx: &mut AppContext) {
         if let Err(error) = self.try_command(command, window, cx) {
             show_error(&error);
         }
@@ -1602,15 +2157,24 @@ impl EditorWindow {
         &mut self,
         command: Command,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut AppContext,
     ) -> Result<()> {
         match command {
             Command::ReopenClosed => {
-                if let Some(path) = cx.global_mut::<RecentlyClosed>().0.pop() {
+                if let Some(path) = cx.workspace.closed.borrow_mut().pop() {
                     self.open_file_tab(&path, window, cx)?;
                 }
             }
-            Command::Fullscreen => window.toggle_fullscreen(),
+            Command::Fullscreen => window.set_mode(
+                if window
+                    .state()
+                    .is_some_and(|state| state.mode == WindowMode::FullScreen)
+                {
+                    WindowMode::Normal
+                } else {
+                    WindowMode::FullScreen
+                },
+            ),
             Command::BlockComment => {
                 ensure!(
                     self.doc.markdown_source.is_none(),
@@ -1698,7 +2262,12 @@ impl EditorWindow {
                 }
             }
             Command::ToggleWordWrap => self.doc.word_wrap = !self.doc.word_wrap,
-            Command::ScrollEditor(amount, page) => self.editor()?.scroll_editor(amount, page),
+            Command::ScrollEditor(amount, page) => {
+                let _ = (amount, page);
+                bail!(
+                    "Use the native mouse wheel, scrollbar, or Page Up/Down keys to scroll this document."
+                )
+            }
             Command::SaveAll => {
                 let active = self.active_tab;
                 let result = (|| -> Result<()> {
@@ -1726,9 +2295,7 @@ impl EditorWindow {
                     .path
                     .as_ref()
                     .context("Save this document before copying its path")?;
-                cx.write_to_clipboard(ClipboardItem::new_string(
-                    path.to_string_lossy().into_owned(),
-                ));
+                set_clipboard(path.to_string_lossy().into_owned());
             }
             Command::RevealFile => {
                 let path = self
@@ -1736,9 +2303,12 @@ impl EditorWindow {
                     .path
                     .as_ref()
                     .context("Save this document before revealing it in Explorer")?;
-                std::process::Command::new("explorer.exe")
-                    .arg(format!("/select,{}", path.display()))
-                    .spawn()?;
+                let path = path.clone();
+                spawn(async move {
+                    if let Err(error) = reveal_path(path).await {
+                        show_error(&anyhow::anyhow!(error));
+                    }
+                });
             }
             Command::PasteHtml => {
                 ensure!(
@@ -1785,7 +2355,7 @@ impl EditorWindow {
                             )
                         }),
                 );
-                crate::palette::open_files(entries, self.queue.clone(), self.colors(window), cx);
+                crate::palette::open_files(entries, self.queue.clone(), self.colors(window));
             }
             Command::Palette => {
                 let mut entries = Vec::new();
@@ -1886,14 +2456,13 @@ impl EditorWindow {
                     crate::keyboard::label("word-wrap"),
                     Command::ToggleWordWrap,
                 ));
-                crate::palette::open(entries, self.queue.clone(), self.colors(window), cx);
+                crate::palette::open(entries, self.queue.clone(), self.colors(window));
             }
             Command::KeyboardHelp => {
                 crate::palette::open_shortcuts(
                     shortcut_entries(),
                     self.queue.clone(),
                     self.colors(window),
-                    cx,
                 );
             }
             Command::New => open_document(None, cx),
@@ -1913,7 +2482,7 @@ impl EditorWindow {
             Command::MoveTabs { target, scope } => self.move_tabs(target, scope, window, cx)?,
             Command::CloseWindow => {
                 if self.confirm_close(window, cx) {
-                    window.remove_window();
+                    cx.close(window);
                 }
             }
             Command::Open => {
@@ -1953,29 +2522,13 @@ impl EditorWindow {
                 let content = self.content()?;
                 let rich = self.doc.rich;
                 let format = self.doc.format;
-                gpui_kit::open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::centered(size(px(760.), px(620.)), cx)),
-                        titlebar: None,
-                        ..Default::default()
-                    },
-                    cx,
-                    move |window, cx| {
-                        cx.new(|cx| {
-                            let mut view = Self::new(None, window, cx);
-                            view.doc.rich = rich;
-                            view.doc.format = format;
-                            if let Some(editor) = &view.doc.editor {
-                                let _ = editor.set_plain_text_mode(!rich);
-                            }
-                            if let Err(error) = view.load_content(&content) {
-                                show_error(&error);
-                            }
-                            view.doc.dirty = true;
-                            view
-                        })
-                    },
-                )?;
+                let mut view = Self::new(None);
+                view.doc.rich = rich;
+                view.doc.format = format;
+                view.editor()?.set_plain_text_mode(!rich)?;
+                view.load_content(&content)?;
+                view.doc.dirty = true;
+                cx.workspace.add(view);
             }
             Command::Rename | Command::Move => {
                 if !self.save(false)? {
@@ -2033,32 +2586,21 @@ impl EditorWindow {
                 if !self.confirm_close(window, cx) {
                     return Ok(());
                 }
-                let editors = cx.global::<OpenEditors>().0.clone();
-                let own = cx.entity().entity_id();
-                for (handle, editor) in editors {
-                    if editor.entity_id() == own {
-                        continue;
-                    }
-                    let can_close = handle
-                        .update(cx, |_, window, cx| {
-                            editor.update(cx, |view, cx| view.confirm_close(window, cx))
-                        })
-                        .ok()
-                        .and_then(Result::ok)
-                        .unwrap_or(true);
-                    if !can_close {
-                        return Ok(());
+                let entries = cx.workspace.entries.borrow().clone();
+                for entry in entries {
+                    if entry.id != cx.id {
+                        entry.model.borrow_mut().persist_all()?;
                     }
                 }
                 if prepare_instance_exit(cx) {
-                    cx.quit();
+                    desktop::quit();
                 }
             }
             Command::Print => {
-                let document = std::sync::Arc::new(self.editor()?.snapshot());
+                let document = std::sync::Arc::new(self.editor()?.document_snapshot()?);
                 let page = self.doc.page.clone();
                 let queue = self.queue.clone();
-                cx.spawn(async move |_, _| {
+                spawn(async move {
                     let command = match smol::unblock(crate::editor::printing::printers).await {
                         Ok(printers) if !printers.is_empty() => Command::ChoosePrinter {
                             printers: printers.into_iter().map(|printer| (printer.name, printer.is_default)).collect(),
@@ -2068,7 +2610,7 @@ impl EditorWindow {
                         Err(error) => Command::ReportError(format!("Finding printers: {error:#}")),
                     };
                     queue.borrow_mut().push_back(command);
-                }).detach();
+                });
             }
             Command::ChoosePrinter {
                 printers,
@@ -2311,7 +2853,7 @@ impl EditorWindow {
                 self.prefs.interface_scale = percent;
                 self.prefs.save()?;
                 cx.refresh_windows();
-                window.refresh();
+                cx.notify();
             }
             Command::CustomInterfaceScale => self.show_form(
                 FormKind::InterfaceScale,
@@ -2327,12 +2869,9 @@ impl EditorWindow {
                 window,
                 cx,
             ),
-            Command::Preferences => crate::settings::open(
-                self.prefs.clone(),
-                self.queue.clone(),
-                self.colors(window),
-                cx,
-            ),
+            Command::Preferences => {
+                crate::settings::open(self.prefs.clone(), self.queue.clone(), self.colors(window))
+            }
             Command::ClearRecent => {
                 self.prefs.clear_recent();
                 self.prefs.save()?;
@@ -2361,13 +2900,11 @@ impl EditorWindow {
                 Rgba::from_rgb(self.editor()?.formatting().foreground),
                 ColorTarget::Foreground,
                 self.queue.clone(),
-                cx,
             ),
             Command::Background => color_picker::open(
                 Rgba::from_rgb(self.editor()?.formatting().background),
                 ColorTarget::Background,
                 self.queue.clone(),
-                cx,
             ),
             Command::InsertColorCode => {
                 let selected = self.editor()?.selected_text()?;
@@ -2376,7 +2913,6 @@ impl EditorWindow {
                     ColorTarget::InsertCode,
                     self.queue.clone(),
                     Some(selected),
-                    cx,
                 );
             }
             Command::ApplyColor(target, color, code) => {
@@ -2444,7 +2980,6 @@ impl EditorWindow {
                 self.prefs.proofing.clone(),
                 self.queue.clone(),
                 Palette::new(self.is_dark(window)),
-                cx,
             ),
             Command::ApplyLanguageTools(options) => {
                 options.validate()?;
@@ -2478,9 +3013,7 @@ impl EditorWindow {
                 editor.replace_current(&replacement)?;
             }
             Command::Complete => {
-                if let Some((_, surface)) = &self.surface {
-                    surface.update(cx, |surface, cx| surface.complete(window, cx));
-                }
+                self.editor()?.complete()?;
             }
             Command::Speak => {
                 let selected = self.editor()?.selected_text()?;
@@ -2577,9 +3110,9 @@ impl EditorWindow {
                 MessageDialog::new().set_title("About ExEditor").set_description("ExEditor 0.1.0\nA editor document editor built with Rust and GPUI Kit.\nhttps://github.com/abelokoj/ExEditor\n\nTextEdit is a trademark of Apple Inc. ExEditor is an independent application.").show();
             }
             Command::Help => {
-                let _ = std::process::Command::new("explorer.exe")
-                    .arg("https://support.apple.com/guide/textedit/welcome/mac")
-                    .spawn();
+                spawn(async {
+                    let _ = open_url("https://support.apple.com/guide/textedit/welcome/mac").await;
+                });
             }
         }
         Ok(())
@@ -2590,36 +3123,19 @@ impl EditorWindow {
         title: &str,
         fields: Vec<Field>,
         window: &Window,
-        cx: &mut App,
+        _cx: &mut AppContext,
     ) {
-        dialogs::form(
-            kind,
-            title,
-            fields,
-            self.queue.clone(),
-            self.colors(window),
-            cx,
-        );
+        dialogs::form(kind, title, fields, self.queue.clone(), self.colors(window));
     }
-    fn show_menu(&self, entries: Vec<MenuEntry>, window: &Window, cx: &mut App) {
-        let position = point(
-            window.bounds().origin.x + px(12.),
-            window.bounds().origin.y + px(61.),
-        );
-        dialogs::menu(
-            entries,
-            position,
-            self.queue.clone(),
-            self.colors(window),
-            cx,
-        );
+    fn show_menu(&self, entries: Vec<MenuEntry>, window: &Window, _cx: &mut AppContext) {
+        dialogs::menu(entries, self.queue.clone(), self.colors(window));
     }
     fn submit(
         &mut self,
         kind: FormKind,
         values: Vec<String>,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut AppContext,
     ) -> Result<()> {
         let value = |index: usize| {
             values
@@ -2661,7 +3177,7 @@ impl EditorWindow {
                     grayscale: value(3)? == "true",
                 };
                 let queue = self.queue.clone();
-                cx.spawn(async move |_, _| {
+                spawn(async move {
                     if let Err(error) = smol::unblock(move || {
                         crate::editor::printing::submit(&document, &page, &options)
                     })
@@ -2671,8 +3187,7 @@ impl EditorWindow {
                             "Printing the document: {error:#}"
                         )));
                     }
-                })
-                .detach();
+                });
             }
             FormKind::Font => {
                 let font = value(0)?.trim();
@@ -2863,7 +3378,7 @@ impl EditorWindow {
         self.editor()?.focus();
         Ok(())
     }
-    fn menu_entries(&self, kind: MenuKind, cx: &Context<Self>) -> Result<Vec<MenuEntry>> {
+    fn menu_entries(&self, kind: MenuKind, cx: &AppContext) -> Result<Vec<MenuEntry>> {
         use Command as C;
         use MenuKind as M;
         let item = MenuEntry::item;
@@ -3262,26 +3777,22 @@ impl EditorWindow {
                 item(&self.name(), "", C::GoToSelection),
             ],
             M::MoveTabs(scope) => {
-                let own = cx.entity().entity_id();
                 let mut entries: Vec<_> = cx
-                    .global::<OpenEditors>()
-                    .0
+                    .workspace
+                    .entries
+                    .borrow()
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, (_, editor))| {
-                        if editor.entity_id() == own {
-                            return None;
-                        }
-                        let target = editor.upgrade()?;
-                        let view = target.read(cx);
-                        Some(item(
-                            &format!("{} — Window {}", view.name(), index + 1),
+                    .filter(|(_, entry)| entry.id != cx.id)
+                    .map(|(index, entry)| {
+                        item(
+                            &format!("{} — Window {}", entry.model.borrow().name(), index + 1),
                             "",
                             C::MoveTabs {
-                                target: editor.entity_id(),
+                                target: entry.id,
                                 scope,
                             },
-                        ))
+                        )
                     })
                     .collect();
                 if entries.is_empty() {
@@ -3357,436 +3868,18 @@ impl EditorWindow {
                 .chain([item("Custom…", "", C::CustomSpacing)])
                 .collect(),
         };
+        let mut entries = entries;
+        for entry in &mut entries {
+            if matches!(
+                entry.command,
+                Some(Command::Edit(
+                    EditCommand::FirstLineIndent(_) | EditCommand::TabStop(_)
+                ))
+            ) {
+                entry.enabled = false;
+            }
+        }
         Ok(entries)
-    }
-    fn toolbar_control(
-        id: &'static str,
-        label: String,
-        width: f32,
-        active: bool,
-        command: Command,
-        colors: Palette,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::component::button::Button {
-        ui::control(id, label, width, active, colors).on_click(
-            cx.listener(move |this, _, window, cx| this.command(command.clone(), window, cx)),
-        )
-    }
-    fn render_toolbar(&self, c: Palette, cx: &mut Context<Self>) -> AnyElement {
-        let font = if self.doc.formatting.font.is_empty() {
-            self.prefs.rich_font.clone()
-        } else {
-            self.doc.formatting.font.clone()
-        };
-        let size = if self.doc.formatting.size > 0. {
-            self.doc.formatting.size
-        } else {
-            12.
-        };
-        let mut controls =
-            vec![
-                Self::toolbar_control(
-                    "paragraph-style",
-                    "¶⌄".into(),
-                    28.,
-                    false,
-                    Command::Menu(MenuKind::Lists),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "font-family",
-                    font,
-                    130.,
-                    false,
-                    Command::Menu(MenuKind::Fonts),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "font-face",
-                    if self.doc.formatting.bold {
-                        "Bold"
-                    } else if self.doc.formatting.italic {
-                        "Italic"
-                    } else {
-                        "Regular"
-                    }
-                    .into(),
-                    78.,
-                    false,
-                    Command::Menu(MenuKind::Weights),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                Self::toolbar_control(
-                    "font-size",
-                    if size.fract() == 0. {
-                        format!("{size:.0} ⌄")
-                    } else {
-                        format!("{size:.1} ⌄")
-                    },
-                    48.,
-                    false,
-                    Command::Menu(MenuKind::Sizes),
-                    c,
-                    cx,
-                )
-                .into_any_element(),
-                ui::control("text-color", "", 24., false, c)
-                    .tooltip("Text Color")
-                    .child(
-                        div()
-                            .size(px(12.))
-                            .rounded(px(2.))
-                            .bg(rgb(self.doc.formatting.foreground)),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.command(Command::Foreground, window, cx)
-                    }))
-                    .into_any_element(),
-                // TextEdit shows text and background colors as two color wells.
-                ui::control("text-background", "", 24., false, c)
-                    .tooltip("Text Background Color")
-                    .child(
-                        div()
-                            .size(px(12.))
-                            .rounded(px(2.))
-                            .border_1()
-                            .border_color(rgb(c.border))
-                            .bg(rgb(self.doc.formatting.background)),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.command(Command::Background, window, cx)
-                    }))
-                    .into_any_element(),
-            ];
-        let styles: [(&'static str, &'static str, bool, EditCommand); 4] = [
-            ("bold", "Bold", self.doc.formatting.bold, EditCommand::Bold),
-            (
-                "italic",
-                "Italic",
-                self.doc.formatting.italic,
-                EditCommand::Italic,
-            ),
-            (
-                "underline",
-                "Underline",
-                self.doc.formatting.underline,
-                EditCommand::Underline,
-            ),
-            (
-                "strikethrough",
-                "Strikethrough",
-                self.doc.formatting.strikethrough,
-                EditCommand::Strikethrough,
-            ),
-        ];
-        for (id, name, active, edit) in styles {
-            // Each button draws its own effect, like TextEdit's B I U S segments.
-            let glyph = div().child(&name[..1]);
-            let glyph = match id {
-                "bold" => glyph.font_weight(FontWeight::BOLD),
-                "italic" => glyph.italic(),
-                "underline" => glyph.underline(),
-                _ => glyph.line_through(),
-            };
-            let command = Command::Edit(edit);
-            controls.push(
-                ui::control(id, "", 22., active, c)
-                    .tooltip(name)
-                    .child(glyph)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.command(command.clone(), window, cx)
-                    }))
-                    .into_any_element(),
-            );
-        }
-        for (id, name, data, alignment) in [
-            ("left", "Align Left", ui::ALIGN_LEFT, Alignment::Left),
-            ("center", "Center", ui::ALIGN_CENTER, Alignment::Center),
-            ("right", "Align Right", ui::ALIGN_RIGHT, Alignment::Right),
-            ("justify", "Justify", ui::ALIGN_JUSTIFY, Alignment::Justify),
-        ] {
-            let command = Command::Edit(EditCommand::Align(alignment));
-            let active = self.doc.formatting.alignment == alignment;
-            controls.push(
-                ui::control(id, "", 22., active, c)
-                    .tooltip(name)
-                    .child(ui::icon(data, if active { 0xffffff } else { c.ink }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.command(command.clone(), window, cx)
-                    }))
-                    .into_any_element(),
-            );
-        }
-        controls.push(
-            ui::control("line-spacing", "", 32., false, c)
-                .tooltip("Line and Paragraph Spacing")
-                .child(ui::icon(ui::LINE_SPACING, c.ink))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.command(Command::Menu(MenuKind::Spacing), window, cx)
-                }))
-                .into_any_element(),
-        );
-        controls.push(
-            ui::control("list", "", 32., false, c)
-                .tooltip("Lists")
-                .child(ui::icon(ui::LIST, c.ink))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.command(Command::Menu(MenuKind::Lists), window, cx)
-                }))
-                .into_any_element(),
-        );
-        div()
-            .id("formatting-toolbar")
-            .flex()
-            .items_center()
-            .gap(px(3.))
-            .h(px(29.))
-            .px(px(7.))
-            .flex_shrink_0()
-            .bg(rgb(c.toolbar))
-            .border_b_1()
-            .border_color(rgb(c.border))
-            .overflow_hidden()
-            .children(controls)
-            .into_any_element()
-    }
-}
-
-#[derive(Default)]
-struct OpenEditors(Vec<(AnyWindowHandle, WeakEntity<EditorWindow>)>);
-#[derive(Default)]
-struct RecentlyClosed(Vec<PathBuf>);
-impl Global for RecentlyClosed {}
-impl Global for OpenEditors {}
-
-impl Render for EditorWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-kit components size text in rem; scale it with View > Interface Size.
-        window.set_rem_size(ui::rem_size());
-        let c = self.colors(window);
-        let dirty = self.doc.dirty;
-        let name = self.name();
-        let mut lights = div().flex().items_center().gap(px(8.)).px(px(12.)).h_full();
-        for (id, color, action) in [
-            ("close", 0xff5f57, 0),
-            ("minimize", 0xfebc2e, 1),
-            ("zoom", 0x28c840, 2),
-        ] {
-            lights = lights.child(
-                div()
-                    .id(id)
-                    .size(px(12.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgb(color - 0x101010))
-                    .bg(rgb(color))
-                    .cursor_pointer()
-                    // Keeps the title bar's drag area from swallowing clicks on the button.
-                    .occlude()
-                    .when(id == "close" && dirty, |d| {
-                        d.child(
-                            div()
-                                .size(px(4.))
-                                .m(px(3.))
-                                .rounded_full()
-                                .bg(rgb(0x8e221c)),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| match action {
-                        0 => this.command(Command::CloseWindow, window, cx),
-                        1 => window.minimize_window(),
-                        _ => window.zoom_window(),
-                    })),
-            );
-        }
-        let title = div()
-            .id("titlebar")
-            .relative()
-            .h(px(31.))
-            .flex_shrink_0()
-            .bg(rgb(c.chrome))
-            .flex()
-            .items_center()
-            // GPUI's start_window_move is a no-op on Windows; a drag area is answered as
-            // HTCAPTION, so Windows moves the window and double-click zooms it.
-            .window_control_area(WindowControlArea::Drag)
-            .child(lights)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(100.))
-                    .right(px(100.))
-                    .text_center()
-                    .text_size(px(13.))
-                    .child(format!("{name}{}", if dirty { " — Edited" } else { "" })),
-            );
-        let menubar = div()
-            .id("menubar")
-            .flex()
-            .items_center()
-            .h(px(24.))
-            .flex_shrink_0()
-            .px(px(8.))
-            .gap(px(2.))
-            .bg(rgb(c.chrome))
-            .border_b_1()
-            .border_color(rgb(c.border))
-            .children(
-                [
-                    ("ExEditor", MenuKind::App),
-                    ("File", MenuKind::File),
-                    ("Edit", MenuKind::Edit),
-                    ("Format", MenuKind::Format),
-                    ("View", MenuKind::View),
-                    ("Window", MenuKind::Window),
-                    ("Help", MenuKind::Help),
-                ]
-                .into_iter()
-                .map(|(label, kind)| {
-                    div()
-                        .id(label)
-                        .px(px(9.))
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .rounded(px(3.))
-                        .cursor_pointer()
-                        .text_size(px(12.))
-                        .when(label == "ExEditor", |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .hover(|s| s.bg(rgb(c.border)))
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.command(Command::Menu(kind.clone()), window, cx)
-                        }))
-                }),
-            );
-        let mut root = div()
-            .id("exeditor")
-            .flex()
-            .flex_col()
-            .size_full()
-            .overflow_hidden()
-            .rounded(px(7.))
-            .border_1()
-            .border_color(rgb(c.border))
-            .bg(rgb(c.paper))
-            .text_color(rgb(c.ink))
-            .font_family(crate::fonts::INTER_FONT)
-            .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                match this
-                    .chord
-                    .resolve_keystroke(&event.keystroke, Instant::now())
-                {
-                    crate::keyboard::Outcome::Ignored => return,
-                    crate::keyboard::Outcome::Action(action) => {
-                        if let Some(command) = shortcut_command(action) {
-                            this.command(command, window, cx);
-                        }
-                    }
-                    crate::keyboard::Outcome::Prefix | crate::keyboard::Outcome::Cancelled => {}
-                }
-                cx.stop_propagation();
-                window.prevent_default();
-            }))
-            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                for path in &paths.0 {
-                    this.command(Command::OpenPath(path.clone()), window, cx);
-                }
-            }))
-            .child(title)
-            .child(menubar);
-        if self.show_tabs || self.tabs.len() > 1 {
-            let current = self.active_tab;
-            root = root.child(
-                div()
-                    .id("document-tabs")
-                    .flex()
-                    .h(px(29.))
-                    .flex_shrink_0()
-                    .bg(rgb(c.toolbar))
-                    .border_b_1()
-                    .border_color(rgb(c.border))
-                    .child(
-                        // Tabs keep their width and scroll sideways (wheel or trackpad)
-                        // once they no longer fit; "+" stays in reach at the end.
-                        div()
-                            .id("document-tab-strip")
-                            .flex()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .overflow_x_scroll()
-                            .track_scroll(&self.tab_scroll)
-                            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
-                                let name = tab
-                                    .as_ref()
-                                    .map(DocumentTab::name)
-                                    .unwrap_or_else(|| self.name());
-                                ui::control(("tab", index), name, 160., index == current, c)
-                                    .flex_shrink_0()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.command(Command::SwitchTab(index), window, cx)
-                                    }))
-                            })),
-                    )
-                    .child(
-                        ui::control("new-tab", "+", 28., false, c).on_click(cx.listener(
-                            |this, _, window, cx| this.command(Command::NewTab, window, cx),
-                        )),
-                    ),
-            );
-        }
-        if self.doc.rich {
-            root = root.child(self.render_toolbar(c, cx));
-        }
-        if self.doc.rich && self.doc.ruler {
-            let editor = self.doc.editor.clone();
-            root = root.child(ui::ruler(c, self.doc.zoom, move |position, _, _| {
-                if let Some(editor) = &editor {
-                    let _ = editor.execute(EditCommand::TabStop(
-                        ((position - 12.).max(0.) * 15.).round() as i32,
-                    ));
-                }
-            }));
-        }
-        if let Some(editor) = self.doc.editor.clone() {
-            editor.set_wrap(self.doc.word_wrap);
-            editor.set_wrap_to_page(self.doc.wrap_page);
-            if self
-                .surface
-                .as_ref()
-                .is_none_or(|(current, _)| !Rc::ptr_eq(current, &editor))
-            {
-                let surface = cx.new(|cx| EditorSurface::new(editor.clone(), cx));
-                self.surface = Some((editor.clone(), surface));
-            }
-            if let Some((_, surface)) = &self.surface {
-                root = root.child(
-                    div()
-                        .id("document")
-                        .flex_1()
-                        .min_h(px(1.))
-                        .w_full()
-                        .bg(rgb(if self.doc.wrap_page {
-                            c.chrome
-                        } else {
-                            self.doc.paper
-                        }))
-                        .child(surface.clone()),
-                );
-            }
-        } else {
-            root = root.child(div().p(px(24.)).child(
-                "The document editor could not be initialized. Close this window and try again.",
-            ));
-        }
-        root
     }
 }
 
@@ -3877,6 +3970,7 @@ impl DocumentTab {
             retain_buffer: false,
             buffer_error_reported: false,
             restored_buffer: false,
+            codec_import: false,
             last_recovery: Instant::now(),
             last_external_check: Instant::now(),
             last_text: String::new(),
@@ -3899,7 +3993,9 @@ impl DocumentTab {
             .as_ref()
             .context("The document editor could not be created")?;
         editor.set_plain_text_mode(buffer.document.format.is_plain())?;
-        if let Some(snapshot) = buffer.document.editor_snapshot {
+        if let Some(snapshot) = buffer.document.nsh_snapshot {
+            editor.set_snapshot(&serde_json::to_vec(&snapshot)?)?;
+        } else if let Some(snapshot) = buffer.document.editor_snapshot {
             editor.set_document(snapshot)?;
         } else {
             match &buffer.document.content {
@@ -3932,6 +4028,7 @@ impl DocumentTab {
         tab.buffer_lease = Some(std::sync::Arc::new(buffer.lease));
         tab.dirty = true;
         tab.restored_buffer = true;
+        tab.codec_import = !tab.format.is_plain();
         tab.buffered = true;
         Ok(tab)
     }
@@ -3967,7 +4064,11 @@ impl DocumentTab {
             original_path: self.path.clone(),
             format: self.format,
             content,
-            editor_snapshot: Some(editor.snapshot()),
+            editor_snapshot: None,
+            nsh_snapshot: editor
+                .snapshot()
+                .map(|bytes| serde_json::from_slice(&bytes))
+                .transpose()?,
             encoding: self.encoding,
             line_ending: self.line_ending,
             saved_at: chrono::Local::now().to_rfc3339(),
@@ -4051,7 +4152,6 @@ impl DocumentTab {
 mod window_tests {
     use super::{DocumentTab, EditorWindow, TransferScope};
     use crate::{preferences::Preferences, services::Speech};
-    use gpui_kit::{ScrollHandle, Task};
 
     fn window_with_tabs(names: &[&str], active: usize) -> EditorWindow {
         let prefs = Preferences::default();
@@ -4077,11 +4177,8 @@ mod window_tests {
             speech: Speech::default(),
             was_active: false,
             preview_theme: None,
-            tab_scroll: ScrollHandle::new(),
             chord: crate::keyboard::State::default(),
-            focus: None,
-            surface: None,
-            _poll: Task::ready(()),
+            ui_stamp: String::new(),
         }
     }
     fn names(window: &EditorWindow) -> Vec<String> {

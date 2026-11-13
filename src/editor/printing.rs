@@ -49,7 +49,7 @@ pub fn printers() -> Result<Vec<Printer>> {
         .collect())
 }
 
-fn validate_page_settings(page: &PageSettings) -> Result<()> {
+pub(super) fn validate_page_settings(page: &PageSettings) -> Result<()> {
     const MAX_TWIPS: i32 = 288_000; // PDF's conventional 200-inch physical page limit.
     ensure!(
         (1..=MAX_TWIPS).contains(&page.width_twips) && (1..=MAX_TWIPS).contains(&page.height_twips),
@@ -128,13 +128,55 @@ fn output_document(doc: &Document, page: &PageSettings) -> Result<Document> {
     Ok(snapshot)
 }
 
+fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>> {
+    ensure!(total > 0, "The document has no printable pages.");
+    let mut pages = std::collections::BTreeSet::new();
+    for item in spec.split(',').map(str::trim) {
+        let number = |text: &str| -> Result<usize> {
+            let page = text
+                .trim()
+                .parse::<usize>()
+                .context("Use page numbers or ranges, such as 1-3,5")?;
+            ensure!(
+                (1..=total).contains(&page),
+                "The page range exceeds the document's {total} pages."
+            );
+            Ok(page)
+        };
+        match item.to_ascii_lowercase().as_str() {
+            "all" => pages.extend(0..total),
+            "odd" => pages.extend((0..total).step_by(2)),
+            "even" => pages.extend((1..total).step_by(2)),
+            _ => {
+                if let Some((start, end)) = item.split_once('-') {
+                    let start = if start.trim().is_empty() {
+                        1
+                    } else {
+                        number(start)?
+                    };
+                    let end = if end.trim().is_empty() {
+                        total
+                    } else {
+                        number(end)?
+                    };
+                    ensure!(start <= end, "The page range is reversed.");
+                    pages.extend(start - 1..end);
+                } else {
+                    pages.insert(number(item)? - 1);
+                }
+            }
+        }
+    }
+    ensure!(!pages.is_empty(), "The page range selects no pages.");
+    Ok(pages.into_iter().collect())
+}
+
 fn pdf(
     doc: &Document,
     page: &PageSettings,
     links: bool,
     page_range: Option<&str>,
 ) -> Result<Vec<u8>> {
-    crate::fonts::register_engine_fonts()?;
     let snapshot = output_document(doc, page)?;
     let mut options = wordcraft_pdf::PdfOptions {
         links,
@@ -149,10 +191,7 @@ fn pdf(
                 ..Default::default()
             },
         );
-        options.pages = Some(
-            wordcraft_engine::print::parse_page_range(spec, layout.pages.len())
-                .map_err(anyhow::Error::msg)?,
-        );
+        options.pages = Some(parse_page_range(spec, layout.pages.len())?);
         wordcraft_pdf::export_layout(&snapshot, &layout, &options)
             .context("rendering the selected PDF pages")
     } else {
@@ -178,7 +217,7 @@ pub fn export_pdf(doc: &Document, path: &Path, page: &PageSettings) -> Result<()
 }
 
 /// Sends a PDF to the native spooler using the settings confirmed in the print form.
-/// The caller runs this blocking operation on a worker, keeping the GPUI event loop responsive.
+/// The caller runs this blocking operation on a worker, keeping the native event loop responsive.
 pub fn submit(doc: &Document, page: &PageSettings, options: &PrintOptions) -> Result<()> {
     ensure!(
         !options.printer.trim().is_empty()
@@ -212,6 +251,15 @@ pub fn submit(doc: &Document, page: &PageSettings, options: &PrintOptions) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn page_ranges_are_bounded_deduplicated_and_zero_based() {
+        assert_eq!(parse_page_range("1-3,2,5", 5).unwrap(), vec![0, 1, 2, 4]);
+        assert_eq!(parse_page_range("even", 5).unwrap(), vec![1, 3]);
+        assert_eq!(parse_page_range("3-", 5).unwrap(), vec![2, 3, 4]);
+        for invalid in ["0", "6", "3-1", "1-2-3", ""] {
+            assert!(parse_page_range(invalid, 5).is_err(), "{invalid}");
+        }
+    }
     #[test]
     fn printing_preserves_mixed_sections_when_canonical_page_setup_matches() {
         let mut doc = Document::default();

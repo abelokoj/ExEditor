@@ -1,0 +1,8 @@
+{
+  "name": "ExEditor",
+  "id": "com.abelokoj.ExEditor",
+  "version": "0.3.0",
+  "rust": ".",
+  "root": "App",
+  "appearance": "system"
+}

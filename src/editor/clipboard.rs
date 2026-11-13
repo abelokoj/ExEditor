@@ -1,10 +1,9 @@
-//! Native rich clipboard adapters, adapted from WordCraft at 729cd0a5.
+//! Native clipboard adapters with NSH rich fragments.
 //! See assets/licenses/wordcraft/LICENSE-MIT.txt for the upstream notice.
 
 use super::Editor;
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
-use serde_json::json;
 #[cfg(target_os = "windows")]
 use std::io::Cursor;
 use std::{cell::RefCell, io::Read as _, path::PathBuf};
@@ -67,7 +66,7 @@ pub fn write(text: &str, html: &str, rtf: &[u8]) -> Result<()> {
 
 thread_local! {
     // One selected fragment across document tabs; native formats must still match before reuse.
-    static COPIED: RefCell<Option<(ClipboardContent, wordcraft_doc::Document)>> = const { RefCell::new(None) };
+    static COPIED: RefCell<Option<(ClipboardContent, nsh_base::rich_editor::model::Slice)>> = const { RefCell::new(None) };
 }
 
 fn same_copy(current: &ClipboardContent, copied: &ClipboardContent) -> bool {
@@ -82,40 +81,72 @@ fn same_copy(current: &ClipboardContent, copied: &ClipboardContent) -> bool {
                 .is_some_and(|html| copied.html.as_ref() == Some(html)))
 }
 
+pub(super) fn selection_content(
+    state: &nsh_base::rich_editor::state::EditorState,
+) -> Result<(String, String, Vec<u8>, nsh_base::rich_editor::model::Slice)> {
+    use nsh_base::rich_editor::formats::{fragment_to_html, slice_to_text};
+    let slice = state
+        .doc()
+        .slice(state.selection().from(), state.selection().to(), false)?;
+    let html = fragment_to_html(&slice.content, state.schema());
+    let text = slice_to_text(&slice);
+    let doc = wordcraft_formats::html::import_page(&html, &|_| None);
+    let rtf = wordcraft_formats::rtf::export(&doc).into_bytes();
+    Ok((text, html, rtf, slice))
+}
+pub(super) fn copy_state(
+    state: &nsh_base::rich_editor::state::EditorState,
+    cut: bool,
+    dispatch: &mut dyn FnMut(nsh_base::rich_editor::state::Transaction),
+) -> Result<()> {
+    let (text, html, rtf, fragment) = selection_content(state)?;
+    if text.is_empty() && html.is_empty() {
+        return Ok(());
+    }
+    write(&text, &html, &rtf)?;
+    COPIED.with_borrow_mut(|slot| {
+        *slot = Some((
+            ClipboardContent {
+                text: Some(text),
+                html: Some(html),
+                rtf: Some(rtf),
+                ..Default::default()
+            },
+            fragment,
+        ))
+    });
+    if cut {
+        let mut tr = state.tr();
+        tr.replace_selection(nsh_base::rich_editor::model::Slice::empty());
+        dispatch(tr);
+    }
+    Ok(())
+}
+
 /// Copies the selected fragment; a failed clipboard write never deletes a cut selection.
 pub fn copy(editor: &Editor, cut: bool) -> Result<()> {
     ensure!(
         !cut || !editor.is_read_only(),
         "This document is read-only."
     );
-    let copied = editor.run_command("edit.copy", &json!({}))?;
-    let text = copied["text"].as_str().unwrap_or("");
-    let html = copied["html"].as_str().unwrap_or("");
-    let rtf = copied["rtf"].as_str().unwrap_or("");
-    if text.is_empty() && html.is_empty() && rtf.is_empty() {
+    let (text, html, rtf, fragment) = editor.selected_clipboard()?;
+    if text.is_empty() && html.is_empty() {
         return Ok(());
     }
-    write(text, html, rtf.as_bytes())?;
-    let fragment = editor
-        .session()
-        .clipboard
-        .as_ref()
-        .map(|fragment| fragment.to_document());
+    write(&text, &html, &rtf)?;
     COPIED.with_borrow_mut(|slot| {
-        *slot = fragment.map(|document| {
-            (
-                ClipboardContent {
-                    text: Some(text.to_owned()),
-                    html: Some(html.to_owned()),
-                    rtf: Some(rtf.as_bytes().to_vec()),
-                    ..Default::default()
-                },
-                document,
-            )
-        });
+        *slot = Some((
+            ClipboardContent {
+                text: Some(text),
+                html: Some(html),
+                rtf: Some(rtf),
+                ..Default::default()
+            },
+            fragment,
+        ));
     });
     if cut {
-        editor.run_command("edit.cut", &json!({}))?;
+        editor.replace_current("")?;
     }
     Ok(())
 }
@@ -125,7 +156,7 @@ pub fn paste(editor: &Editor, plain: bool) -> Result<()> {
     ensure!(!editor.is_read_only(), "This document is read-only.");
     if plain || editor.is_plain() {
         let text = platform::text()?.context("The clipboard has no plain text to paste.")?;
-        editor.run_command("edit.pasteText", &json!({"text": text}))?;
+        editor.replace_current(&text)?;
         editor.note_pasted();
         return Ok(());
     }
@@ -136,7 +167,7 @@ pub fn paste(editor: &Editor, plain: bool) -> Result<()> {
             .map(|(_, document)| document.clone())
     });
     if let Some(document) = copied {
-        editor.paste_document(document)?;
+        editor.paste_slice(document)?;
     } else if !content.files.is_empty() {
         paste_files(editor, &content.files)?;
     } else if let Some(rtf) = content.rtf {
@@ -146,7 +177,7 @@ pub fn paste(editor: &Editor, plain: bool) -> Result<()> {
     } else if let Some(image) = content.image {
         paste_images(editor, vec![image])?;
     } else if let Some(text) = content.text {
-        editor.run_command("edit.pasteText", &json!({"text": text}))?;
+        editor.replace_current(&text)?;
     } else {
         bail!("The clipboard has no supported text, rich text, or image.");
     }
@@ -169,18 +200,20 @@ pub fn paste_html(editor: &Editor) -> Result<()> {
     Ok(())
 }
 
-fn checked_image(bytes: &[u8]) -> Result<()> {
+pub(super) fn checked_image(bytes: &[u8]) -> Result<()> {
     ensure!(
         bytes.len() <= MAX_IMAGE_BYTES,
         "The clipboard image exceeds the 64 MiB safety limit."
     );
-    let probe =
-        wordcraft_geom::picture::probe(bytes).context("reading the clipboard image header")?;
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .context("reading the clipboard image format")?
+        .into_dimensions()
+        .context("reading the clipboard image header")?;
     ensure!(
-        probe.width <= MAX_IMAGE_SIDE
-            && probe.height <= MAX_IMAGE_SIDE
-            && u64::from(probe.width) * u64::from(probe.height) <= MAX_IMAGE_PIXELS
-            && probe.fits(wordcraft_geom::MAX_DECODED_BYTES),
+        width <= MAX_IMAGE_SIDE
+            && height <= MAX_IMAGE_SIDE
+            && u64::from(width) * u64::from(height) <= MAX_IMAGE_PIXELS,
         "The clipboard image is too large to paste safely."
     );
     Ok(())
@@ -188,15 +221,23 @@ fn checked_image(bytes: &[u8]) -> Result<()> {
 
 fn paste_images(editor: &Editor, images: Vec<Vec<u8>>) -> Result<()> {
     // Staging validates every image first; the live document receives one undoable fragment.
-    let mut staged = wordcraft_engine::Session::new(wordcraft_doc::Document::default());
+    let mut content = Vec::new();
     for bytes in images {
         checked_image(&bytes)?;
-        staged.run(
-            "insert.picture",
-            &json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}),
-        )?;
+        let image = image::load_from_memory(&bytes).context("decoding a clipboard image")?;
+        let mut output = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut output, image::ImageFormat::Png)?;
+        content.push(serde_json::json!({"type":"image", "attrs": {"src":format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(output.into_inner())),"width":image.width(),"height":image.height()}}));
     }
-    editor.paste_document(staged.doc)
+    let session = editor.native_session();
+    let state = session.state();
+    let fragment = nsh_base::rich_editor::commands::registry::content_fragment(
+        state.schema(),
+        &serde_json::Value::Array(content),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let slice = nsh_base::rich_editor::model::Slice::new(fragment, 0, 0);
+    editor.paste_slice(slice)
 }
 
 fn paste_files(editor: &Editor, files: &[PathBuf]) -> Result<()> {

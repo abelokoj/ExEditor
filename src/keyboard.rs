@@ -1,7 +1,7 @@
-//! Shared desktop shortcut catalog and chord decoding for GPUI windows.
+//! Shared desktop shortcut catalog and chord decoding for native NSH windows.
 use std::time::{Duration, Instant};
 
-/// Keyboard modifiers shared by the native and GPUI input paths.
+/// Keyboard modifiers shared by the desktop input paths.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub control: bool,
@@ -220,17 +220,21 @@ pub struct State {
 
 impl State {
     /// The same decoder serves the editor window and menus on every desktop platform.
-    pub fn resolve_keystroke(&mut self, keystroke: &gpui_kit::Keystroke, now: Instant) -> Outcome {
+    pub fn resolve_keystroke(
+        &mut self,
+        keystroke: &nsh_core::keymap::Keystroke,
+        now: Instant,
+    ) -> Outcome {
         let m = keystroke.modifiers;
-        let modifiers = modifiers_for_key(
-            &keystroke.key,
+        self.resolve(
+            u32::from(keystroke.key.virtual_key().unwrap_or(0)),
             Modifiers {
-                control: m.control || m.platform,
+                control: m.ctrl || m.cmd,
                 shift: m.shift,
                 alt: m.alt,
             },
-        );
-        self.resolve(virtual_key(&keystroke.key).unwrap_or(0), modifiers, now)
+            now,
+        )
     }
     /// Cancels any pending chord, for example when focus changes.
     pub fn reset(&mut self) {
@@ -264,7 +268,49 @@ impl State {
     }
 }
 
+/// NSH spelling of a catalog key; keypad aliases resolve to the same native action.
+pub fn native_binding(binding: &Binding) -> Option<String> {
+    use nsh_core::keymap::Key;
+    let key = match binding.key {
+        0x6b => Key::Char('='),
+        0x6d => Key::Char('-'),
+        key => Key::from_virtual_key(key.try_into().ok()?)?,
+    };
+    let name = match key {
+        Key::Char(' ') => "space".to_string(),
+        Key::Char(c) => c.to_string(),
+        Key::Enter => "enter".into(),
+        Key::Escape => "escape".into(),
+        Key::Tab => "tab".into(),
+        Key::Backspace => "backspace".into(),
+        Key::Delete => "delete".into(),
+        Key::Insert => "insert".into(),
+        Key::Up => "up".into(),
+        Key::Down => "down".into(),
+        Key::Left => "left".into(),
+        Key::Right => "right".into(),
+        Key::Home => "home".into(),
+        Key::End => "end".into(),
+        Key::PageUp => "pageup".into(),
+        Key::PageDown => "pagedown".into(),
+        Key::F(n) => format!("f{n}"),
+    };
+    let mut parts = Vec::new();
+    if binding.modifiers.control {
+        parts.push("mod".to_string());
+    }
+    if binding.modifiers.shift {
+        parts.push("shift".to_string());
+    }
+    if binding.modifiers.alt {
+        parts.push("alt".to_string());
+    }
+    parts.push(name);
+    Some(parts.join("+"))
+}
+
 /// Windows virtual-key code for a GPUI key name or its shifted character.
+#[cfg(test)]
 pub fn virtual_key(key: &str) -> Option<u32> {
     Some(match key {
         "tab" => 0x09,
@@ -333,7 +379,8 @@ pub fn virtual_key(key: &str) -> Option<u32> {
     })
 }
 
-/// Restores Shift when GPUI represents shifted punctuation as a character.
+/// Restores Shift when an older string-key fixture uses shifted punctuation.
+#[cfg(test)]
 pub fn modifiers_for_key(key: &str, mut modifiers: Modifiers) -> Modifiers {
     // GPUI clears Shift after converting Windows OEM keys to their shifted character.
     if matches!(
@@ -367,6 +414,31 @@ pub fn modifiers_for_key(key: &str, mut modifiers: Modifiers) -> Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_nsh_bindings_keep_shortcut_actions_on_every_desktop() {
+        for apple in [false, true] {
+            for binding in BINDINGS {
+                let name = native_binding(binding).expect("every catalog key has an nsh spelling");
+                let key = nsh_core::keymap::Keystroke::parse_with(&name, apple)
+                    .expect("native key spelling");
+                let now = Instant::now();
+                let mut state = State::default();
+                if binding.chord {
+                    state.resolve(0x4b, CTRL, now);
+                }
+                assert_eq!(
+                    state.resolve_keystroke(&key, now),
+                    if binding.action == "chord" {
+                        Outcome::Prefix
+                    } else {
+                        Outcome::Action(binding.action)
+                    },
+                    "{name}; Apple keys={apple}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn catalog_has_no_ambiguous_combinations_or_labels() {
@@ -625,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn gpui_key_aliases_cover_the_catalog() {
+    fn key_aliases_cover_the_catalog() {
         for key in b'a'..=b'z' {
             assert_eq!(
                 virtual_key(&char::from(key).to_string()),
@@ -672,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn shifted_gpui_punctuation_resolves_like_native_keys() {
+    fn shifted_punctuation_resolves_like_native_keys() {
         for (name, native_key, action) in [
             (">", 0xbe, "bigger"),
             ("<", 0xbc, "smaller"),
