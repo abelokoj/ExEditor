@@ -4,10 +4,7 @@ use crate::{
     ui::{self, Palette, px},
 };
 use gpui_kit::base::Button as MenuButton;
-use gpui_kit::component::{
-    checkbox::Checkbox,
-    input::{Input, InputState},
-};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
@@ -563,10 +560,12 @@ impl Render for FormView {
                                             .child(field.label.clone()),
                                     )
                                     .child(if field.toggle {
-                                        Checkbox::new(("field-toggle", index))
-                                            .checked(value == "true")
-                                            .label(field.label.clone())
-                                            .on_click(move |checked, window, cx| {
+                                        crate::ui::checkbox(
+                                            ("field-toggle", index),
+                                            field.label.clone(),
+                                            value == "true",
+                                            c,
+                                            move |checked, window, cx| {
                                                 input.update(cx, |state, cx| {
                                                     state.set_value(
                                                         if *checked { "true" } else { "false" },
@@ -574,10 +573,14 @@ impl Render for FormView {
                                                         cx,
                                                     )
                                                 });
-                                            })
-                                            .into_any_element()
+                                            },
+                                        )
+                                        .into_any_element()
                                     } else {
-                                        div().flex_1().child(Input::new(state)).into_any_element()
+                                        div()
+                                            .flex_1()
+                                            .child(crate::ui::input(Input::new(state), 30., 12.))
+                                            .into_any_element()
                                     })
                             }),
                     ),

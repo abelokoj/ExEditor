@@ -10,7 +10,6 @@ use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     Sizable as _, Size,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    checkbox::Checkbox,
     input::{Input, InputState},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -191,8 +190,7 @@ pub fn open(options: ProofingOptions, commands: Commands, colors: Palette, cx: &
 impl LanguageTools {
     fn button(&self, id: &'static str, label: &'static str, cx: &App) -> Button {
         let c = self.colors;
-        Button::new(id)
-            .label(label)
+        ui::button(id, label, 12.)
             .with_size(Size::Small)
             .h(px(26.))
             .rounded(px(4.))
@@ -269,7 +267,7 @@ impl Render for LanguageTools {
             (SpellingBackend::Divvunspell, "Divvunspell", "engine-divvun"),
             (SpellingBackend::Voikko, "Voikko", "engine-voikko"),
         ];
-        div().id("language-tools").size_full().flex().flex_col().bg(rgb(c.chrome)).text_color(rgb(c.ink)).text_size(px(12.)).rounded(px(8.)).border_1().border_color(rgb(c.border)).overflow_hidden()
+        div().id("language-tools").font_family(crate::fonts::INTER_FONT).size_full().flex().flex_col().bg(rgb(c.chrome)).text_color(rgb(c.ink)).text_size(px(12.)).rounded(px(8.)).border_1().border_color(rgb(c.border)).overflow_hidden()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" { window.remove_window(); cx.stop_propagation(); }
                 else if event.keystroke.key == "enter" && event.keystroke.modifiers.control { this.submit(window, cx); cx.stop_propagation(); }
@@ -278,17 +276,17 @@ impl Render for LanguageTools {
                 .child(div().flex_1().child("Spelling and Grammar"))
                 .child(self.button("close-language-tools", "Close", cx).on_click(|_, window, _| window.remove_window())))
             .child(div().id("language-tools-content").flex_1().min_h_0().overflow_y_scroll().p(px(18.)).flex().flex_col().gap(px(13.))
-                .child(Checkbox::new("harper-grammar").label("Check English grammar with Harper").checked(self.draft.grammar).with_size(Size::Small).text_color(rgb(c.ink)).on_change(cx.listener(|this, value, _, cx| { this.draft.grammar = *value; this.error = None; cx.notify(); })))
+                .child(ui::checkbox("harper-grammar","Check English grammar with Harper",self.draft.grammar,c,cx.listener(|this,value,_,cx|{this.draft.grammar=*value;this.error=None;cx.notify();})))
                 .child(div().text_color(rgb(c.muted)).child("Harper is built in and works offline. Turn it off for non-English documents."))
                 .child(div().child("Spelling engine"))
                 .child(div().flex().gap(px(6.)).children(engines.into_iter().map(|(engine, label, id)| {
                     self.button(id, label, cx).selected(self.draft.spelling == engine).on_click(cx.listener(move |this, _, _, cx| { this.draft.spelling = engine; this.error = None; cx.notify(); }))
                 })))
                 .child(div().flex().items_center().gap(px(10.)).child(div().w(px(125.)).child("Spelling language:"))
-                    .child(div().flex_1().child(Input::new(&self.language).with_size(Size::Small))))
+                    .child(div().flex_1().child(ui::input(Input::new(&self.language).with_size(Size::Small),26.,12.))))
                 .child(div().text_color(rgb(c.muted)).child(hint))
                 .when(self.draft.spelling != SpellingBackend::System, |panel| panel.child(div().flex().items_center().gap(px(8.))
-                    .child(div().flex_1().child(Input::new(&self.dictionary).with_size(Size::Small)))
+                    .child(div().flex_1().child(ui::input(Input::new(&self.dictionary).with_size(Size::Small),26.,12.)))
                     .child(self.button("browse-dictionary", "Browse…", cx).on_click(cx.listener(|this, _, window, cx| this.browse(window, cx))))))
                 .when_some(self.error.clone(), |panel, error| panel.child(div().child(error))))
             .child(div().flex_shrink_0().border_t_1().border_color(rgb(c.border)).p(px(12.)).flex().items_center().justify_end().gap(px(8.))

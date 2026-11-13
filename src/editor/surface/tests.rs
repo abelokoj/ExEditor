@@ -352,3 +352,55 @@ fn moving_the_caret_does_not_open_suggestions_and_manual_completion_survives_the
     cx.simulate_keystrokes("tab");
     assert_eq!(editor.text().unwrap(), "example example");
 }
+
+#[gpui_kit::test]
+fn long_document_tiles_release_gpu_entries_when_scrolled_and_invalidated(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let editor = Rc::new(Editor::new().unwrap());
+    editor
+        .set_text(&"A line in a long Markdown-like document.\n".repeat(850))
+        .unwrap();
+    editor.set_wrap_to_page(true);
+    let (view, cx, _) = setup(cx, editor.clone(), false);
+    cx.update(|window, cx| window.render_frame(cx));
+    assert!(editor.layout().pages.len() > 10);
+    let old = view.update(cx, |view, cx| {
+        view.surface
+            .read(cx)
+            .cache
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    assert!(!old.is_empty());
+    cx.update(|window, _| assert!(old.iter().all(|image| window.has_image_atlas_entry(image))));
+    view.update(cx, |view, cx| {
+        view.surface.update(cx, |surface, cx| {
+            surface.scroll.y = gpui_kit::px(4_000.);
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.render_frame(cx));
+    cx.update(|window, _| {
+        assert!(
+            old.iter().all(|image| !window.has_image_atlas_entry(image)),
+            "keeping CPU Arcs alive must not keep off-screen GPU entries"
+        )
+    });
+    let old = view.update(cx, |view, cx| {
+        view.surface
+            .read(cx)
+            .cache
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    editor.set_background(0x202530);
+    cx.update(|window, cx| window.render_frame(cx));
+    cx.update(|window, _| {
+        assert!(
+            old.iter().all(|image| !window.has_image_atlas_entry(image)),
+            "re-layout and theme changes must release the old GPU tiles"
+        )
+    });
+}

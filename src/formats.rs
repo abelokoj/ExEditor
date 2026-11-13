@@ -57,7 +57,7 @@ pub(crate) fn export(rtf: &[u8], format: DocumentFormat) -> Result<Vec<u8>> {
 }
 
 /// Renders Markdown locally; external images are never downloaded.
-pub(crate) fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>> {
+pub(crate) fn markdown_document(source: &str, directory: &Path) -> Result<Document> {
     use pulldown_cmark::{Options, Parser, html};
     ensure!(
         source.len() as u64 <= MAX_DOCUMENT_BYTES,
@@ -69,9 +69,10 @@ pub(crate) fn markdown_to_rtf(source: &str, directory: &Path) -> Result<Vec<u8>>
         | Options::ENABLE_FOOTNOTES;
     let mut markup = String::new();
     html::push_html(&mut markup, Parser::new_ext(source, options));
-    let document =
+    let mut document =
         wordcraft_formats::html::import_page(&markup, &|src| local_image(directory, src));
-    Ok(wordcraft_formats::rtf::export(&document).into_bytes())
+    document.ensure_nonempty();
+    Ok(document)
 }
 
 /// Clipboard markup has no permission to read neighbouring files or remote media.
@@ -156,6 +157,33 @@ fn local_image(directory: &Path, source: &str) -> Option<Arc<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_markdown_import_keeps_formatting_tables_and_local_media_in_the_native_model() {
+        let root = tempfile::tempdir().unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(root.path().join("picture.png"))
+            .unwrap();
+        let text = format!(
+            "# Heading\n\n**bold café 😀** and [link](https://example.com)\n\n![picture](picture.png)\n\n| A | B |\n|---|---|\n| cell | value |\n\n{}",
+            "Paragraph preserved in a long document.\n\n".repeat(700)
+        );
+        let doc = markdown_document(&text, root.path()).unwrap();
+        assert!(
+            doc.plain_text(wordcraft_doc::StoryRef::Body)
+                .contains("bold café 😀")
+        );
+        assert!(doc.body.len() > 700);
+        assert!(!doc.media.is_empty());
+        assert!(
+            doc.body
+                .iter()
+                .any(|block| matches!(&**block, wordcraft_doc::Block::Table(_)))
+        );
+        let html = wordcraft_formats::html::export(&doc);
+        assert!(html.contains("https://example.com"));
+        assert!(html.contains("picture") || html.contains("<img"));
+    }
 
     #[test]
     fn html_and_docx_share_the_editor_model_and_keep_rich_runs() {

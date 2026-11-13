@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-13T17:45:47-05:00 - Control alignment and Markdown memory changes (source snapshot; not built)
+
+- Centered shared checkbox/radio marks, labels, button content and text fields across settings, language tools, dialogs, the color panel and command palette while retaining keyboard and accessibility behavior.
+- Replaced Markdown's intermediate RTF conversion with direct native-document import; release hidden-source layout caches and explicitly evict off-screen or invalidated page tiles from the GPU atlas. Added regression source for preview state, long Markdown and tile lifetimes; no measured memory improvement is claimed yet.
+- Collected seven common-language Hunspell archives and Finnish Voikko data with notices/licenses and source provenance. Dictionary downloads, the catalog and Divvun collection are incomplete. The requested nsh migration has not yet changed the application source in this snapshot.
+- Validation performed: source/diff inspection and archive metadata/hash inspection. No compilation, Rust tests or application launch were performed. Published with [skip ci] to preserve the user's no-build instruction. Private notes and downloaded builds remain excluded.
+
 ## 2026-11-07T20:31:36-05:00 - Optional font build ready for user testing (recording time; documentation-only follow-up)
 
 - GitHub run [42418107228](https://github.com/abelokoj/ExEditor/actions/runs/42418107228) completed successfully for application source 9cbdea3f3651ed43c5a84ae1364caf237d88fd59 on Windows x64, Linux x64 and macOS arm64. Formatting, strict diagnostics, all 154 Windows / 140 Linux / 140 macOS regressions, one separate real font-download/cache test per platform, and executable checks excluding all three optional font payloads passed. Windows installer shell integration also passed.

@@ -149,3 +149,35 @@ fn navigation_clearing_pending_style_does_not_dirty_a_saved_document() {
     editor.run_command("caret.left", &json!({})).unwrap();
     assert!(!editor.is_modified());
 }
+
+#[test]
+fn markdown_preview_preserves_the_source_history_and_releases_hidden_layout() {
+    let source = editor("draft");
+    source.select_range(5..5).unwrap();
+    source.replace_current(" unsaved").unwrap();
+    let snapshot = source.snapshot();
+    let layout = source.layout();
+    let weak = Arc::downgrade(&layout);
+    drop(layout);
+    let document = wordcraft_doc::Document::from_text("Formatted preview 😀");
+    let preview = source.preview(document).unwrap();
+    source.set_visible(false);
+    assert!(
+        weak.upgrade().is_none(),
+        "hidden Markdown source must not retain a second full layout"
+    );
+    assert_eq!(source.snapshot(), snapshot);
+    assert!(source.is_modified());
+    assert!(!source.is_read_only());
+    assert!(preview.is_read_only());
+    assert!(!preview.is_plain());
+    assert_eq!(preview.text().unwrap(), "Formatted preview 😀");
+    source.execute(EditCommand::Undo).unwrap();
+    assert_eq!(
+        source.text().unwrap(),
+        "draft",
+        "switching view must preserve source undo"
+    );
+    source.set_visible(true);
+    assert!(!source.layout().pages.is_empty());
+}

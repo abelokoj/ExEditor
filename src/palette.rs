@@ -189,7 +189,7 @@ impl Render for CommandPalette {
             .text_size(px(13.)).capture_key_down(cx.listener(Self::key))
             .child(div().h(px(58.)).flex_shrink_0().flex().items_center().gap(px(10.)).px(px(12.))
                 .child(div().text_color(rgb(c.muted)).text_size(px(18.)).child(">"))
-                .child(div().flex_1().min_w(px(0.)).child(Input::new(&self.input)
+                .child(div().flex_1().min_w(px(0.)).child(ui::input(Input::new(&self.input),32.,13.)
                     .appearance(false).bordered(false).focus_bordered(false).with_size(Size::Medium)))
                 .child(ui::control("close-command-palette", "Esc", 35., false, c)
                     .accessibility_label("Close Command Palette").on_click(|_, window, _| window.remove_window())))

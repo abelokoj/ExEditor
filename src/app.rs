@@ -826,9 +826,9 @@ impl EditorWindow {
             .as_deref()
             .and_then(Path::parent)
             .unwrap_or(Path::new("."));
-        let rtf = crate::formats::markdown_to_rtf(&source, directory)?;
+        let document = crate::formats::markdown_document(&source, directory)?;
         let editor = self.editor()?;
-        let preview = Rc::new(editor.preview(&rtf)?);
+        let preview = Rc::new(editor.preview(document)?);
         // Keep the original editor buffer alive: text, undo, selection and dirty state.
         self.doc.dirty |= editor.is_modified();
         self.doc.last_text = preview.text()?;

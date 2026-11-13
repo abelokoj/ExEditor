@@ -102,6 +102,16 @@ pub(crate) struct EditorSurface {
 impl EditorSurface {
     pub(crate) fn new(editor: Rc<Editor>, cx: &mut Context<Self>) -> Self {
         let (x, y) = editor.view_scroll();
+        cx.on_release(|this, cx| {
+            let images = std::mem::take(&mut this.cache);
+            // The owning window is back in App.windows after the current update finishes.
+            cx.defer(move |cx| {
+                for image in images.into_values() {
+                    cx.drop_image(image, None);
+                }
+            });
+        })
+        .detach();
         let ticker = cx.spawn(async move |view, cx| {
             loop {
                 cx.background_executor()
@@ -186,13 +196,14 @@ impl EditorSurface {
             .set_viewport_width(f32::from(self.viewport().size.width) / scale);
         let layout = self.editor.layout();
         let layout_id = Arc::as_ptr(&layout) as usize;
-        if self.cache_revision != state.revision
+        let revision = self.editor.revision();
+        if self.cache_revision != revision
             || self.cache_layout != layout_id
             || (self.raster_scale - raster_scale).abs() > 0.001
         {
-            self.cache.clear();
+            self.retain_tiles(|_| false, window);
             self.document = Some(self.editor.display_snapshot());
-            self.cache_revision = state.revision;
+            self.cache_revision = revision;
             self.cache_layout = layout_id;
             self.raster_scale = raster_scale;
         }
@@ -1321,6 +1332,17 @@ impl EditorSurface {
         }
     }
 
+    fn retain_tiles(&mut self, keep: impl Fn(&TileKey) -> bool, window: &mut Window) {
+        self.cache.retain(|key, image| {
+            if keep(key) {
+                return true;
+            }
+            // Dropping the CPU Arc alone leaves the uploaded pixels in GPUI's GPU atlas.
+            let _ = window.drop_image(image.clone());
+            false
+        });
+    }
+
     fn paint_pages(&mut self, window: &mut Window) {
         let Some(document) = self.document.as_ref() else {
             return;
@@ -1406,8 +1428,8 @@ impl EditorSurface {
                 }
             }
         }
-        // Keep only viewport tiles: memory remains bounded even in a many-page document.
-        self.cache.retain(|key, _| visible_keys.contains(key));
+        // Evict both CPU and GPU copies when a tile leaves the viewport.
+        self.retain_tiles(|key| visible_keys.contains(key), window);
     }
 }
 

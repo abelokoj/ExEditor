@@ -711,10 +711,16 @@ impl Editor {
         )?;
         Ok(())
     }
-    pub fn preview(&self, rtf: &[u8]) -> Result<Self> {
+    pub fn preview(&self, document: Document) -> Result<Self> {
         let preview = Self::new()?;
-        preview.set_rtf(rtf)?;
+        preview.set_document(document)?;
         *preview.display.borrow_mut() = self.display.borrow().clone();
+        {
+            let mut display = preview.display.borrow_mut();
+            display.syntax = Vec::new();
+            display.proofing = Vec::new();
+            display.plain = false;
+        }
         preview.set_read_only(true);
         preview.mark_saved();
         Ok(preview)
@@ -742,6 +748,11 @@ impl Editor {
     pub fn set_visible(&self, visible: bool) {
         if self.display.borrow().visible != visible {
             self.display.borrow_mut().visible = visible;
+            if !visible {
+                self.rendered.borrow_mut().take();
+                self.mapped.borrow_mut().take();
+                self.layout_cache.borrow_mut().clear();
+            }
             self.invalidate_display();
         }
     }

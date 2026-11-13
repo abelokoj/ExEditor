@@ -9,9 +9,7 @@ use crate::{
 use gpui_kit::component::{
     Disableable as _, Sizable as _, Size,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    checkbox::Checkbox,
     input::{Input, InputState},
-    radio::Radio,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 
@@ -133,8 +131,7 @@ fn input(
 impl Settings {
     fn button(&self, id: &'static str, label: &'static str, cx: &App) -> Button {
         let c = self.colors;
-        Button::new(id)
-            .label(label)
+        crate::ui::button(id, label, 12.)
             .with_size(Size::Small)
             .rounded(px(4.))
             .custom(
@@ -154,18 +151,18 @@ impl Settings {
         checked: bool,
         update: fn(&mut Preferences, bool),
         cx: &Context<Self>,
-    ) -> Checkbox {
-        Checkbox::new(id)
-            .label(label)
-            .checked(checked)
-            .with_size(Size::Small)
-            .text_size(px(12.))
-            .text_color(rgb(self.colors.ink))
-            .on_change(cx.listener(move |this, checked, _, cx| {
+    ) -> gpui_kit::base::Checkbox {
+        crate::ui::checkbox(
+            id,
+            label,
+            checked,
+            self.colors,
+            cx.listener(move |this, checked, _, cx| {
                 update(&mut this.draft, *checked);
                 this.error = None;
                 cx.notify();
-            }))
+            }),
+        )
     }
     fn heading(&self, text: &'static str) -> Div {
         div()
@@ -222,16 +219,16 @@ impl Settings {
                         .items_center()
                         .gap(px(10.))
                         .pl(px(118.))
-                        .child(
-                            div()
-                                .w(px(185.))
-                                .child(Input::new(font).with_size(Size::Small)),
-                        )
-                        .child(
-                            div()
-                                .w(px(58.))
-                                .child(Input::new(size).with_size(Size::Small)),
-                        )
+                        .child(div().w(px(185.)).child(crate::ui::input(
+                            Input::new(font).with_size(Size::Small),
+                            26.,
+                            12.,
+                        )))
+                        .child(div().w(px(58.)).child(crate::ui::input(
+                            Input::new(size).with_size(Size::Small),
+                            26.,
+                            12.,
+                        )))
                         .child(div().text_color(rgb(self.colors.muted)).child("pt")),
                 )
             })
@@ -374,11 +371,11 @@ impl Settings {
                             .items_center()
                             .gap(px(10.))
                             .child(div().w(px(185.)).child("New document name prefix:"))
-                            .child(
-                                div().flex_1().child(
-                                    Input::new(&self.untitled_prefix).with_size(Size::Small),
-                                ),
-                            ),
+                            .child(div().flex_1().child(crate::ui::input(
+                                Input::new(&self.untitled_prefix).with_size(Size::Small),
+                                26.,
+                                12.,
+                            ))),
                     )
                     .child(
                         div()
@@ -411,28 +408,26 @@ impl Settings {
                                     .flex_col()
                                     .gap(px(9.))
                                     .w(px(150.))
-                                    .child(
-                                        Radio::new("default-rich-text")
-                                            .label("Rich text")
-                                            .checked(self.draft.rich_text)
-                                            .with_size(Size::Small)
-                                            .text_size(px(12.))
-                                            .on_change(cx.listener(|this, _, _, cx| {
-                                                this.draft.rich_text = true;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Radio::new("default-plain-text")
-                                            .label("Plain text")
-                                            .checked(!self.draft.rich_text)
-                                            .with_size(Size::Small)
-                                            .text_size(px(12.))
-                                            .on_change(cx.listener(|this, _, _, cx| {
-                                                this.draft.rich_text = false;
-                                                cx.notify();
-                                            })),
-                                    ),
+                                    .child(crate::ui::radio(
+                                        "default-rich-text",
+                                        "Rich text",
+                                        self.draft.rich_text,
+                                        c,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.draft.rich_text = true;
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(crate::ui::radio(
+                                        "default-plain-text",
+                                        "Plain text",
+                                        !self.draft.rich_text,
+                                        c,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.draft.rich_text = false;
+                                            cx.notify();
+                                        }),
+                                    )),
                             )
                             .child(self.checkbox(
                                 "default-wrap",
@@ -557,26 +552,22 @@ impl Settings {
                 .child(self.heading("Plain Text File Encoding"))
                 .child(div().text_size(px(12.)).child("Use this encoding when saving new plain-text documents:"))
                 .children(encodings.into_iter().enumerate().map(|(index, encoding)| {
-                    Radio::new(("default-encoding", index)).label(encoding.label())
-                        .checked(self.draft.default_encoding == encoding).with_size(Size::Small).text_size(px(12.))
-                        .on_change(cx.listener(move |this, _, _, cx| {
-                            this.draft.default_encoding = encoding; cx.notify();
-                        }))
+                    crate::ui::radio(("default-encoding",index),encoding.label(),self.draft.default_encoding==encoding,c,
+                        cx.listener(move |this,_,_,cx|{this.draft.default_encoding=encoding;cx.notify();}))
                 })))
             .child(div().flex().flex_col().gap(px(9.))
                 .child(self.heading("Document Recovery"))
                 .child(div().flex().items_center().gap(px(10.))
                     .child("Additional checkpoint every")
-                    .child(div().w(px(64.)).child(Input::new(&self.recovery).with_size(Size::Small)))
+                    .child(div().w(px(64.)).child(crate::ui::input(Input::new(&self.recovery).with_size(Size::Small),26.,12.)))
                     .child("seconds"))
                 .child(div().text_size(px(11.)).text_color(rgb(c.muted))
                     .child("Unsaved buffers are protected as you edit and restored automatically at startup. This interval adds periodic checkpoints; it never changes your saved files.")))
             .child(div().flex().flex_col().gap(px(10.))
                 .child(self.heading("Appearance"))
                 .child(div().flex().gap(px(22.)).children(appearances.into_iter().enumerate().map(|(index, (appearance, label))| {
-                    Radio::new(("default-appearance", index)).label(label)
-                        .checked(self.draft.appearance == appearance).with_size(Size::Small).text_size(px(12.))
-                        .on_change(cx.listener(move |this, _, _, cx| { this.draft.appearance = appearance; cx.notify(); }))
+                    crate::ui::radio(("default-appearance",index),label,self.draft.appearance==appearance,c,
+                        cx.listener(move |this,_,_,cx|{this.draft.appearance=appearance;cx.notify();}))
                 }))))
     }
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -482,8 +482,7 @@ impl ColorsPanel {
 
 impl ColorsPanel {
     fn button(&self, id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-        Button::new(id)
-            .label(label)
+        crate::ui::button(id, label, 12.)
             .with_size(Size::Small)
             .compact()
             .rounded(px(6.))
@@ -634,7 +633,7 @@ impl ColorsPanel {
             .gap(px(10.))
             .pt(px(8.))
             .child(
-                Input::new(&self.search)
+                crate::ui::input(Input::new(&self.search), 28., 12.)
                     .with_size(Size::Small)
                     .cleanable(true),
             )
@@ -1123,7 +1122,8 @@ impl Render for ColorsPanel {
                             .p(px(2.))
                             .h(px(44.))
                             .child(
-                                Input::new(&self.code)
+                                crate::ui::input(Input::new(&self.code), 40., 18.)
+                                    .h_full()
                                     .appearance(false)
                                     .bordered(false)
                                     .focus_bordered(false)
