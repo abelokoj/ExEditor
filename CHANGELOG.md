@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T18:09:24-05:00 - Distinguish DWM rounding from region rounding in native evidence (local diagnostics)
+
+- The early native test required an explicit window region, although DWM-rounded framed windows can correctly use the corner preference without a region. Record native class, region and DWM corner state, and accept either supported rounding mechanism. Do not yet claim the earlier native run rounded successfully.
+- Add opt-in GitHub-only compatibility diagnostics and exercise both main-keyboard and keypad zoom before collecting remaining evidence, to locate the remaining keypad issue without another slow release link. The diagnostic input state is isolated to the runner. Source and workflow inspection plus formatting only locally; no app launch/build/tests on this device.
+
 ## 2026-11-14T17:55:24-05:00 - Validate native controls before the slow release link (local source/CI)
 
 - Run 43648937377 passed strict diagnostics, all 166 ordinary Windows regressions and macOS/Linux packaging. Native stderr no longer contains the redraw panics after batching. The keypad screenshot still did not change, so no installer was produced; selection and wheel evidence from earlier runs remain distinct from this failed keypad check.

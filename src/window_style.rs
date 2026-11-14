@@ -55,6 +55,9 @@ mod windows {
         let mut handles = Vec::new();
         // SAFETY: collect only appends to the Vec, which remains alive throughout enumeration.
         unsafe { EnumWindows(Some(collect), &mut handles as *mut Vec<HWND> as LPARAM) };
+        if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+            eprintln!("Native compatibility: {} NSH windows", handles.len());
+        }
         SHAPES.with(|shapes| {
             let mut shapes = shapes.borrow_mut();
             shapes.retain(|handle, _| handles.iter().any(|hwnd| *hwnd as usize == *handle));

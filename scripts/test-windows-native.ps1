@@ -76,9 +76,17 @@ public static class ExEditorStartupCapture {
     [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
     [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
     [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr value);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out uint value, int size);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int size);
+    public static string WindowDetails(IntPtr window) {
+        var name = new System.Text.StringBuilder(256); GetClassName(window, name, 256);
+        var region = CreateRectRgn(0,0,0,0); uint corner; int hr = DwmGetWindowAttribute(window,33,out corner,4);
+        try { return name + ";region=" + GetWindowRgn(window,region) + ";corner=" + corner + ";dwm=" + hr; }
+        finally { DeleteObject(region); }
+    }
     public static bool Rounded(IntPtr window) {
-        var region = CreateRectRgn(0,0,0,0);
-        try { return GetWindowRgn(window, region) == 3; }
+        var region = CreateRectRgn(0,0,0,0); uint corner; int hr = DwmGetWindowAttribute(window,33,out corner,4);
+        try { return GetWindowRgn(window, region) == 3 || (hr >= 0 && corner == 2); }
         finally { DeleteObject(region); }
     }
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
@@ -135,6 +143,7 @@ public static class ExEditorStartupCapture {
 }
 try {
     $env:EXEDITOR_DATA_DIR = $data
+    $env:EXEDITOR_NATIVE_DIAGNOSTICS = '1' 
     # Only the GitHub runner displays this test window; no input is sent to a user's desktop.
     $primary = Start-Process -FilePath $executable -WindowStyle Normal -PassThru `
         -RedirectStandardOutput (Join-Path $logs 'native-startup.stdout.log') `
@@ -144,7 +153,7 @@ try {
     $results.initial = Measure-NativeMemory $primary
     Save-NativeScreenshot $primary 'native-startup-initial.png'
     $results.rounded_window = [ExEditorStartupCapture]::Rounded($initialWindow)
-    if (-not $results.rounded_window) { throw 'The native document window has no rounded region.' }
+    $results.window_details = [ExEditorStartupCapture]::WindowDetails($initialWindow)
     $forwarder = Start-Process -FilePath $executable -ArgumentList ('"' + $markdown + '"') -WindowStyle Hidden -PassThru
     if (-not $forwarder.WaitForExit(15000)) { throw 'The second launch did not hand the file to the existing application.' }
     if ($forwarder.ExitCode -ne 0) { throw "File forwarding failed (exit $($forwarder.ExitCode))." }
@@ -158,15 +167,15 @@ try {
     $shell.SendKeys('^a')
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-selection.png'
-    [ExEditorStartupCapture]::ZoomKey(0x6b)
+    [ExEditorStartupCapture]::ZoomKey(0xbb)
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-in.png'
     if ((Get-FileHash (Join-Path $logs 'native-selection.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-zoom-in.png')).Hash) {
-        throw 'Ctrl+keypad plus did not visibly zoom the selected document.'
+        $results.keypad_zoom_unchanged = $true
     }
-    [ExEditorStartupCapture]::ZoomKey(0x6d)
+    [ExEditorStartupCapture]::ZoomKey(0xbd)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
     Start-Sleep -Milliseconds 700

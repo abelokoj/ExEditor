@@ -868,6 +868,9 @@ mod keypad {
                 if unsafe { GetClassNameW(msg.hwnd, class.as_mut_ptr(), 32) } == 9
                     && class[..9] == [78, 115, 104, 87, 105, 110, 100, 111, 119]
                 {
+                    if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                        eprintln!("Keypad alias: {} -> {}", msg.wParam, alias(msg.wParam));
+                    }
                     msg.wParam = alias(msg.wParam);
                 }
             }
@@ -899,6 +902,9 @@ mod keypad {
                     std::io::Error::last_os_error()
                 );
             } else {
+                if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                    eprintln!("Keypad compatibility installed on thread {thread}");
+                }
                 hooks.0.insert(thread, hook);
             }
         });
