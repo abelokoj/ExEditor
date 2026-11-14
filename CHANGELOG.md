@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-14T17:19:43-05:00 - Verify native selection and correct keypad test input (local CI correction)
+
+- GitHub run 43644881669 passed all 166 ordinary Windows regressions, optional font/dictionary download checks, release compilation and portable-package checks using the huacnlee Cargo fork. Native startup, same-window Markdown handoff and blue selection were observed in downloaded screenshots; the initial window visibly uses 12 pt and right-side controls. The run stopped because WScript rejected the keypad ADD command syntax, before the installer step.
+- Replace that unsupported test-script syntax with Windows native key input for Ctrl+keypad plus/minus, and capture Ctrl+wheel zoom too. Inputs remain guarded to the isolated Windows GitHub runner. Include the one-percent custom-position slider fix and newest-compatible-cache selection in this follow-up.
+- Validation locally: source inspection, formatting, artifact SHA-256 verification and visual inspection of GitHub screenshots. Corrected keyboard inputs, dark appearance, Settings shortcut and final installer await the next GitHub run. No local build, source tests, installer execution or app launch.
+
+## 2026-11-14T16:55:26-05:00 - Match custom window-position slider steps to saved precision (local source)
+
+- Prefer the newest compatible Windows build cache so the initial diagnostics-only cache does not repeatedly hide later completed release artifacts. Preserve all old caches.
+- Use one-percent slider steps for the integer custom window-control position. Keyboard arrows now advance to a representable saved value instead of being rounded back from a tenth-percent change; color-picker slider precision is preserved.
+- GitHub run 43644881669 passed all 166 ordinary Windows regressions after correcting runtime staging, and its release build is running. Separate macOS/Linux jobs from run 43643434753 successfully packaged the otherwise identical app source. This slider refinement has only been inspected/formatted locally and still needs GitHub validation. No local build, source tests or app launch.
+
 ## 2026-11-14T16:39:15-05:00 - Stage native test libraries beside actual Cargo artifacts (local CI correction)
 
 - GitHub run 43643434753 passed strict diagnostics on all three platforms. Windows executed 168 regressions: 165 passed, one failed and two network checks were intentionally ignored. The failing Voikko ABI check found no DLL beside the fork's relocated test executable; the app's packaged-runtime restriction remains intact.

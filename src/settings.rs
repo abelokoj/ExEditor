@@ -307,7 +307,7 @@ impl Settings {
                 let colors = self.colors;
                 move || view().gap(px(4.))
                     .child(ui::slider("Window controls: position from left to right", move || draft.with(|p| f64::from(p.window_controls_percent)), colors,
-                        move |value| draft.update(|p| p.window_controls_percent = value.round().clamp(0.,100.) as u16)))
+                        move |value| draft.update(|p| p.window_controls_percent = value.round().clamp(0.,100.) as u16)).step(1.))
                     .child(ui::hint(move || format!("Position: {}% from the left", draft.with(|p| p.window_controls_percent)), colors))
             }))
             .into_element()

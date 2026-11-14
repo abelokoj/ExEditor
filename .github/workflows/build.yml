@@ -59,8 +59,9 @@ jobs:
             ~/.cargo/git/db
             ~/.cargo/targets
             target
-          key: windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-${{ github.run_id }}
           restore-keys: |
+            windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-
             windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Resolve source dependency changes on GitHub

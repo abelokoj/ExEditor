@@ -72,6 +72,25 @@ public static class ExEditorStartupCapture {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int metric);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
+    public static void ZoomKey(byte key) {
+        keybd_event(0x11, 0, 0, UIntPtr.Zero);
+        try {
+            keybd_event(key, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(50);
+            keybd_event(key, 0, 2, UIntPtr.Zero);
+        } finally { keybd_event(0x11, 0, 2, UIntPtr.Zero); }
+    }
+    public static void WheelZoom(IntPtr window) {
+        Rect rect; if (!GetWindowRect(window, out rect)) throw new InvalidOperationException("Missing test window");
+        int x = rect.Left + 100, y = rect.Top + 200;
+        keybd_event(0x11, 0, 0, UIntPtr.Zero);
+        try {
+            System.Threading.Thread.Sleep(80);
+            SendMessage(window, 0x020A, (UIntPtr)((120 << 16) | 8), (IntPtr)((y << 16) | (x & 0xffff)));
+        } finally { keybd_event(0x11, 0, 2, UIntPtr.Zero); }
+    }
 }
 "@
         }
@@ -128,16 +147,19 @@ try {
     $shell.SendKeys('^a')
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-selection.png'
-    $shell.SendKeys('^{ADD}')
-    $shell.SendKeys('^{ADD}')
-    $shell.SendKeys('^{ADD}')
+    [ExEditorStartupCapture]::ZoomKey(0x6b)
+    [ExEditorStartupCapture]::ZoomKey(0x6b)
+    [ExEditorStartupCapture]::ZoomKey(0x6b)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-in.png'
-    $shell.SendKeys('^{SUBTRACT}')
-    $shell.SendKeys('^{SUBTRACT}')
-    $shell.SendKeys('^{SUBTRACT}')
+    [ExEditorStartupCapture]::ZoomKey(0x6d)
+    [ExEditorStartupCapture]::ZoomKey(0x6d)
+    [ExEditorStartupCapture]::ZoomKey(0x6d)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-reset.png'
+    [ExEditorStartupCapture]::WheelZoom($initialWindow)
+    Start-Sleep -Milliseconds 700
+    Save-NativeScreenshot $primary 'native-wheel-zoom.png'
     $shell.SendKeys('^,')
     Start-Sleep -Milliseconds 1000
     $settingsWindow = [ExEditorStartupCapture]::FindWindow('NshWindow', 'ExEditor Settings')
