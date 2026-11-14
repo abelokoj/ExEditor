@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T18:45:03-05:00 - Deliver real Ctrl+wheel input to the GitHub native window (local CI correction)
+
+- Run 43653470059 passed diagnostics, 166 ordinary Windows regressions, optional downloads, the full small-fixture native control pass, release compilation and macOS packaging. Release screenshots confirm rounded corners, main/keypad zoom, visible selection and populated 12 pt Settings fields in the development package. The long-fixture release check stopped at its wheel-frame assertion, before dark-mode/installer gates.
+- The synchronous test wheel message could overtake queued modifier input while the larger document was drawing. Use queued native mouse-wheel input at the document, allow modifier delivery and separate zoom keys, and allow the larger document's frame to settle before captures. Keep the same strict changed-frame, Settings, corner and no-panic requirements. The application source is unchanged by this correction.
+- Validation locally: GitHub artifact SHA-256 checks and screenshot/log inspection only. Corrected runner input, light/dark release checks and installer remain pending on GitHub; no local build, source tests or app launch.
+
 ## 2026-11-14T18:28:44-05:00 - Keep native rounded regions through nsh frame updates (local source)
 
 - GitHub diagnostics confirmed the correct window received DWM rounding, but nsh's later frame application reset it to the platform default. Apply the explicit rounded region to every nonmaximized app window and only reuse a cached shape while that region actually exists. Keep maximized windows rectangular and release query regions correctly.

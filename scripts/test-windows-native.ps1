@@ -90,22 +90,27 @@ public static class ExEditorStartupCapture {
         finally { DeleteObject(region); }
     }
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
     public static void ZoomKey(byte key) {
         keybd_event(0x11, 0, 0, UIntPtr.Zero);
         try {
+            System.Threading.Thread.Sleep(150);
             keybd_event(key, 0, 0, UIntPtr.Zero);
             System.Threading.Thread.Sleep(50);
             keybd_event(key, 0, 2, UIntPtr.Zero);
         } finally { keybd_event(0x11, 0, 2, UIntPtr.Zero); }
+        System.Threading.Thread.Sleep(250);
     }
     public static void WheelZoom(IntPtr window) {
         Rect rect; if (!GetWindowRect(window, out rect)) throw new InvalidOperationException("Missing test window");
         int x = rect.Left + 100, y = rect.Top + 200;
         keybd_event(0x11, 0, 0, UIntPtr.Zero);
         try {
-            System.Threading.Thread.Sleep(80);
-            SendMessage(window, 0x020A, (UIntPtr)((120 << 16) | 8), (IntPtr)((y << 16) | (x & 0xffff)));
+            SetCursorPos(x, y);
+            System.Threading.Thread.Sleep(250);
+            mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(500);
         } finally { keybd_event(0x11, 0, 2, UIntPtr.Zero); }
     }
 }
@@ -166,7 +171,7 @@ try {
     if (-not $shell.AppActivate($primary.Id)) { throw 'The GitHub test window could not be activated.' }
     # These inputs are sent only to the isolated app on the GitHub runner.
     $shell.SendKeys('^a')
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-selection.png'
     [ExEditorStartupCapture]::ZoomKey(0xbb)
     Start-Sleep -Milliseconds 400
@@ -176,7 +181,7 @@ try {
     }
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     [ExEditorStartupCapture]::ZoomKey(0x6b)
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-zoom-in.png'
     if ((Get-FileHash (Join-Path $logs 'native-main-key-zoom.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-zoom-in.png')).Hash) {
         throw 'Ctrl+keypad plus did not visibly zoom the selected document.'
@@ -184,10 +189,10 @@ try {
     [ExEditorStartupCapture]::ZoomKey(0xbd)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-zoom-reset.png'
     [ExEditorStartupCapture]::WheelZoom($initialWindow)
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-wheel-zoom.png'
     if ((Get-FileHash (Join-Path $logs 'native-zoom-reset.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-wheel-zoom.png')).Hash) {
         throw 'Ctrl+wheel did not visibly zoom the selected document.'
