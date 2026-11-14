@@ -774,6 +774,12 @@ fn bind_shortcuts(
         let model = model.clone();
         let window = window.clone();
         let context = context.clone();
+        if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some()
+            && matches!(binding.action, "zoom-in" | "zoom-out" | "preferences")
+        {
+            eprintln!("Bind native key {name}: {:?}", parsed);
+        }
+        let diagnostic_name = name.clone();
         on_key_with(
             &name,
             KeyOptions {
@@ -783,6 +789,9 @@ fn bind_shortcuts(
             },
             move |_| {
                 batch(|| {
+                    if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                        eprintln!("Native key received: {diagnostic_name}");
+                    }
                     let mut model = model.borrow_mut();
                     match model.chord.resolve_keystroke(&parsed, Instant::now()) {
                         Outcome::Action(action) => {

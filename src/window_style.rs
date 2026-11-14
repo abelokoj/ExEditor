@@ -72,6 +72,9 @@ mod windows {
                 // SAFETY: querying this process's native window.
                 let maximized = unsafe { IsZoomed(hwnd) } != 0;
                 let shape = (width, height, maximized);
+                if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                    eprintln!("Native shape {}: {shape:?}", hwnd as usize);
+                }
                 if width <= 0 || height <= 0 || shapes.get(&(hwnd as usize)) == Some(&shape) {
                     continue;
                 }
@@ -80,6 +83,9 @@ mod windows {
                 let rounded = unsafe {
                     DwmSetWindowAttribute(hwnd, 33, (&preference as *const u32).cast::<c_void>(), 4)
                 } >= 0;
+                if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                    eprintln!("Native corner preference set: {rounded}");
+                }
                 // Frameless WS_POPUP windows need a region even when DWM accepts the preference.
                 // SAFETY: reading style and DPI does not mutate or retain the handle.
                 let frameless =
@@ -96,7 +102,11 @@ mod windows {
                     if !region.is_null() {
                         // On success Windows owns the region; on failure we must release it.
                         // SAFETY: hwnd and region refer to live native resources.
-                        if unsafe { SetWindowRgn(hwnd, region, 1) } == 0 {
+                        let applied = unsafe { SetWindowRgn(hwnd, region, 1) };
+                        if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
+                            eprintln!("Native region applied: {applied}");
+                        }
+                        if applied == 0 {
                             // SAFETY: ownership was not transferred when SetWindowRgn failed.
                             unsafe { DeleteObject(region) };
                         }

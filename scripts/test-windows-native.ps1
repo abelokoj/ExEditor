@@ -81,7 +81,7 @@ public static class ExEditorStartupCapture {
     public static string WindowDetails(IntPtr window) {
         var name = new System.Text.StringBuilder(256); GetClassName(window, name, 256);
         var region = CreateRectRgn(0,0,0,0); uint corner; int hr = DwmGetWindowAttribute(window,33,out corner,4);
-        try { return name + ";region=" + GetWindowRgn(window,region) + ";corner=" + corner + ";dwm=" + hr; }
+        try { return window.ToInt64() + ";" + name + ";region=" + GetWindowRgn(window,region) + ";corner=" + corner + ";dwm=" + hr; }
         finally { DeleteObject(region); }
     }
     public static bool Rounded(IntPtr window) {

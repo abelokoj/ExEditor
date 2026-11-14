@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T18:19:45-05:00 - Trace the remaining native key and corner mismatch (local diagnostics)
+
+- The early GitHub check confirmed keypad aliases are installed and firing, but neither main-keyboard nor keypad zoom reached visible text changes. Ctrl+wheel changed text size. The window still reported default DWM corners and no region. Add opt-in key registration/dispatch and native shape-operation results, including the captured window identity, to locate these remaining failures precisely. No runtime fix or installer is claimed yet.
+- Validation: downloaded GitHub screenshots, JSON state and native stderr; source formatting only locally. Further native validation remains GitHub-only.
+
 ## 2026-11-14T18:09:24-05:00 - Distinguish DWM rounding from region rounding in native evidence (local diagnostics)
 
 - The early native test required an explicit window region, although DWM-rounded framed windows can correctly use the corner preference without a region. Record native class, region and DWM corner state, and accept either supported rounding mechanism. Do not yet claim the earlier native run rounded successfully.
