@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T14:59:30-05:00 - Record installed Cargo fork and project execution rules (local documentation)
+
+- Added root AGENTS.md with the user's huacnlee/cargo build preference: use the installed Cargo directly, preserve its shared caches and pinned Rust compiler, avoid routine clean/custom target directories, and retain existing build/test gates. Recorded existing GitHub-only compilation, Windows-only test execution, dist artifact storage and private-note exclusions.
+- Validation performed: read the upstream build guidance and inspected the installed executable/version. The active Windows command resolves to the huacnlee fork 0.102.0-9 (Cargo 1.101.0). No Cargo installation, local application build or source tests were performed; the running GitHub validation predates this documentation update.
+
 ## 2026-11-14T14:43:04-05:00 - Remove obsolete migration paths and resolve strict diagnostics (local correction)
 
 - GitHub run 43632913380 passed the prior callback type errors and reached strict unused-code/style diagnostics. Removed unused compatibility IME/shortcut queues, unused viewport setter, duplicate SVG assets/helpers and an unconstructed tab-stop command. Native nsh continues to own IME/input and platform color sampling; coordinate helpers remain in tests. Connected document paper colors to the shared palette.
