@@ -1,0 +1,990 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "id": "hunspell-en-us",
+      "name": "English (US)",
+      "backend": "Hunspell",
+      "language": "en-US",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "en_US.dic",
+      "license": "SCOWL / BSD-style notices",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/en",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-en-us-libreoffice-c0865a85eb67.zip",
+        "bytes": 206277,
+        "sha256": "714eb8c9238119555b66c983201b83ce007994931bdad6f0dc81a0f59f53b04c",
+        "parts": [
+          {
+            "file": "hunspell-en-us-libreoffice-c0865a85eb67.zip",
+            "bytes": 206277,
+            "sha256": "714eb8c9238119555b66c983201b83ce007994931bdad6f0dc81a0f59f53b04c"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 523,
+          "sha256": "dfa06d3d8ade1e7c27b4e882df6adc78f07931cf5606eee44e00bf800ce3b2ae"
+        },
+        {
+          "path": "en_US.aff",
+          "bytes": 3205,
+          "sha256": "e746c882dd6f303c2c46e7452804b9201115a6942cfeb15f18f8edf774d2e24e"
+        },
+        {
+          "path": "en_US.dic",
+          "bytes": 551762,
+          "sha256": "f0b1a234bd178bdd01875b2a392a9647f888b8fe879f79c52aae62c2759b3647"
+        },
+        {
+          "path": "notices/README.txt",
+          "bytes": 2642,
+          "sha256": "b8dd4d2ace5358adf5e6ddfac720871188e6f211cf56af97db631f4ee53e0ff3"
+        },
+        {
+          "path": "notices/README_en_US.txt",
+          "bytes": 15732,
+          "sha256": "168b4c01cb841f766a72f310b065c04d09cff46376c37a81d799593ce751c371"
+        },
+        {
+          "path": "notices/license.txt",
+          "bytes": 15122,
+          "sha256": "df84246204e3c54cd24aebbc23714235f5fc41d754d53b65444a2afbf070130f"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-en-gb",
+      "name": "English (UK)",
+      "backend": "Hunspell",
+      "language": "en-GB",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "en_GB.dic",
+      "license": "LGPL-3.0-or-later",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/en",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-en-gb-libreoffice-c0865a85eb67.zip",
+        "bytes": 479938,
+        "sha256": "7bae700bbab2f3a79b72d2431fa26573b373c188185693a5e73c98b84081041a",
+        "parts": [
+          {
+            "file": "hunspell-en-gb-libreoffice-c0865a85eb67.zip",
+            "bytes": 479938,
+            "sha256": "7bae700bbab2f3a79b72d2431fa26573b373c188185693a5e73c98b84081041a"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 515,
+          "sha256": "207a1d9bed8e38a8f2aa9b65f00b2ce9722d49fd7f4f6bfc15e1e7f309535c2a"
+        },
+        {
+          "path": "en_GB.aff",
+          "bytes": 44158,
+          "sha256": "0fd6ed120ef28957847d98ba5149b117e27116cf81b5aa36208453f6755a36fd"
+        },
+        {
+          "path": "en_GB.dic",
+          "bytes": 1230571,
+          "sha256": "04e90f34f5263bf26780e9c4a442e9ad16584e227af49ddd1b3b21b01df5b29c"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "notices/README.txt",
+          "bytes": 2642,
+          "sha256": "b8dd4d2ace5358adf5e6ddfac720871188e6f211cf56af97db631f4ee53e0ff3"
+        },
+        {
+          "path": "notices/README_en_GB.txt",
+          "bytes": 10644,
+          "sha256": "18b5833de60a52ffcb6e5b6b5048bb5a5d910acfecd5b096985b77058223880c"
+        },
+        {
+          "path": "notices/license.txt",
+          "bytes": 15122,
+          "sha256": "df84246204e3c54cd24aebbc23714235f5fc41d754d53b65444a2afbf070130f"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-fr-fr",
+      "name": "French",
+      "backend": "Hunspell",
+      "language": "fr-FR",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "fr.dic",
+      "license": "MPL-2.0",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/fr_FR/dictionaries",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-fr-fr-libreoffice-c0865a85eb67.zip",
+        "bytes": 347241,
+        "sha256": "13b85f73532510a4ed11d3245daf41d70228932adbe01c6f918d7300c7bdbe2d",
+        "parts": [
+          {
+            "file": "hunspell-fr-fr-libreoffice-c0865a85eb67.zip",
+            "bytes": 347241,
+            "sha256": "13b85f73532510a4ed11d3245daf41d70228932adbe01c6f918d7300c7bdbe2d"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 541,
+          "sha256": "cfb66a584a4fdc37c4de5710f5f4d9337341da84c0136b44f5775c2e4a0545c2"
+        },
+        {
+          "path": "fr.aff",
+          "bytes": 199870,
+          "sha256": "c176610cd5dc4846806a65ddd029f422d87978bf58f224aa44222662a16a2de5"
+        },
+        {
+          "path": "fr.dic",
+          "bytes": 1236490,
+          "sha256": "b78a868e31dd6e373b6c3217969afb898a9acde828a5e7ef97308da42218c88c"
+        },
+        {
+          "path": "licenses/MPL-2.0.txt",
+          "bytes": 16727,
+          "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+        },
+        {
+          "path": "notices/README_dict_fr.txt",
+          "bytes": 2758,
+          "sha256": "4a25abf740ad6ba5e8d0cfc0d2ffadc3c13c303f8fe389f323b061a389350f83"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-de-de",
+      "name": "German",
+      "backend": "Hunspell",
+      "language": "de-DE",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "de_DE_frami.dic",
+      "license": "GPL-2.0-only OR GPL-3.0-only",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/de",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-de-de-libreoffice-c0865a85eb67.zip",
+        "bytes": 1265406,
+        "sha256": "b5d6489b8c4024b411a9eeafbee1b716f8bdbc5f926afb6d6e949241e1e0ac40",
+        "parts": [
+          {
+            "file": "hunspell-de-de-libreoffice-c0865a85eb67.zip",
+            "bytes": 1265406,
+            "sha256": "b5d6489b8c4024b411a9eeafbee1b716f8bdbc5f926afb6d6e949241e1e0ac40"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 532,
+          "sha256": "0687e3b5738632c32c9e8bda7aa03ee3fa38351417002894640af8a98f478872"
+        },
+        {
+          "path": "de_DE_frami.aff",
+          "bytes": 19067,
+          "sha256": "646bf3333ac69c23e9d794533ee5241d6f755c359e8fe10a648f87613743d594"
+        },
+        {
+          "path": "de_DE_frami.dic",
+          "bytes": 4356903,
+          "sha256": "4ca3c958b0e5545910999bc246f668840bf8ede3df8e5e6790d05edd5a586c38"
+        },
+        {
+          "path": "licenses/GPL-2.0-only.txt",
+          "bytes": 17337,
+          "sha256": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "notices/COPYING_GPLv2",
+          "bytes": 17992,
+          "sha256": "e7431ac20e815b6797369e802f9e4bb1b0082485060d8b096235f035d741bd89"
+        },
+        {
+          "path": "notices/COPYING_GPLv3",
+          "bytes": 35147,
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "path": "notices/README_de_DE_frami.txt",
+          "bytes": 752,
+          "sha256": "c141f4f79c428b7348b5012836f4ad3db4d124f288f15effc22696dc876512ae"
+        },
+        {
+          "path": "notices/README_extension_owner.txt",
+          "bytes": 1444,
+          "sha256": "7662cbc363fdee12bc03a5295148587bb76923c121792a401115e654fea37b5c"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-es-es",
+      "name": "Spanish",
+      "backend": "Hunspell",
+      "language": "es-ES",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "es_ES.dic",
+      "license": "GPL-3.0-or-later OR LGPL-3.0-or-later OR MPL-1.1-or-later",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/es",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-es-es-libreoffice-c0865a85eb67.zip",
+        "bytes": 271799,
+        "sha256": "46b4d6ba43cb80487b8304599294c2877ab51b76b2bc8231dae0457b08c2338c",
+        "parts": [
+          {
+            "file": "hunspell-es-es-libreoffice-c0865a85eb67.zip",
+            "bytes": 271799,
+            "sha256": "46b4d6ba43cb80487b8304599294c2877ab51b76b2bc8231dae0457b08c2338c"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 550,
+          "sha256": "7495fd80425bf861da1a942e54e31a0f184df1465aeb2807a01e0b6153045de8"
+        },
+        {
+          "path": "es_ES.aff",
+          "bytes": 169202,
+          "sha256": "e73a9bf8e1383f4986a5dc9e2fbed49371c0c61f511c626d15586bd433c1cad9"
+        },
+        {
+          "path": "es_ES.dic",
+          "bytes": 715989,
+          "sha256": "6975dddec3d5d2c676069537bc67b4b5f786c65c5d4cf6703a82acf779ac9ec1"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "licenses/MPL-1.1.txt",
+          "bytes": 23669,
+          "sha256": "6214f8b1300bb9f37b16ebc146f8f61af0187e0025042ff95c8b3030744a8795"
+        },
+        {
+          "path": "notices/LICENSE.md",
+          "bytes": 991,
+          "sha256": "2b70fd5cb8d3b34cc6ae322c969557a2270b99017594addb2531ef5ffd9e1b17"
+        },
+        {
+          "path": "notices/README_hunspell_es.txt",
+          "bytes": 2615,
+          "sha256": "0b5c39a863ecb61f5c5631ec1cd977667ef9bda6da6f90e80e9fc0edcbfadd97"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-pt-br",
+      "name": "Portuguese (Brazil)",
+      "backend": "Hunspell",
+      "language": "pt-BR",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "pt_BR.dic",
+      "license": "LGPL-3.0 / MPL (see included notices)",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/pt_BR",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-pt-br-libreoffice-c0865a85eb67.zip",
+        "bytes": 1424488,
+        "sha256": "b7bf547a2f87d16e1a345c0e1ed63bf8e228970b2f9c64dcabfd58a3d7a473fa",
+        "parts": [
+          {
+            "file": "hunspell-pt-br-libreoffice-c0865a85eb67.zip",
+            "bytes": 1424488,
+            "sha256": "b7bf547a2f87d16e1a345c0e1ed63bf8e228970b2f9c64dcabfd58a3d7a473fa"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 551,
+          "sha256": "f0823315ab4ccef18ce30e3fd1f6a70805db8869144a3ae3225d13c288f0197b"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "licenses/MPL-1.1.txt",
+          "bytes": 23669,
+          "sha256": "6214f8b1300bb9f37b16ebc146f8f61af0187e0025042ff95c8b3030744a8795"
+        },
+        {
+          "path": "notices/README_en.txt",
+          "bytes": 1461,
+          "sha256": "bb064f3db7ba5f5536da7d079773f692c5f928822e8aebc3d78259ff6cceb9e5"
+        },
+        {
+          "path": "notices/README_pt_BR.txt",
+          "bytes": 16348,
+          "sha256": "9974ce691fdc1fe731717d7a2dc668244405fdc2bf9bf3367eb9b29e85177c88"
+        },
+        {
+          "path": "pt_BR.aff",
+          "bytes": 979792,
+          "sha256": "21d8ad2a769a60e17e2b5ea4ef11d4d593a58b9e2a82d642ef82d6a4c5523865"
+        },
+        {
+          "path": "pt_BR.dic",
+          "bytes": 4477695,
+          "sha256": "a38bfb26b68ece2834e79fe83e48d5792652970ace12db89d1b9674bf9933183"
+        }
+      ]
+    },
+    {
+      "id": "hunspell-pt-pt",
+      "name": "Portuguese (Portugal)",
+      "backend": "Hunspell",
+      "language": "pt-PT",
+      "version": "libreoffice-c0865a85eb67",
+      "primary": "pt_PT.dic",
+      "license": "GPL-2.0-or-later / BSD notices",
+      "source_url": "https://github.com/LibreOffice/dictionaries/tree/c0865a85eb67dc377f2cf8e8fe2c4fa9e53f0dcb/pt_PT",
+      "pre_release": false,
+      "archive": {
+        "file": "hunspell-pt-pt-libreoffice-c0865a85eb67.zip",
+        "bytes": 244156,
+        "sha256": "8cc45df7eefc373239132d152405c2f52d9c29c5ac81fc61536f532f1d0b2837",
+        "parts": [
+          {
+            "file": "hunspell-pt-pt-libreoffice-c0865a85eb67.zip",
+            "bytes": 244156,
+            "sha256": "8cc45df7eefc373239132d152405c2f52d9c29c5ac81fc61536f532f1d0b2837"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 546,
+          "sha256": "4b2cc42fd3b90b590b4671c17d8a063d249fbebf3024e3a1e603879b78142838"
+        },
+        {
+          "path": "licenses/GPL-2.0-only.txt",
+          "bytes": 17337,
+          "sha256": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3"
+        },
+        {
+          "path": "notices/LICENSES.txt",
+          "bytes": 1830,
+          "sha256": "d2c1cfe2e2dd81c651aec3fda5d1b4b4e7679b9e04f8cdc37586e521837384d1"
+        },
+        {
+          "path": "notices/README_pt_PT.txt",
+          "bytes": 1106,
+          "sha256": "36de7d88a406a4947bf646a64145f00827566808988632e3df969aa95776060c"
+        },
+        {
+          "path": "pt_PT.aff",
+          "bytes": 95089,
+          "sha256": "975a209fcc892cb382fa5f34a28c391a39668661ce373ae071287809c5fcae24"
+        },
+        {
+          "path": "pt_PT.dic",
+          "bytes": 1485977,
+          "sha256": "e29ba2d7aa8a2ad43e9cb46ac6473064b661545c87002aea90e18899d98d3cc9"
+        }
+      ]
+    },
+    {
+      "id": "voikko-fi",
+      "name": "Finnish",
+      "backend": "Voikko",
+      "language": "fi",
+      "version": "2.6",
+      "primary": ".",
+      "license": "GPL-2.0-or-later",
+      "source_url": "https://github.com/wasi-master/wmkeyboard-data/tree/2c05d4a419a983724ca2479c87f04e712bc5559d/spell/voikko",
+      "pre_release": false,
+      "archive": {
+        "file": "voikko-fi-2.6.zip",
+        "bytes": 2376711,
+        "sha256": "4f50255dffbe2e97b104652b852b6e86ea3e567c63c413487c6f5b2c0f8262bc",
+        "parts": [
+          {
+            "file": "voikko-fi-2.6.zip",
+            "bytes": 2376711,
+            "sha256": "4f50255dffbe2e97b104652b852b6e86ea3e567c63c413487c6f5b2c0f8262bc"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "5/mor-standard/autocorr.vfst",
+          "bytes": 11360,
+          "sha256": "e06326e84b72e240d1b7047f0e6a899b5e98e8a0a3bb05aa803a66dbf7377ce1"
+        },
+        {
+          "path": "5/mor-standard/index.txt",
+          "bytes": 333,
+          "sha256": "3346dd04965c51b9cd2c8ec2f10e99c478e66c826074003d706a11efbf11e363"
+        },
+        {
+          "path": "5/mor-standard/mor.vfst",
+          "bytes": 3999288,
+          "sha256": "95b816605ca670e813cff20c9bc9767b4a52928ab662d6336373cd387a51446a"
+        },
+        {
+          "path": "NOTICE.txt",
+          "bytes": 615,
+          "sha256": "c967d0e34080ec40df171b2ab03e701e8c91833ddd715f75b77635fcd01b8fb9"
+        },
+        {
+          "path": "licenses/COPYING",
+          "bytes": 17999,
+          "sha256": "0697339c7ea3f0db662b2835ab137d43413ab4bb080fa5caeb394bc0acbae150"
+        },
+        {
+          "path": "notices/WMKeyboard-README.md",
+          "bytes": 1690,
+          "sha256": "a1f297a061a36515d53c083819ba6c036dcddbb8b197c379cfc85948772fb1d5"
+        },
+        {
+          "path": "source/WMKeyboard-LICENSE",
+          "bytes": 1068,
+          "sha256": "546660fbf66e930b4eef9528309460d971640825b6af2cae84b8afd105be398b"
+        },
+        {
+          "path": "source/WMKeyboard-build-dict.sh",
+          "bytes": 2981,
+          "sha256": "471f5eb269634a5ad21fd5883d800b0a2a75e9619bc2d282555a9c9dac392594"
+        },
+        {
+          "path": "source/voikko-fi-2.6.tar.gz",
+          "bytes": 709151,
+          "sha256": "5c147c1c92323941e5847b5c46d00b35ff6b62dc3cf348516bc0fbdc87340220"
+        },
+        {
+          "path": "source/voikko-fi-2.6.tar.gz.asc",
+          "bytes": 833,
+          "sha256": "2d060ed234a432dbc9d9f3953d28e457c8f939e2bc3833acd269a060b145ddab"
+        }
+      ]
+    },
+    {
+      "id": "divvun-se",
+      "name": "North Sami",
+      "backend": "Divvunspell",
+      "language": "se",
+      "version": "4.5.2-build.614",
+      "primary": "se.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-sme/tree/bb53144d60688ae7c551a8bbf4b821586492a5ce",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-se-4.5.2-build.614.zip",
+        "bytes": 123831098,
+        "sha256": "58511e28b22dc351d22850824db9a7b23d8dbb0ded9a027bc5f6be23941f0487",
+        "parts": [
+          {
+            "file": "divvun-se-4.5.2-build.614.zip.part01",
+            "bytes": 52428800,
+            "sha256": "4d29990ba52cb19c717719b869e59a101c8869830d16c1ccedfafb7485d0cd30"
+          },
+          {
+            "file": "divvun-se-4.5.2-build.614.zip.part02",
+            "bytes": 52428800,
+            "sha256": "c20b25176b3950c03b4da1ab8b95b46a1846b5946d670bbeabd83babdf94f83c"
+          },
+          {
+            "file": "divvun-se-4.5.2-build.614.zip.part03",
+            "bytes": 18973498,
+            "sha256": "f0bac2845dcaa1d3b5cf382ed384aca750c0a5c9c30f4e4b7f9316dce7e418c4"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 739,
+          "sha256": "4252704f7967d5d72fb2660041f7122fb94cf162369dbe5bec9069fc6acc43e2"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "se.bhfst",
+          "bytes": 79173472,
+          "sha256": "018a9ad7ad134602c67f483f4a1c9e92585ddbb65658cf00522255b0e71ba624"
+        },
+        {
+          "path": "source/lang-sme-bb53144d60688ae7c551a8bbf4b821586492a5ce.tar.gz",
+          "bytes": 107030003,
+          "sha256": "65e357bc956fedfcbf36d5acb1f5199ce3ea03a6b527c66b194c526d4459073f"
+        }
+      ]
+    },
+    {
+      "id": "divvun-sma",
+      "name": "South Sami",
+      "backend": "Divvunspell",
+      "language": "sma",
+      "version": "4.7.0-build.468",
+      "primary": "sma.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-sma/tree/082bf51dd92c5e78b452ccc619de46da9ab0a093",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-sma-4.7.0-build.468.zip",
+        "bytes": 28533655,
+        "sha256": "77f622d0b50c2c2576bd5eb413ef80807e128c1377f32c2f51ec0350421e2a1f",
+        "parts": [
+          {
+            "file": "divvun-sma-4.7.0-build.468.zip",
+            "bytes": 28533655,
+            "sha256": "77f622d0b50c2c2576bd5eb413ef80807e128c1377f32c2f51ec0350421e2a1f"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 739,
+          "sha256": "0987bc5d3b10c1ec4e4c2d44cb071b6c9253c5bb2f7d02b782fb6c1366d22859"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "sma.bhfst",
+          "bytes": 24940176,
+          "sha256": "a7aef0adf1ac48c429aeadbb3c70a336a8ebe3b35f904d719b14e4793e5516ed"
+        },
+        {
+          "path": "source/lang-sma-082bf51dd92c5e78b452ccc619de46da9ab0a093.tar.gz",
+          "bytes": 22806547,
+          "sha256": "6cbcc1a58fe41a9e36950bf703b1dbaa714ba47d37f6ee980a16261ca45ca2ff"
+        }
+      ]
+    },
+    {
+      "id": "divvun-smj",
+      "name": "Lule Sami",
+      "backend": "Divvunspell",
+      "language": "smj",
+      "version": "4.5.1-build.40",
+      "primary": "smj.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-smj/tree/47c412018c42b1ef39aa12b82e1adafe56da2e33",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-smj-4.5.1-build.40.zip",
+        "bytes": 32549380,
+        "sha256": "cfd2bd04a6a421345987c180eece62d199f574307a3258968ac61375269a690f",
+        "parts": [
+          {
+            "file": "divvun-smj-4.5.1-build.40.zip",
+            "bytes": 32549380,
+            "sha256": "cfd2bd04a6a421345987c180eece62d199f574307a3258968ac61375269a690f"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 736,
+          "sha256": "c484d5fa18b9cc09083264486e99bae71beb8a43b42c8f77a9d95c1c0e978537"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "smj.bhfst",
+          "bytes": 86522320,
+          "sha256": "56f5b6a94692902c424967c6b8f6a53cbf7bead07ffb8f7a19a33e2a25b1e892"
+        },
+        {
+          "path": "source/lang-smj-47c412018c42b1ef39aa12b82e1adafe56da2e33.tar.gz",
+          "bytes": 14397740,
+          "sha256": "0042b14fde6fe85f89adecaf1ccc33b92a599d185da11bddb3a4dcc8eca5491b"
+        }
+      ]
+    },
+    {
+      "id": "divvun-smn",
+      "name": "Inari Sami",
+      "backend": "Divvunspell",
+      "language": "smn",
+      "version": "1.2.1-build.60",
+      "primary": "smn.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-smn/tree/93774b48be6ef44bdabda20325a5d2e581566b58",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-smn-1.2.1-build.60.zip",
+        "bytes": 54975338,
+        "sha256": "5ce827ce7bf1d1360537e45f5c3e8ab17cf634bf1046e1996db586a72cbab646",
+        "parts": [
+          {
+            "file": "divvun-smn-1.2.1-build.60.zip.part01",
+            "bytes": 52428800,
+            "sha256": "96e29844a89529094b3afa579413c3f23737effe8b59853116c81ea14a28b7a1"
+          },
+          {
+            "file": "divvun-smn-1.2.1-build.60.zip.part02",
+            "bytes": 2546538,
+            "sha256": "3b1e33462b591105bb6372a2448fca23b519d81276b5840475b5b0efb6e682a3"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 737,
+          "sha256": "34ad4769a77033023bdfbff9191a4d87d2104f0dd6bcfe24e9dfa1c5605240bf"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "smn.bhfst",
+          "bytes": 62318384,
+          "sha256": "c59579759ff3c4f7dfb76085c7b1d290f74338e8365dffda0c30cb9d5d1996bc"
+        },
+        {
+          "path": "source/lang-smn-93774b48be6ef44bdabda20325a5d2e581566b58.tar.gz",
+          "bytes": 41046686,
+          "sha256": "df08bd2235bed9c60dd62c2b4aa5e40ae9f54dc9009aee2249d1cbd212d99f3f"
+        }
+      ]
+    },
+    {
+      "id": "divvun-sms",
+      "name": "Skolt Sami",
+      "backend": "Divvunspell",
+      "language": "sms",
+      "version": "1.0.2-build.93",
+      "primary": "sms.bhfst",
+      "license": "LGPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-sms/tree/7ed13acc8e7822f97bf5c0ad0b5cb7b99fa91e66",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-sms-1.0.2-build.93.zip",
+        "bytes": 37503776,
+        "sha256": "9dff04aefd746450766c0acf4786c337ef606609fe8a4eac83d5fa30390febe9",
+        "parts": [
+          {
+            "file": "divvun-sms-1.0.2-build.93.zip",
+            "bytes": 37503776,
+            "sha256": "9dff04aefd746450766c0acf4786c337ef606609fe8a4eac83d5fa30390febe9"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 738,
+          "sha256": "b5406eebeb6774e0c4726ba61ac2719cfe862140aff1fa148ef461721ea48045"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "sms.bhfst",
+          "bytes": 107304664,
+          "sha256": "120a76c770bec01716bcfe112c0a2e1ffd51ab730307e33685b7f84faee22551"
+        },
+        {
+          "path": "source/lang-sms-7ed13acc8e7822f97bf5c0ad0b5cb7b99fa91e66.tar.gz",
+          "bytes": 12470109,
+          "sha256": "e63f3737b3451879ea605fe46b4222d4587df8ccb0ea14c02552ec857f159de2"
+        }
+      ]
+    },
+    {
+      "id": "divvun-kl",
+      "name": "Greenlandic",
+      "backend": "Divvunspell",
+      "language": "kl",
+      "version": "1.0.3-build.398",
+      "primary": "kl.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-kal/tree/2cdb3d785a73b3d35e466ad7f2d98b6236932aa9",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-kl-1.0.3-build.398.zip",
+        "bytes": 33134578,
+        "sha256": "6bf874ca42769525b6e2650b8888fd9fb1b52f6d976f9dd01400695a6c686da8",
+        "parts": [
+          {
+            "file": "divvun-kl-1.0.3-build.398.zip",
+            "bytes": 33134578,
+            "sha256": "6bf874ca42769525b6e2650b8888fd9fb1b52f6d976f9dd01400695a6c686da8"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 740,
+          "sha256": "4599429a03f2ae7f7f637fd57b673472770ccf075f0535560757783a800aa106"
+        },
+        {
+          "path": "kl.bhfst",
+          "bytes": 94303600,
+          "sha256": "f3226b042a7c2b7d533bcea9fb8456620eea7c79ff771614b5601c2aaee9de8c"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "source/lang-kal-2cdb3d785a73b3d35e466ad7f2d98b6236932aa9.tar.gz",
+          "bytes": 11251472,
+          "sha256": "0356dcfa912dffe0e1d41f5fb4fda69b966a0eb81e648b3b12397f5452a53752"
+        }
+      ]
+    },
+    {
+      "id": "divvun-fo",
+      "name": "Faroese",
+      "backend": "Divvunspell",
+      "language": "fo",
+      "version": "1.3.1-build.44",
+      "primary": "fo.bhfst",
+      "license": "GPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-fao/tree/87a6555edf0c678d64ea04e9f100a8612240489c",
+      "pre_release": false,
+      "archive": {
+        "file": "divvun-fo-1.3.1-build.44.zip",
+        "bytes": 40771939,
+        "sha256": "20b495eed409fa543e0d72cd89d2392532a62901e7fb9c2501e0d6fb0be83df0",
+        "parts": [
+          {
+            "file": "divvun-fo-1.3.1-build.44.zip",
+            "bytes": 40771939,
+            "sha256": "20b495eed409fa543e0d72cd89d2392532a62901e7fb9c2501e0d6fb0be83df0"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 734,
+          "sha256": "8e0c671b5826f59974091f2696c39e58d85b771c94aa0232e188b43dd5a197ae"
+        },
+        {
+          "path": "fo.bhfst",
+          "bytes": 34140232,
+          "sha256": "a35ac4b226359edce71af6ac761c124cf403d73173461dca3b60229a633af0ec"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "source/lang-fao-87a6555edf0c678d64ea04e9f100a8612240489c.tar.gz",
+          "bytes": 33130847,
+          "sha256": "9a3f61c49cf19d75f2d02daf7bfd0b216f32cea3697422f332b01af33c300c45"
+        }
+      ]
+    },
+    {
+      "id": "divvun-olo",
+      "name": "Livvi Karelian",
+      "backend": "Divvunspell",
+      "language": "olo",
+      "version": "0.1.4-build.76",
+      "primary": "olo.bhfst",
+      "license": "LGPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-olo/tree/8549c8a3863be12a7f9d48d2035762cd7cc0b717",
+      "pre_release": true,
+      "archive": {
+        "file": "divvun-olo-0.1.4-build.76.zip",
+        "bytes": 3450368,
+        "sha256": "7acb9603cbc7d334b9ae0ac51d723a21b7fe96b6cf82f519768e744b56e1eb20",
+        "parts": [
+          {
+            "file": "divvun-olo-0.1.4-build.76.zip",
+            "bytes": 3450368,
+            "sha256": "7acb9603cbc7d334b9ae0ac51d723a21b7fe96b6cf82f519768e744b56e1eb20"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 742,
+          "sha256": "e3f8ed1e58437bada6f4403bef1c4f8055350135f4cd7900f17fea4f09990f5f"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "olo.bhfst",
+          "bytes": 9165632,
+          "sha256": "d35aee89f1ae1b117d30dba310715564e263a91fcebcac2739462537dd2e7380"
+        },
+        {
+          "path": "source/lang-olo-8549c8a3863be12a7f9d48d2035762cd7cc0b717.tar.gz",
+          "bytes": 1732955,
+          "sha256": "e246a698096e2adc845f77f6a65a8c19f345dbcb602e4bb74c0d69a7f0919dd3"
+        }
+      ]
+    },
+    {
+      "id": "divvun-fkv",
+      "name": "Kven",
+      "backend": "Divvunspell",
+      "language": "fkv",
+      "version": "0.2.1-build.198",
+      "primary": "fkv.bhfst",
+      "license": "LGPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-fkv/tree/dfb43f5137585c14792127e86899575651199f0d",
+      "pre_release": true,
+      "archive": {
+        "file": "divvun-fkv-0.2.1-build.198.zip",
+        "bytes": 24379177,
+        "sha256": "f4db418d67e943a9d5708e830cdd7e6b0e9376f06e634890be741188d8e27fdc",
+        "parts": [
+          {
+            "file": "divvun-fkv-0.2.1-build.198.zip",
+            "bytes": 24379177,
+            "sha256": "f4db418d67e943a9d5708e830cdd7e6b0e9376f06e634890be741188d8e27fdc"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 734,
+          "sha256": "898fd0335679386d0a7c744e8c1786f16771b6ad4cbca826a8f9210bbc05c8e0"
+        },
+        {
+          "path": "fkv.bhfst",
+          "bytes": 28061168,
+          "sha256": "a99cb4307103e9cbd1b5087d97ffa6ffac0d2708728e5049fba8cc298f1dd64b"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "source/lang-fkv-dfb43f5137585c14792127e86899575651199f0d.tar.gz",
+          "bytes": 19082616,
+          "sha256": "68176ad2645a9fc7691626ce6a2ee176868850f16b28ce3dcca8aa965d82c8c2"
+        }
+      ]
+    },
+    {
+      "id": "divvun-vep",
+      "name": "Veps",
+      "backend": "Divvunspell",
+      "language": "vep",
+      "version": "0.1.2-build.22",
+      "primary": "vep.bhfst",
+      "license": "LGPL-3.0-only",
+      "source_url": "https://github.com/giellalt/lang-vep/tree/6ba0aa89428988cd94d56e3ccbda913531cd0eee",
+      "pre_release": true,
+      "archive": {
+        "file": "divvun-vep-0.1.2-build.22.zip",
+        "bytes": 2858507,
+        "sha256": "77ff5f8467a9eef888d3d834339188aba2dd177a4671449614c065e0d44fa211",
+        "parts": [
+          {
+            "file": "divvun-vep-0.1.2-build.22.zip",
+            "bytes": 2858507,
+            "sha256": "77ff5f8467a9eef888d3d834339188aba2dd177a4671449614c065e0d44fa211"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "NOTICE.txt",
+          "bytes": 732,
+          "sha256": "c05f413f1a4d95ea95363dd098af5f236f8e27c3c4ca9a351be991be773609ec"
+        },
+        {
+          "path": "licenses/GPL-3.0-only.txt",
+          "bytes": 34674,
+          "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+        },
+        {
+          "path": "licenses/LGPL-3.0-only.txt",
+          "bytes": 42098,
+          "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+        },
+        {
+          "path": "source/lang-vep-6ba0aa89428988cd94d56e3ccbda913531cd0eee.tar.gz",
+          "bytes": 2336190,
+          "sha256": "b1c380dc0fbc7e0eb0930f3d694cd30729a7bbfeda25211126d4c4cde9d64626"
+        },
+        {
+          "path": "vep.bhfst",
+          "bytes": 2755400,
+          "sha256": "ca271f08d048337365deca62aadb5fac0a12b82f1463ef44cb4163a1d461eb0b"
+        }
+      ]
+    }
+  ]
+}

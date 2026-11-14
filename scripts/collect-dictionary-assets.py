@@ -57,14 +57,21 @@ def package(identifier,label,backend,language,version,primary,files,license,sour
             info=zipfile.ZipInfo(relative,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16
             with source.open("rb") as input,archive.open(info,"w") as output:shutil.copyfileobj(input,output,1024*1024)
             entries.append({"path":relative,"bytes":source.stat().st_size,"sha256":digest(source)})
-    if temporary.stat().st_size>=100*1024*1024:raise ValueError("Dictionary package exceeds GitHub's per-file limit")
-    if path.exists() and digest(path)!=digest(temporary):raise ValueError("Refusing to overwrite a different existing dictionary package: "+str(path))
-    if not path.exists():shutil.copyfile(temporary,path)
+    # Large corresponding-source archives are split below GitHub's per-file limit.
+    parts=[]
+    with temporary.open("rb") as source:
+        while chunk:=source.read(50*1024*1024):
+            part_name=name if temporary.stat().st_size<=50*1024*1024 else name+f".part{len(parts)+1:02d}"
+            part_path=OUTPUT/part_name
+            part_sha=hashlib.sha256(chunk).hexdigest()
+            if part_path.exists() and digest(part_path)!=part_sha:raise ValueError("Refusing to overwrite a different existing dictionary package: "+str(part_path))
+            if not part_path.exists():part_path.write_bytes(chunk)
+            parts.append({"file":part_name,"bytes":len(chunk),"sha256":part_sha})
     item={"id":identifier,"name":label,"backend":backend,"language":language,"version":version,"primary":primary,
           "license":license,"source_url":source_url,"pre_release":early,
-          "archive":{"file":name,"bytes":path.stat().st_size,"sha256":digest(path)},"files":entries}
+          "archive":{"file":name,"bytes":temporary.stat().st_size,"sha256":digest(temporary),"parts":parts},"files":entries}
     catalog.append(item)
-    print(json.dumps({"pack":identifier,"archive_bytes":path.stat().st_size,"installed_bytes":sum(entry['bytes'] for entry in entries)}),flush=True)
+    print(json.dumps({"pack":identifier,"archive_bytes":temporary.stat().st_size,"parts":len(parts),"installed_bytes":sum(entry['bytes'] for entry in entries)}),flush=True)
 
 hunspell=[
  ("en-us","English (US)","en-US","en/en_US",["en/README_en_US.txt","en/README.txt","en/license.txt"],"SCOWL / BSD-style notices",[]),
@@ -131,5 +138,5 @@ for lang,code,version,build,sha,packed,member,unpacked,license in entries:
 manifest={"version":1,"packs":catalog}
 manifest_path=PROJECT/"assets/accessories/dictionaries.json"
 manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-(OUTPUT/"README.md").write_text("# Optional spelling dictionary data\n\nThese archives are served by ExEditor's Settings/Language Tools downloads and are never embedded in the application or installer. Each contains unmodified dictionary files, notices and license texts. Compiled Voikko/Divvun packs also include corresponding source archives. No LibreOffice application or Android library is included.\n\nThe common Hunspell pairs come from LibreOffice/dictionaries at "+HUNSPELL+". Finnish Voikko and the catalog of ten released GiellaLT spellers follow WM Keyboard at "+WM_CODE+" and its data repository at "+WM_DATA+". Three versioned GiellaLT pre-releases are marked as preview in the catalog.\n\nRuntime downloads use the exact ExEditor GitHub build commit and per-file/ archive SHA-256 and size checks. Until these local files are committed and pushed, those ExEditor-hosted download links are not published.\n\nRun scripts/collect-dictionary-assets.py only to collect/repackage existing data; it does not compile a dictionary, engine or app. It requires Python and zstandard. The compiled-in catalog is assets/accessories/dictionaries.json. Its hashes cover every installed file, including source and license material.\n",encoding="utf-8")
+(OUTPUT/"README.md").write_text("# Optional spelling dictionary data\n\nThese optional dictionary archives are prepared for ExEditor's Language Tools downloads; app integration is in progress. They are never embedded in the application or installer. Each contains unmodified dictionary files, notices and license texts. Large ZIPs are stored in ordered 50 MiB parts, with both per-part and complete-archive hashes in the catalog. Compiled Voikko/Divvun packs also include corresponding source archives. No LibreOffice application or Android library is included.\n\nThe common Hunspell pairs come from LibreOffice/dictionaries at "+HUNSPELL+". Finnish Voikko and the catalog of ten released GiellaLT spellers follow WM Keyboard at "+WM_CODE+" and its data repository at "+WM_DATA+". Three versioned GiellaLT pre-releases are marked as preview in the catalog.\n\nRuntime downloads use the pinned ExEditor dictionary-data commit in the catalog and per-file/ archive SHA-256 and size checks. Until these local files are committed and pushed, those ExEditor-hosted download links are not published.\n\nRun scripts/collect-dictionary-assets.py only to collect/repackage existing data; it does not compile a dictionary, engine or app. It requires Python and zstandard. The compiled-in catalog is assets/accessories/dictionaries.json. Its hashes cover every installed file, including source and license material.\n",encoding="utf-8")
 print(json.dumps({"packs":len(catalog),"total_archive_bytes":sum(pack["archive"]["bytes"] for pack in catalog)}))

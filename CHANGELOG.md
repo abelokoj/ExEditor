@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-14T14:12:20-05:00 - Complete optional dictionary source snapshot (data checkpoint; app integration pending)
+
+- Collected 18 pinned dictionary packs: common-language Hunspell pairs, Finnish Voikko, and ten versioned GiellaLT Divvun spellers from WM Keyboard's catalog. Preserved dictionary data, licenses, notices, and corresponding source archives; marked upstream preview versions.
+- Split large ZIPs into ordered 50 MiB repository files and recorded per-part, whole-archive, and extracted-file sizes and SHA-256 hashes. The 388,603,832 bytes of optional archives are repository assets, never installer payloads. No external LibreOffice application is included.
+- Validation performed: inspected the catalog and verified all 18 local repository archives/parts against recorded sizes and hashes. App download/selection integration is still being implemented and is not released. No application compilation, source tests, or app launch occurred locally; pending interface corrections remain uncommitted separately.
+
+## 2026-11-14T13:02:42-05:00 - First native SDK diagnostics and Windows-only test policy (local correction; remote validation pending)
+
+- GitHub run 43526481049 reached the nsh-native application compiler on Windows/macOS and identified SDK API mismatches; Linux stopped at missing GStreamer development packages. The first run did not execute application tests or produce an installer.
+- Correcting native builder/label/event contracts, non-exhaustive data construction, window-title updates and reopened-file borrow lifetimes; refreshed the GitHub-resolved lockfile and replaced the removed WordCraft font-parser test dependency with the existing OpenType parser. Saved appearance now reaches the native backend immediately.
+- Per the user's latest instruction, retain Windows/macOS/Linux builds but execute regressions, font download checks and package test gates on Windows only. Added required GStreamer headers to the Linux build runner. Validation in this correction batch remains source/API/log inspection and formatting; all compilation/tests remain on GitHub.
+
 ## 2026-11-13T18:20:41-05:00 - Native Shell interface and rich editor migration (rust-nsh source; GitHub validation pending)
 
 - Pushed the previous unbuilt control/Markdown/dictionary snapshot as 3e31535 on nsh-edit with CI skipped, and created the rust-nsh branch as its preserved migration fork. Replaced the GPUI Kit/GPUI Fast application shell and live WordCraft editor with NSH 0.5.0 native Rust components and RichEditor, pinned to f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1. Selects Win32/DirectWrite, AppKit/CoreText and GTK 4/Pango backends with JavaScript/GPUI backend features disabled.
