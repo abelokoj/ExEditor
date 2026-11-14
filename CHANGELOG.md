@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-14T18:28:44-05:00 - Keep native rounded regions through nsh frame updates (local source)
+
+- GitHub diagnostics confirmed the correct window received DWM rounding, but nsh's later frame application reset it to the platform default. Apply the explicit rounded region to every nonmaximized app window and only reuse a cached shape while that region actually exists. Keep maximized windows rectangular and release query regions correctly.
+- Combine this corner correction with the confirmed focused-editor shortcut-priority fix. The native GitHub regression again requires rounded corners and separately visible main-keyboard, keypad and wheel zoom before checking Settings; no failing expectation is waived for installer delivery.
+- Validation locally: exact native diagnostics and pinned SDK source inspection plus formatting. Corrected mounted/native key dispatch and final artifacts await GitHub. No local compilation, tests or app execution.
+
+## 2026-11-14T18:24:18-05:00 - Restore application shortcut priority over nsh's editor catch-all (local source)
+
+- The pinned nsh RichEditor registers every Ctrl/Command character combination when focused, including combinations no plugin handles. Those newer registrations mask the application's older shortcuts. Refresh the app catalog after focused native-session changes so zoom, Settings, file/tab commands and VS Code bindings regain priority while ordinary unbound typing/navigation remain native. Preserve chord handling and batched model updates.
+- Extend the existing mounted plain/rich typing regression with actual Ctrl+= dispatch through the native key table, rather than only checking the catalog decoder. Validation is exact pinned-SDK source inspection and local formatting; the corrected shortcut behavior and current native-corner diagnostics still await GitHub. No local compilation, source tests or app launch.
+
 ## 2026-11-14T18:19:45-05:00 - Trace the remaining native key and corner mismatch (local diagnostics)
 
 - The early GitHub check confirmed keypad aliases are installed and firing, but neither main-keyboard nor keypad zoom reached visible text changes. Ctrl+wheel changed text size. The window still reported default DWM corners and no region. Add opt-in key registration/dispatch and native shape-operation results, including the captured window identity, to locate these remaining failures precisely. No runtime fix or installer is claimed yet.

@@ -225,6 +225,23 @@ mod mounted_surface {
         let editor = Rc::new(Editor::new().expect("native editor"));
         editor.set_plain_text_mode(props.plain).unwrap();
         let observed = editor.clone();
+        let application_keys = signal(0_u32);
+        let editor_focused = signal(false);
+        let key_editor = editor.clone();
+        set_interval(Duration::from_millis(10), move || {
+            editor_focused.set(key_editor.native_session().is_focused())
+        });
+        effect(move || {
+            editor_focused.get();
+            on_key_with(
+                "mod+=",
+                KeyOptions {
+                    when: nsh_core::keymap::When::Always,
+                    ..Default::default()
+                },
+                move |_| application_keys.update(|n| *n += 1),
+            );
+        });
         let shown = signal((String::new(), String::new(), false));
         set_interval(Duration::from_millis(10), move || {
             shown.set((
@@ -239,6 +256,9 @@ mod mounted_surface {
             .child(text(move || format!("Document {:?}", shown.get().0)))
             .child(text(move || format!("Markup {}", shown.get().1)))
             .child(text(move || format!("Editor focus {}", shown.get().2)))
+            .child(text(move || {
+                format!("Application zoom keys {}", application_keys.get())
+            }))
     }
 
     #[test]
@@ -255,6 +275,8 @@ mod mounted_surface {
             // No click, type_text(), manual focus or model edit is allowed before
             // this assertion: removing auto_focus must make the regression fail.
             app.wait_for("text:Editor focus true").unwrap();
+            app.press_key("ctrl+=").unwrap();
+            app.wait_for("text:Application zoom keys 1").unwrap();
             if !plain {
                 app.press_key("ctrl+b").unwrap();
             }

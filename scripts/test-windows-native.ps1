@@ -154,6 +154,7 @@ try {
     Save-NativeScreenshot $primary 'native-startup-initial.png'
     $results.rounded_window = [ExEditorStartupCapture]::Rounded($initialWindow)
     $results.window_details = [ExEditorStartupCapture]::WindowDetails($initialWindow)
+    if (-not $results.rounded_window) { throw 'The native document window has no rounded corners.' }
     $forwarder = Start-Process -FilePath $executable -ArgumentList ('"' + $markdown + '"') -WindowStyle Hidden -PassThru
     if (-not $forwarder.WaitForExit(15000)) { throw 'The second launch did not hand the file to the existing application.' }
     if ($forwarder.ExitCode -ne 0) { throw "File forwarding failed (exit $($forwarder.ExitCode))." }
@@ -168,12 +169,17 @@ try {
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-selection.png'
     [ExEditorStartupCapture]::ZoomKey(0xbb)
+    Start-Sleep -Milliseconds 400
+    Save-NativeScreenshot $primary 'native-main-key-zoom.png'
+    if ((Get-FileHash (Join-Path $logs 'native-selection.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-main-key-zoom.png')).Hash) {
+        throw 'Ctrl+plus did not visibly zoom the selected document.'
+    }
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-in.png'
-    if ((Get-FileHash (Join-Path $logs 'native-selection.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-zoom-in.png')).Hash) {
-        $results.keypad_zoom_unchanged = $true
+    if ((Get-FileHash (Join-Path $logs 'native-main-key-zoom.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-zoom-in.png')).Hash) {
+        throw 'Ctrl+keypad plus did not visibly zoom the selected document.'
     }
     [ExEditorStartupCapture]::ZoomKey(0xbd)
     [ExEditorStartupCapture]::ZoomKey(0x6d)

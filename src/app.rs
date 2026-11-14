@@ -852,7 +852,39 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
         })
     });
     let pending = signal(false);
-    bind_shortcuts(model.clone(), pending, false, window.clone(), cx.clone());
+    // NSH RichEditor binds all modified keys on focus, even keys no plugin handles.
+    // Register our catalog after that focus change so application shortcuts win.
+    let focused_session = signal((0_usize, false));
+    let key_model = model.clone();
+    set_interval(Duration::from_millis(40), move || {
+        let model = key_model.borrow();
+        focused_session.set(
+            model
+                .doc
+                .editor
+                .as_ref()
+                .map(|editor| {
+                    (
+                        Rc::as_ptr(editor) as usize,
+                        editor.native_session().is_focused(),
+                    )
+                })
+                .unwrap_or_default(),
+        );
+    });
+    let key_model = model.clone();
+    let key_window = window.clone();
+    let key_context = cx.clone();
+    effect(move || {
+        focused_session.get();
+        bind_shortcuts(
+            key_model.clone(),
+            pending,
+            false,
+            key_window.clone(),
+            key_context.clone(),
+        );
+    });
     let chord_model = model.clone();
     let chord_window = window.clone();
     let chord_context = cx.clone();

@@ -21,14 +21,13 @@ mod windows {
         Foundation::{HWND, LPARAM, RECT},
         Graphics::{
             Dwm::DwmSetWindowAttribute,
-            Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
+            Gdi::{CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetWindowRgn, SetWindowRgn},
         },
         System::Threading::GetCurrentProcessId,
         UI::{
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
-                EnumWindows, GWL_STYLE, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
-                GetWindowThreadProcessId, IsZoomed, WS_CAPTION,
+                EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsZoomed,
             },
         },
     };
@@ -75,8 +74,21 @@ mod windows {
                 if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
                     eprintln!("Native shape {}: {shape:?}", hwnd as usize);
                 }
-                if width <= 0 || height <= 0 || shapes.get(&(hwnd as usize)) == Some(&shape) {
+                if width <= 0 || height <= 0 {
                     continue;
+                }
+                // NSH can reset DWM corners when it applies its frame after first layout.
+                // Only reuse a shape while its real native region still exists.
+                if shapes.get(&(hwnd as usize)) == Some(&shape) {
+                    let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+                    if !region.is_null() {
+                        // SAFETY: region is an owned query buffer; hwnd is a live app window.
+                        let present = unsafe { GetWindowRgn(hwnd, region) } == 3;
+                        unsafe { DeleteObject(region) };
+                        if present || maximized {
+                            continue;
+                        }
+                    }
                 }
                 let preference = if maximized { 1_u32 } else { 2_u32 };
                 // SAFETY: DWMWA_WINDOW_CORNER_PREFERENCE (33) reads one DWORD. Older Windows returns an error.
@@ -86,14 +98,10 @@ mod windows {
                 if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
                     eprintln!("Native corner preference set: {rounded}");
                 }
-                // Frameless WS_POPUP windows need a region even when DWM accepts the preference.
-                // SAFETY: reading style and DPI does not mutate or retain the handle.
-                let frameless =
-                    unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } & WS_CAPTION as isize == 0;
                 if maximized {
                     // SAFETY: a null region restores the full rectangular window.
                     unsafe { SetWindowRgn(hwnd, std::ptr::null_mut(), 1) };
-                } else if frameless || !rounded {
+                } else {
                     let radius = (8 * unsafe { GetDpiForWindow(hwnd) }.max(96) / 96) as i32;
                     // SAFETY: positive bounded window dimensions; this creates a new owned GDI region.
                     let region = unsafe {
