@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T14:34:48-05:00 - Explicit native hover-event type (local compiler correction)
+
+- GitHub run 43632596931 reached native application diagnostics on all platforms, then found that the overloaded menu hover listener needs an explicit MouseEvent reference type to satisfy its lifetime contract. Added that type without changing preview behavior.
+- Validation: exact Windows compiler record and SDK listener signature inspected; formatting only locally. Application tests/installers are still pending on GitHub, with no local compilation or test execution.
+
 ## 2026-11-14T14:30:53-05:00 - Follow-up native compiler corrections and mounted input regression (local correction)
 
 - GitHub run 43631702745 completed dependency setup and reached the application compiler on all three platforms. Corrected its two reported errors: the menu hover event parameter and equality for reactive dictionary download state. No application tests or installer were produced by that run.

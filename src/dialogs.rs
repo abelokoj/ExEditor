@@ -151,7 +151,7 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                         item = item.checked(entry.checked);
                     }
                     view()
-                        .on_mouse_enter(move |_| {
+                        .on_mouse_enter(move |_: &nsh_core::MouseEvent| {
                             if let Some(command) = preview.clone() {
                                 preview_queue.borrow_mut().push_back(command);
                             }
