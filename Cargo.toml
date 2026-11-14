@@ -42,6 +42,7 @@ wordcraft-geom = { git = "https://github.com/storytold/wordcraft", rev = "729cd0
 wordcraft-layout = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-pdf = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-fonts = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 wordcraft-docbin = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
 percent-encoding = "2"
@@ -103,6 +104,7 @@ strip = "debuginfo"
 unsafe_op_in_unsafe_fn = "deny"
 
 [dev-dependencies]
+ttf-parser = "0.25"
 nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 box-format = { path = "vendor/box-format", default-features = false, features = ["writer"] }

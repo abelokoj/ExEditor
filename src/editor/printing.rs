@@ -177,6 +177,7 @@ fn pdf(
     links: bool,
     page_range: Option<&str>,
 ) -> Result<Vec<u8>> {
+    crate::fonts::register_export_fonts().context("Loading PDF output fonts")?;
     let snapshot = output_document(doc, page)?;
     let mut options = wordcraft_pdf::PdfOptions {
         links,

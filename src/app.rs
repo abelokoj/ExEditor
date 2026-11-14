@@ -503,6 +503,15 @@ impl Workspace {
         if entries.is_empty() {
             self.add(EditorWindow::new(None));
         }
+        if paths.is_empty() {
+            if let Some(entry) = self.entries.borrow().last()
+                && let Some(window) = entry.handle.borrow().as_ref()
+            {
+                window.show();
+                window.focus();
+            }
+            return;
+        }
         for path in paths {
             let entries = self.entries.borrow().clone();
             if let Some((entry, index)) = entries.iter().rev().find_map(|entry| {
@@ -712,7 +721,13 @@ fn window_attributes(title: Option<String>) -> WindowAttributes {
 fn enqueue(queue: &Commands, command: Command) {
     queue.borrow_mut().push_back(command);
 }
-fn bind_shortcuts(model: Rc<RefCell<EditorWindow>>, pending: Signal<bool>, chord_only: bool) {
+fn bind_shortcuts(
+    model: Rc<RefCell<EditorWindow>>,
+    pending: Signal<bool>,
+    chord_only: bool,
+    window: Window,
+    context: AppContext,
+) {
     use crate::keyboard::{self, Binding, Modifiers, Outcome};
     use nsh_core::keymap::{Keystroke, When};
     let mut bindings = keyboard::BINDINGS
@@ -758,6 +773,8 @@ fn bind_shortcuts(model: Rc<RefCell<EditorWindow>>, pending: Signal<bool>, chord
             continue;
         }
         let model = model.clone();
+        let window = window.clone();
+        let context = context.clone();
         on_key_with(
             &name,
             KeyOptions {
@@ -771,7 +788,10 @@ fn bind_shortcuts(model: Rc<RefCell<EditorWindow>>, pending: Signal<bool>, chord
                     Outcome::Action(action) => {
                         pending.set(false);
                         if let Some(command) = shortcut_command(action) {
-                            enqueue(&model.queue, command);
+                            // Apply edits before another key can change the native selection.
+                            let mut window = window.clone();
+                            let mut context = context.clone();
+                            model.command(command, &mut window, &mut context);
                         }
                     }
                     Outcome::Prefix => {
@@ -817,10 +837,18 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
         poll_model.borrow_mut().tick(&mut window, &mut context);
     });
     let pending = signal(false);
-    bind_shortcuts(model.clone(), pending, false);
+    bind_shortcuts(model.clone(), pending, false, window.clone(), cx.clone());
     let chord_model = model.clone();
+    let chord_window = window.clone();
+    let chord_context = cx.clone();
     let chords = when(pending, move || {
-        bind_shortcuts(chord_model.clone(), pending, true);
+        bind_shortcuts(
+            chord_model.clone(),
+            pending,
+            true,
+            chord_window.clone(),
+            chord_context.clone(),
+        );
         view().h(px(0.)).w(px(0.))
     });
     let chrome_model = model.clone();
@@ -913,7 +941,6 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                 .size(px(12.))
                 .rounded_full()
                 .bg(ui::rgb(color))
-                .window_drag(false)
                 .on_press(move || match command {
                     0 => enqueue(&queue, Command::CloseWindow),
                     1 => window.minimize(),
@@ -1152,20 +1179,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                 .child(toolbar),
         );
         if current.doc.ruler {
-            let queue = queue.clone();
-            chrome = chrome.child(
-                ui::ruler(colors, current.doc.zoom, move |position| {
-                    enqueue(
-                        &queue,
-                        Command::Edit(EditCommand::TabStop(
-                            ((position - 12.).max(0.) * 15.).round() as i32,
-                        )),
-                    )
-                })
-                .pointer_events(PointerEvents::None)
-                .focusable(false)
-                .label("Ruler, measured in inches (read only)"),
-            );
+            chrome = chrome.child(ui::ruler(colors, current.doc.zoom));
         }
     }
     // macOS keeps the system menu usable; other desktops use the compact in-window bar.
@@ -1196,7 +1210,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                                 return desktop::MenuItem::role(nsh_core::desktop::MenuRole::Quit);
                             }
                             let mut item = desktop::MenuItem::new(entry.label)
-                                .enabled(entry.enabled)
+                                .disabled(!entry.enabled)
                                 .on_select(move || enqueue(&queue, command.clone()));
                             let shortcut =
                                 entry.shortcut.to_ascii_lowercase().replace("ctrl+", "mod+");
@@ -1657,14 +1671,13 @@ impl EditorWindow {
             self.doc.ruler,
             self.doc.zoom
         );
-        window.set(WindowAttributes {
-            title: Some(format!(
-                "{}{} — ExEditor",
-                self.name(),
-                if self.doc.dirty { " — Edited" } else { "" }
-            )),
-            ..Default::default()
-        });
+        let mut attributes = WindowAttributes::default();
+        attributes.title = Some(format!(
+            "{}{} — ExEditor",
+            self.name(),
+            if self.doc.dirty { " — Edited" } else { "" }
+        ));
+        window.set(attributes);
         if self.ui_stamp != stamp {
             self.ui_stamp = stamp;
             cx.notify();
@@ -2007,8 +2020,23 @@ impl EditorWindow {
         }
         // Verify that the path can be read before creating a new tab or touching existing text.
         let loaded = self.load_file(path)?;
-        self.new_tab(window, cx)?;
+        if !self.can_reuse_empty_tab()? {
+            self.new_tab(window, cx)?;
+        }
         self.load_document(loaded)
+    }
+    fn can_reuse_empty_tab(&self) -> Result<bool> {
+        if self.tabs.len() != 1
+            || self.doc.path.is_some()
+            || self.doc.dirty
+            || self.doc.markdown_source.is_some()
+        {
+            return Ok(false);
+        }
+        let Some(editor) = &self.doc.editor else {
+            return Ok(false);
+        };
+        Ok(!editor.is_modified() && editor.text()?.is_empty())
     }
     fn take_transfer(&mut self, scope: TransferScope) -> (Vec<DocumentTab>, usize) {
         if scope == TransferScope::AllTabs || self.tabs.len() == 1 {
@@ -2161,7 +2189,8 @@ impl EditorWindow {
     ) -> Result<()> {
         match command {
             Command::ReopenClosed => {
-                if let Some(path) = cx.workspace.closed.borrow_mut().pop() {
+                let path = cx.workspace.closed.borrow_mut().pop();
+                if let Some(path) = path {
                     self.open_file_tab(&path, window, cx)?;
                 }
             }
@@ -3311,6 +3340,11 @@ impl EditorWindow {
                 }
                 prefs.save()?;
                 self.prefs = prefs;
+                set_color_scheme(match self.prefs.appearance {
+                    Appearance::Light => nsh_core::platform::Appearance::Light,
+                    Appearance::Dark => nsh_core::platform::Appearance::Dark,
+                    Appearance::System => nsh_core::platform::Appearance::System,
+                });
                 self.doc.look = None;
                 // Show a new default font now where it can't overwrite chosen styling:
                 // plain text has one font, and an empty rich document has none yet.
@@ -4197,6 +4231,34 @@ mod window_tests {
                 .clone()
             })
             .collect()
+    }
+    #[test]
+    fn only_a_single_pristine_empty_tab_can_be_reused_for_open() {
+        let mut window = window_with_tabs(&["empty"], 0);
+        window.doc.dirty = false;
+        window.doc.last_text.clear();
+        window.doc.editor = Some(std::rc::Rc::new(crate::editor::Editor::new().unwrap()));
+        assert!(window.can_reuse_empty_tab().unwrap());
+        window
+            .doc
+            .editor
+            .as_ref()
+            .unwrap()
+            .set_text("unsaved")
+            .unwrap();
+        assert!(!window.can_reuse_empty_tab().unwrap());
+        window.doc.editor.as_ref().unwrap().set_text("").unwrap();
+        window.doc.dirty = true;
+        assert!(!window.can_reuse_empty_tab().unwrap());
+        window.doc.dirty = false;
+        window.doc.path = Some("saved-empty.txt".into());
+        assert!(!window.can_reuse_empty_tab().unwrap());
+        window.doc.path = None;
+        window.doc.markdown_source = window.doc.editor.clone();
+        assert!(!window.can_reuse_empty_tab().unwrap());
+        window.doc.markdown_source = None;
+        window.tabs.push(Some(DocumentTab::vacant(&window.prefs)));
+        assert!(!window.can_reuse_empty_tab().unwrap());
     }
     #[test]
     fn every_binding_reaches_an_application_command() {

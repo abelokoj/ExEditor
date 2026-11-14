@@ -210,7 +210,7 @@ mod tests {
                 assert_eq!(name, &asset.file);
                 assert!(asset.bytes <= 16 * 1024 * 1024);
                 verify(asset, bytes).unwrap();
-                wordcraft_fonts::decode_font_file(bytes).expect("valid optional font");
+                ttf_parser::Face::parse(bytes, 0).expect("valid optional OpenType font");
             }
         }
     }

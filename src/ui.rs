@@ -89,7 +89,7 @@ pub fn checkbox(
     let checked: Prop<bool> = Prop::from(checked.into_reactive());
     let label: SharedString = label.into();
     nsh_base::checkbox()
-        .test_id(Into::<SharedString>::into(id).as_ref())
+        .key(Into::<SharedString>::into(id))
         .checked(checked)
         .accessibility_label(label.clone())
         .flex_row()
@@ -131,7 +131,7 @@ pub fn radio(
     let checked: Prop<bool> = Prop::from(checked.into_reactive());
     let label: SharedString = label.into();
     nsh_base::radio()
-        .test_id(Into::<SharedString>::into(id).as_ref())
+        .key(Into::<SharedString>::into(id))
         .checked(checked)
         .accessibility_label(label.clone())
         .flex_row()
@@ -158,7 +158,7 @@ pub fn radio(
                         .size(px(6.))
                         .rounded_full()
                         .bg(rgb(colors.ink))
-                        .opacity(move || if checked.get() { 1. } else { 0. }),
+                        .opacity(move || if checked.get() { 1_f32 } else { 0_f32 }),
                 ),
         )
         .child(
@@ -171,7 +171,7 @@ pub fn radio(
 }
 
 pub fn radio_group(label: &str) -> nsh_base::RadioGroupElement {
-    nsh_base::radio_group().label(label.to_owned()).gap(px(6.))
+    nsh_base::radio_group().key(label.to_owned()).gap(px(6.))
 }
 
 pub fn button(
@@ -182,7 +182,7 @@ pub fn button(
     let colors = Palette::current();
     let label: SharedString = label.into();
     nsh_base::button()
-        .test_id(Into::<SharedString>::into(id).as_ref())
+        .key(Into::<SharedString>::into(id))
         .accessibility_label(label.clone())
         .h(px(28.))
         .min_w(px(0.))
@@ -333,14 +333,14 @@ pub fn slider(
         .track_style(|s| s.h(px(24.)).justify_center())
         .indicator_style(move |s| s.h(px(5.)).rounded_full().bg(rgb(colors.border)))
         .range_style(move |s| s.rounded_full().bg(rgb(colors.accent)))
+        .thumb_class("hover:opacity-80 focus-visible:outline-2")
         .thumb_style(move |s| {
             s.size(px(14.))
                 .rounded_full()
                 .border_1()
                 .border_color(rgb(colors.border))
                 .bg(rgb(colors.field))
-                .hover(|s| s.opacity(0.8))
-                .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
+                .outline_color(rgb(colors.accent))
         })
         .on_change(move |next: &nsh_base::SliderValue| on_change(next.end()))
 }
@@ -363,14 +363,11 @@ pub fn command_list(
         .search_bar_style(move |s| s.p(px(10.)).border_b_1().border_color(rgb(colors.border)))
         .search_style(move |s| s.h(px(30.)).text_size(px(13.)).text_color(rgb(colors.ink)))
         .list_style(|s| s.flex_1().min_h(px(0.)))
-        .item_style(move |s| {
-            s.h(px(30.))
-                .px(px(10.))
-                .rounded(px(3.))
-                .text_size(px(12.))
-                .text_color(rgb(colors.ink))
-                .focus(move |s| s.bg(rgb(colors.accent)).text_color(rgb(colors.on_accent)))
-        })
+        .item_class(format!(
+            "focus:bg-[#{:06x}] focus:text-[#{:06x}]",
+            colors.accent, colors.on_accent
+        ))
+        .item_style(|s| s.h(px(30.)).px(px(10.)).rounded(px(3.)).text_size(px(12.)))
         .separator_style(move |s| s.h(px(1.)).my(px(4.)).bg(rgb(colors.border)))
         .empty(
             text("No matching results.")
@@ -448,7 +445,7 @@ impl PartialEq for Panel {
         self.serial == other.serial
     }
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Panels {
     next: u64,
     windows: Vec<Panel>,
@@ -507,7 +504,7 @@ pub fn panel_host() -> impl IntoElement {
     )
 }
 
-pub fn ruler(colors: Palette, zoom: u16, on_tab: impl Fn(f32) + 'static) -> AnyElement {
+pub fn ruler(colors: Palette, zoom: u16) -> AnyElement {
     let width = signal(0_f32);
     view()
         .h(px(28.))
@@ -518,7 +515,6 @@ pub fn ruler(colors: Palette, zoom: u16, on_tab: impl Fn(f32) + 'static) -> AnyE
         .border_color(rgb(colors.border))
         .label("Paragraph ruler, measured in inches")
         .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
-        .on_press(move |event: &PressEvent| on_tab(event.page_position.x.0))
         .child(
             canvas(move || {
                 let step = 72. * f32::from(zoom) / 100.;

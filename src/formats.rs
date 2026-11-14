@@ -1,4 +1,4 @@
-//! Offline document conversions through the same WordCraft model used by the editor.
+//! Offline Office/RTF conversion boundary; the live editor uses a native NSH session.
 use crate::document::DocumentFormat;
 use anyhow::{Context, Result, bail, ensure};
 use std::{
@@ -36,7 +36,7 @@ pub(crate) fn import(path: &Path, format: DocumentFormat) -> Result<Document> {
     Ok(document)
 }
 
-/// Saves the canonical document, retaining WordCraft's native DOCX/ODT structure.
+/// Encodes an Office-format snapshot without replacing the native editing session.
 pub(crate) fn export_document(document: &Document, format: DocumentFormat) -> Result<Vec<u8>> {
     match format {
         DocumentFormat::Html => Ok(wordcraft_formats::html::export(document).into_bytes()),

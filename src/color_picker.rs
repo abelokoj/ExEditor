@@ -46,7 +46,7 @@ struct SampleImage {
     source: ImageSrc,
     name: String,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ActiveColors {
     panel: Weak<ColorsPanel>,
     window: Option<desktop::WindowRef>,
@@ -633,10 +633,11 @@ impl ColorsPanel {
                             .h(px(28.))
                             .justify_start()
                             .accessibility_label(move || {
-                                matching_colors(&query.get())
-                                    .get(at.index())
-                                    .map(|(name, value)| format!("{name}, #{value:06x}"))
-                                    .unwrap_or_default()
+                                matching_colors(&query.get()).get(at.index()).map(
+                                    |(name, value)| {
+                                        SharedString::from(format!("{name}, #{value:06x}"))
+                                    },
+                                )
                             })
                             .child(view().size(px(16.)).rounded(px(2.)).bg(move || {
                                 rgb(matching_colors(&query.get())
@@ -817,7 +818,6 @@ impl ColorsPanel {
                                 index + 1,
                                 color.hex(false, false)
                             ))
-                            .tooltip(color.hex(false, false))
                             .w(px(24.))
                             .h(px(56.))
                             .px(px(2.))
@@ -856,11 +856,11 @@ impl ColorsPanel {
                             .h(px(25.))
                             .px(px(0.))
                             .accessibility_label(move || {
-                                format!(
+                                Some(SharedString::from(format!(
                                     "Saved color {}: {}",
                                     index + 1,
                                     swatches.with(|colors| colors[index].hex(true, false))
-                                )
+                                )))
                             })
                             .bg(move || {
                                 rgb(swatches.with(|colors| colors[index].composite(0xffffff)))

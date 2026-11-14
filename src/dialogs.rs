@@ -112,9 +112,20 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                     let queue = queue.clone();
                     let preview_queue = queue.clone();
                     let focus_queue = queue.clone();
-                    let preview = entry.preview.clone();
+                    let preview = entry.preview.clone().filter(|_| entry.enabled);
                     let focus_preview = preview.clone();
+                    let item_ref = if initial == Some(index) {
+                        focus
+                    } else {
+                        element_ref()
+                    };
+                    item_ref.on_focus_in(move || {
+                        if let Some(command) = focus_preview.clone() {
+                            focus_queue.borrow_mut().push_back(command);
+                        }
+                    });
                     let mut item = nsh_base::menu_item()
+                        .element_ref(&item_ref)
                         .disabled(!entry.enabled)
                         .accessibility_label(entry.label.clone())
                         .h(px(28.))
@@ -132,16 +143,6 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                         .indicator(text(if entry.checked { "✓" } else { "" }))
                         .child(text(entry.label.clone()).flex_1().text_size(px(12.)))
                         .child(text(entry.shortcut.clone()).text_size(px(11.)))
-                        .on_mouse_enter(move || {
-                            if let Some(command) = preview.clone() {
-                                preview_queue.borrow_mut().push_back(command);
-                            }
-                        })
-                        .on_focus(move || {
-                            if let Some(command) = focus_preview.clone() {
-                                focus_queue.borrow_mut().push_back(command);
-                            }
-                        })
                         .on_select(move || {
                             queue.borrow_mut().push_back(command.clone());
                             ui::close_panel("menu");
@@ -149,10 +150,14 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                     if entry.checkable {
                         item = item.checked(entry.checked);
                     }
-                    if initial == Some(index) {
-                        item = item.element_ref(&focus);
-                    }
-                    item.into_element()
+                    view()
+                        .on_mouse_enter(move || {
+                            if let Some(command) = preview.clone() {
+                                preview_queue.borrow_mut().push_back(command);
+                            }
+                        })
+                        .child(item)
+                        .into_element()
                 })
                 .collect();
             effect(move || focus.focus());

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-14T14:19:45-05:00 - Native SDK corrections and dictionary downloads (local source; GitHub validation pending)
+
+- Corrected native builder/event/label contracts and non-exhaustive SDK data construction from the first GitHub diagnostics. Editor views request focus on mount; keyboard commands apply immediately rather than waiting for a polling timer. Opening a file reuses only a single pristine empty tab, and a second launch activates the existing window. Saved appearance and isolated app data reach the native backend.
+- Register bundled Inter before the first native render. Removed unused legacy focus/scroll bookkeeping and moved WordCraft private-font registration to PDF output only, retaining verified accessories downloaded after an earlier export. Live editing remains entirely nsh.
+- Added Language Tools downloads for all 18 repository-hosted dictionary packs pinned to data commit 86d1673c5a83277340e0bd632b24aaa6527c1452. Stream bounded parts and ZIP entries through SHA-256 checks, preserve licenses/source, reject unsafe or unexpected entries, and switch the installation record only after a complete verified install. Background checks/downloads expose retry and explicit Use/Apply; non-English selection turns off English-only Harper. No dictionaries are embedded in installers.
+- Added regression source for empty-tab reuse, native paragraph recovery/HTML, dictionary selection, catalog integrity, corrupt/repair installation, unsafe paths and a real pinned download. Windows alone executes tests/download and installer checks; macOS/Linux compile/package only, with required Linux GStreamer headers supplied.
+- Validation performed locally: source/SDK/log inspection, repository archive size/hash checks, and cargo fmt --all (formatting only). No local compilation, Rust tests, or application launch. Corrected compilation/tests/installers remain pending on GitHub; native visual fidelity, physical IME/printers, advanced Office roundtrips and the documented SDK gaps remain unverified.
+
 ## 2026-11-14T14:12:20-05:00 - Complete optional dictionary source snapshot (data checkpoint; app integration pending)
 
 - Collected 18 pinned dictionary packs: common-language Hunspell pairs, Finnish Voikko, and ten versioned GiellaLT Divvun spellers from WM Keyboard's catalog. Preserved dictionary data, licenses, notices, and corresponding source archives; marked upstream preview versions.

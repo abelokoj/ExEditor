@@ -62,10 +62,6 @@ pub struct Editor {
     page: RefCell<PageSettings>,
     plain_style: RefCell<FormatState>,
     pasted: Cell<bool>,
-    focus_requested: Cell<bool>,
-    scroll_requested: Cell<bool>,
-    scroll_delta: Cell<(i32, bool)>,
-    view_scroll: Cell<(f32, f32)>,
     viewport_width: Cell<f32>,
     shortcuts: RefCell<VecDeque<String>>,
     completion: RefCell<Option<CompletionPopup>>,
@@ -97,15 +93,11 @@ fn manager(plain: bool, auto_links: bool) -> Result<ExtensionManager> {
                     ]
                     .into_iter()
                     .map(|(name, css)| {
-                        (
-                            name.into(),
-                            AttrSpec {
-                                default: Some(Value::Null),
-                                parse_html: Some(AttrParse::Style(css.into())),
-                                render_html: Some(AttrRender::Style(css.into())),
-                                ..Default::default()
-                            },
-                        )
+                        let mut attribute = AttrSpec::default();
+                        attribute.default = Some(Value::Null);
+                        attribute.parse_html = Some(AttrParse::Style(css.into()));
+                        attribute.render_html = Some(AttrRender::Style(css.into()));
+                        (name.into(), attribute)
                     })
                     .collect(),
                 )]
@@ -172,10 +164,6 @@ impl Editor {
                 ..Default::default()
             }),
             pasted: Cell::new(false),
-            focus_requested: Cell::new(false),
-            scroll_requested: Cell::new(false),
-            scroll_delta: Cell::new((0, false)),
-            view_scroll: Cell::new((0., 0.)),
             viewport_width: Cell::new(600.),
             shortcuts: RefCell::new(VecDeque::new()),
             completion: RefCell::new(None),
@@ -324,7 +312,6 @@ impl Editor {
         self.changes.text.store(true, Ordering::Relaxed);
         self.display.borrow_mut().syntax.clear();
         self.display.borrow_mut().proofing.clear();
-        self.view_scroll.set((0., 0.));
         self.invalidate_display();
         Ok(())
     }
@@ -1122,38 +1109,15 @@ impl Editor {
     }
     pub fn focus(&self) {
         if self.display.borrow().visible {
-            self.focus_requested.set(true);
             self.session.focus();
         }
     }
     pub fn restore_focus(&self) {
         self.focus();
     }
-    pub fn take_focus_request(&self) -> bool {
-        self.focus_requested.replace(false)
-    }
     pub fn scroll_to_selection(&self) {
-        self.scroll_requested.set(true);
         let command = tiptap::scroll_into_view();
         self.session.run(&command);
-    }
-    pub fn take_scroll_request(&self) -> bool {
-        self.scroll_requested.replace(false)
-    }
-    pub fn scroll_editor(&self, amount: i32, page: bool) {
-        let old = self.scroll_delta.get();
-        self.scroll_delta.set((old.0.saturating_add(amount), page));
-    }
-    pub fn take_scroll_delta(&self) -> (i32, bool) {
-        self.scroll_delta.replace((0, false))
-    }
-    pub fn view_scroll(&self) -> (f32, f32) {
-        self.view_scroll.get()
-    }
-    pub fn set_view_scroll(&self, x: f32, y: f32) {
-        if x.is_finite() && y.is_finite() {
-            self.view_scroll.set((x.max(0.), y.max(0.)));
-        }
     }
     pub fn enqueue_shortcut(&self, shortcut: &str) {
         self.shortcuts.borrow_mut().push_back(shortcut.into());

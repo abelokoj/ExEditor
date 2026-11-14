@@ -170,3 +170,32 @@ fn automatic_completion_requires_three_graphemes_and_escape_stays_dismissed() {
     editor.complete().unwrap();
     assert!(editor.completion_state().is_some());
 }
+
+#[test]
+fn paragraph_styles_survive_native_recovery_and_html_roundtrip() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("مرحبا 😀").unwrap();
+    editor.execute(EditCommand::LineSpacing(1.5)).unwrap();
+    editor.execute(EditCommand::Indent(480)).unwrap();
+    editor.execute(EditCommand::Direction(true)).unwrap();
+    let html = editor.html().unwrap();
+    let restored = Editor::new().unwrap();
+    restored.set_snapshot(&editor.snapshot().unwrap()).unwrap();
+    assert_eq!(restored.text().unwrap(), "مرحبا 😀");
+    assert_eq!(restored.html().unwrap(), html);
+
+    let parsed = DomParser::from_schema(restored.manager.borrow().schema())
+        .parse(&html, &ParseOptions::default());
+    let attrs = parsed.first_child().expect("formatted paragraph").attrs();
+    for (key, expected) in [
+        ("lineHeight", "1.5"),
+        ("indent", "24px"),
+        ("direction", "rtl"),
+    ] {
+        assert_eq!(
+            attrs.get(key).and_then(Value::as_str),
+            Some(expected),
+            "{key}"
+        );
+    }
+}

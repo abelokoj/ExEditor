@@ -129,10 +129,19 @@ pub fn correction_matches(
     current.get(start..end) == Some(original)
 }
 
+#[derive(Clone)]
+enum DictionaryStatus {
+    Checking,
+    Missing,
+    Downloading,
+    Ready(PathBuf),
+    Failed(String),
+}
 struct LanguageTools {
     draft: Signal<ProofingOptions>,
     language: Signal<String>,
     dictionary: Signal<String>,
+    downloads: Signal<Vec<DictionaryStatus>>,
     error: Signal<String>,
     commands: Commands,
     colors: Palette,
@@ -155,9 +164,29 @@ pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
                         .unwrap_or_default(),
                 ),
                 draft: signal(options.clone()),
+                downloads: signal(vec![
+                    DictionaryStatus::Checking;
+                    crate::dictionaries::manifest().packs.len()
+                ]),
                 error: signal(String::new()),
                 commands: commands.clone(),
                 colors,
+            });
+            let downloads = state.downloads;
+            spawn(async move {
+                let statuses = smol::unblock(|| {
+                    crate::dictionaries::manifest()
+                        .packs
+                        .iter()
+                        .map(|pack| match crate::dictionaries::installed_path(pack) {
+                            Ok(Some(path)) => DictionaryStatus::Ready(path),
+                            Ok(None) => DictionaryStatus::Missing,
+                            Err(error) => DictionaryStatus::Failed(format!("{error:#}")),
+                        })
+                        .collect()
+                })
+                .await;
+                downloads.set(statuses);
             });
             let draft = state.draft;
             let error = state.error;
@@ -225,8 +254,153 @@ impl LanguageTools {
                             .on_press(move || state.browse()),
                     ),
             );
+            content = content
+                .child(ui::heading("Download dictionaries"))
+                .child(ui::hint(
+                    "Downloads come from ExEditor’s GitHub repository and include source and license notices. Nothing downloads until you choose it.",
+                    self.colors,
+                ))
+                .child(ui::hint(
+                    "Choose Use after downloading, then Apply. Selecting a non-English dictionary turns off English grammar checking.",
+                    self.colors,
+                ));
+            for (index, pack) in crate::dictionaries::manifest()
+                .packs
+                .iter()
+                .enumerate()
+                .filter(|(_, pack)| pack.backend == engine)
+            {
+                let state = self.clone();
+                content = content.child(dynamic(move || state.dictionary_row(index, pack)));
+            }
         }
         content.into_element()
+    }
+    fn dictionary_row(
+        self: &Rc<Self>,
+        index: usize,
+        pack: &'static crate::dictionaries::DictionaryPack,
+    ) -> AnyElement {
+        let current = self.downloads.with(|states| states[index].clone());
+        let path = match &current {
+            DictionaryStatus::Ready(path) => Some(path.clone()),
+            _ => None,
+        };
+        let selected = path.as_ref().is_some_and(|path| {
+            self.dictionary.get() == path.to_string_lossy()
+                && self.language.get() == pack.language
+                && self.draft.with(|options| options.spelling == pack.backend)
+        });
+        let label = match &current {
+            DictionaryStatus::Checking => "Checking…",
+            DictionaryStatus::Downloading => "Downloading…",
+            DictionaryStatus::Ready(_) if selected => "Selected",
+            DictionaryStatus::Ready(_) => "Use",
+            DictionaryStatus::Missing => "Download",
+            DictionaryStatus::Failed(_) => "Retry",
+        };
+        let disabled = selected
+            || matches!(
+                current,
+                DictionaryStatus::Checking | DictionaryStatus::Downloading
+            );
+        let message = match &current {
+            DictionaryStatus::Checking => "Checking downloaded files…".to_owned(),
+            DictionaryStatus::Downloading => "Downloading and verifying files…".to_owned(),
+            DictionaryStatus::Ready(_) if selected => {
+                "Selected. Apply to use this dictionary.".to_owned()
+            }
+            DictionaryStatus::Ready(_) => "Downloaded and verified; available offline.".to_owned(),
+            DictionaryStatus::Missing => String::new(),
+            DictionaryStatus::Failed(error) => error.clone(),
+        };
+        let state = self.clone();
+        let preview = if pack.pre_release { " · Preview" } else { "" };
+        let failure = matches!(current, DictionaryStatus::Failed(_));
+        view()
+            .key(pack.id.clone())
+            .gap(px(5.))
+            .py(px(7.))
+            .child(ui::heading(format!("{}{}", pack.name, preview)))
+            .child(ui::hint(
+                format!(
+                    "{:.1} MB · {}",
+                    pack.download_bytes() as f64 / 1_000_000.,
+                    pack.license
+                ),
+                self.colors,
+            ))
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        ui::button(format!("dictionary-{}", pack.id), label, 12.)
+                            .accessibility_label(format!("{label} {} dictionary", pack.name))
+                            .disabled(disabled)
+                            .on_press(move || {
+                                if let Some(path) = &path {
+                                    state.use_dictionary(pack, path);
+                                } else {
+                                    state.download_dictionary(index, pack);
+                                }
+                            }),
+                    )
+                    .child(
+                        nsh_base::link()
+                            .href(pack.source_url.clone())
+                            .accessibility_label(format!("{} source and license", pack.name))
+                            .text_color(ui::rgb(self.colors.accent))
+                            .focus_visible(move |s| s.outline(px(2.)))
+                            .child(text("Source and license").text_size(px(11.))),
+                    ),
+            )
+            .child(
+                text(message)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(ui::rgb(if failure {
+                        self.colors.danger
+                    } else {
+                        self.colors.muted
+                    })),
+            )
+            .into_element()
+    }
+    fn download_dictionary(
+        &self,
+        index: usize,
+        pack: &'static crate::dictionaries::DictionaryPack,
+    ) {
+        if self.downloads.with_untracked(|states| {
+            matches!(
+                states[index],
+                DictionaryStatus::Checking
+                    | DictionaryStatus::Downloading
+                    | DictionaryStatus::Ready(_)
+            )
+        }) {
+            return;
+        }
+        let downloads = self.downloads;
+        downloads.update(|states| states[index] = DictionaryStatus::Downloading);
+        spawn(async move {
+            let result = smol::unblock(move || crate::dictionaries::download(pack)).await;
+            downloads.update(|states| {
+                states[index] = match result {
+                    Ok(path) => DictionaryStatus::Ready(path),
+                    Err(error) => DictionaryStatus::Failed(format!("{error:#}")),
+                }
+            });
+        });
+    }
+    fn use_dictionary(&self, pack: &crate::dictionaries::DictionaryPack, path: &std::path::Path) {
+        self.draft
+            .update(|options| select_dictionary(options, pack.backend, &pack.language, path));
+        self.language.set(pack.language.clone());
+        self.dictionary.set(path.to_string_lossy().into_owned());
+        self.error.set(String::new());
     }
     fn browse(&self) {
         let engine = self.draft.with_untracked(|options| options.spelling);
@@ -280,11 +454,59 @@ impl LanguageTools {
         }
     }
 }
+fn select_dictionary(
+    options: &mut ProofingOptions,
+    backend: SpellingBackend,
+    language: &str,
+    path: &std::path::Path,
+) {
+    options.spelling = backend;
+    options.language = language.to_owned();
+    options.dictionary_path = Some(path.to_path_buf());
+    if !language
+        .split(['-', '_'])
+        .next()
+        .is_some_and(|base| base.eq_ignore_ascii_case("en"))
+    {
+        options.grammar = false;
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{CheckState, PendingCheck, correction_matches};
     use crate::proofing::ProofingOptions;
     use std::sync::{Arc, mpsc};
+    #[test]
+    fn dictionary_selection_preserves_english_grammar_choice_and_disables_it_for_other_languages() {
+        let mut options = ProofingOptions::default();
+        let path = std::path::Path::new("downloaded/en_US.dic");
+        super::select_dictionary(
+            &mut options,
+            crate::proofing::SpellingBackend::Hunspell,
+            "en-US",
+            path,
+        );
+        assert!(options.grammar);
+        assert_eq!(options.dictionary_path.as_deref(), Some(path));
+        options.grammar = false;
+        super::select_dictionary(
+            &mut options,
+            crate::proofing::SpellingBackend::Hunspell,
+            "en-GB",
+            path,
+        );
+        assert!(!options.grammar, "an explicit grammar opt-out stays off");
+        options.grammar = true;
+        super::select_dictionary(
+            &mut options,
+            crate::proofing::SpellingBackend::Voikko,
+            "fi",
+            path,
+        );
+        assert!(!options.grammar);
+        assert_eq!(options.language, "fi");
+        assert_eq!(options.spelling, crate::proofing::SpellingBackend::Voikko);
+    }
     #[test]
     fn background_results_are_discarded_after_text_or_options_change() {
         for changed_options in [false, true] {

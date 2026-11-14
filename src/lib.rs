@@ -6,6 +6,7 @@ mod color;
 mod color_picker;
 mod completion;
 mod dialogs;
+mod dictionaries;
 mod document;
 mod editing;
 mod editor;
@@ -54,11 +55,20 @@ pub fn run() -> std::process::ExitCode {
     #[cfg(windows)]
     use nsh_platform_windows as platform;
     let result = platform::run_app(
-        platform::AppSource::Rust(platform::Root::of::<App>()),
+        platform::AppSource::Rust(fonts::configure_root(platform::Root::of::<App>())),
         platform::AppOptions {
             title: "ExEditor".to_string(),
             app_id: "com.abelokoj.ExEditor".to_string(),
             size: (760, 620),
+            data_dir: document::data_dir().ok(),
+            appearance: match preferences::Preferences::load()
+                .unwrap_or_default()
+                .appearance
+            {
+                preferences::Appearance::Light => nsh_core::platform::Appearance::Light,
+                preferences::Appearance::Dark => nsh_core::platform::Appearance::Dark,
+                preferences::Appearance::System => nsh_core::platform::Appearance::System,
+            },
             ..Default::default()
         },
     );

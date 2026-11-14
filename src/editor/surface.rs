@@ -12,7 +12,6 @@ use nsh_core::{
     element::{Style, StyleRefinement},
     prelude::*,
 };
-use serde_json::Value;
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
 
 fn part(style: StyleRefinement) -> PartStyle {
@@ -256,7 +255,7 @@ fn completion_popup(editor: Rc<Editor>, revision: Signal<u64>) -> impl IntoEleme
                             } else {
                                 colors.ink
                             }))
-                            .on_press(move |_: &PressEvent| {
+                            .on_press(move || {
                                 if let Err(error) = editor.accept_completion(Some(index)) {
                                     editor.report_error(error.to_string());
                                 }
@@ -281,6 +280,7 @@ pub fn surface(editor: Rc<Editor>) -> impl IntoElement {
     let styled = editor.clone();
     let files = editor.clone();
     rich_editor()
+        .auto_focus(true)
         .editor(editor.native_session())
         .size_full()
         .bubble_menu(completion_popup(editor.clone(), revision))
