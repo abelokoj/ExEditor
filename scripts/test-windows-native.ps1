@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ExecutablePath,
-    [string]$LogDirectory = 'logs'
+    [string]$LogDirectory = 'logs',
+    [ValidateSet('Light', 'Dark')][string]$Appearance = 'Light'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -22,7 +23,7 @@ if (-not $testRoot.StartsWith($runnerTemp + '\', [StringComparison]::OrdinalIgno
 New-Item -ItemType Directory -Path $testRoot, $logs -Force | Out-Null
 $data = Join-Path $testRoot 'Isolated app data'
 New-Item -ItemType Directory -Path $data | Out-Null
-@{ spellcheck = $false; autocomplete = $false; appearance = 'Light' } | ConvertTo-Json |
+@{ spellcheck = $false; autocomplete = $false; appearance = $Appearance } | ConvertTo-Json |
     Set-Content -LiteralPath (Join-Path $data 'preferences.json') -Encoding utf8NoBOM
 $markdown = Join-Path $testRoot 'Long Markdown café.md'
 $paragraphs = foreach ($section in 1..120) {
@@ -32,7 +33,7 @@ $paragraphs = foreach ($section in 1..120) {
 $previousData = $env:EXEDITOR_DATA_DIR
 $primary = $null
 $forwarder = $null
-$results = [ordered]@{ source_commit = $env:GITHUB_SHA; fixture_bytes = (Get-Item -LiteralPath $markdown).Length }
+$results = [ordered]@{ source_commit = $env:GITHUB_SHA; fixture_bytes = (Get-Item -LiteralPath $markdown).Length; appearance = $Appearance }
 function Wait-Document([Diagnostics.Process]$Process, [string]$Title) {
     $deadline = [DateTime]::UtcNow.AddSeconds(40)
     do {
@@ -55,7 +56,7 @@ function Measure-NativeMemory([Diagnostics.Process]$Process) {
         private_bytes = ($samples.private_bytes | Measure-Object -Maximum).Maximum
     }
 }
-function Save-NativeScreenshot([Diagnostics.Process]$Process, [string]$Name) {
+function Save-NativeScreenshot([Diagnostics.Process]$Process, [string]$Name, [IntPtr]$Window = [IntPtr]::Zero) {
     try {
         Add-Type -AssemblyName System.Drawing
         if (-not ('ExEditorStartupCapture' -as [type])) {
@@ -67,13 +68,27 @@ public static class ExEditorStartupCapture {
     public struct Rect { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string title);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int metric);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
 }
 "@
         }
+        if ($Window -eq [IntPtr]::Zero) { $Window = $Process.MainWindowHandle }
+        $owner = 0u
+        [ExEditorStartupCapture]::GetWindowThreadProcessId($Window, [ref]$owner) | Out-Null
+        if ($owner -ne $Process.Id) { throw 'The capture window is not owned by the test process.' }
         $rect = [ExEditorStartupCapture+Rect]::new()
-        if (-not [ExEditorStartupCapture]::GetWindowRect($Process.MainWindowHandle, [ref]$rect)) {
+        if (-not [ExEditorStartupCapture]::GetWindowRect($Window, [ref]$rect)) {
             throw 'The native window bounds are unavailable.'
         }
+        $width = [Math]::Min($rect.Right - $rect.Left, [ExEditorStartupCapture]::GetSystemMetrics(0) - 32)
+        $height = [Math]::Min($rect.Bottom - $rect.Top, [ExEditorStartupCapture]::GetSystemMetrics(1) - 64)
+        # Keep the whole native window visible on the runner's small desktop.
+        [ExEditorStartupCapture]::SetWindowPos($Window, [IntPtr]::Zero, 16, 16, $width, $height, 0x14) | Out-Null
+        Start-Sleep -Milliseconds 400
+        [ExEditorStartupCapture]::GetWindowRect($Window, [ref]$rect) | Out-Null
         $width = $rect.Right - $rect.Left
         $height = $rect.Bottom - $rect.Top
         if ($width -le 0 -or $height -le 0 -or $width -gt 4096 -or $height -gt 4096) {
@@ -123,8 +138,13 @@ try {
     $shell.SendKeys('^{SUBTRACT}')
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-reset.png'
-    $shell.SendKeys('^{,}')
+    $shell.SendKeys('^,')
     Start-Sleep -Milliseconds 1000
+    $settingsWindow = [ExEditorStartupCapture]::FindWindow('NshWindow', 'ExEditor Settings')
+    if ($settingsWindow -ne [IntPtr]::Zero) {
+        Save-NativeScreenshot $primary 'native-settings.png' $settingsWindow
+        $results.settings_opened = $true
+    } else { throw 'Ctrl+comma did not open the native Settings window.' }
     $results.keyboard_visual_evidence = @('native-selection.png', 'native-zoom-in.png', 'native-zoom-reset.png')
     $results.working_set_delta_bytes = $results.markdown.working_set_bytes - $results.initial.working_set_bytes
     $results.same_window_handoff = $true

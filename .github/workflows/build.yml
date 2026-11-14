@@ -5,12 +5,17 @@ on:
     branches: [main, nsh-edit, rust-nsh]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: 'Validate Windows after CI-only changes without restarting other platform builds'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: exeditor-${{ github.workflow }}-${{ github.ref }}
+  group: exeditor-${{ github.workflow }}-${{ github.ref }}${{ inputs.windows_only && '-windows' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -114,11 +119,21 @@ jobs:
       - name: Run noninteractive Rust tests
         run: |
           $runtime = Join-Path $PWD 'artifacts/proofing'
-          $testRuntime = Join-Path $PWD 'target/debug/deps/proofing'
-          New-Item -ItemType Directory -Path $testRuntime -Force | Out-Null
-          Copy-Item -Path (Join-Path $runtime '*.dll') -Destination $testRuntime
+          cargo test --locked --all-targets --no-run --message-format=json 2>&1 | Tee-Object -FilePath logs/test-artifacts.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testExecutables = @(Get-Content logs/test-artifacts.jsonl | Where-Object { $_.StartsWith('{') } | ForEach-Object {
+            $artifact = $_ | ConvertFrom-Json
+            if ($artifact.reason -eq 'compiler-artifact' -and $artifact.profile.test -and $artifact.executable) { $artifact.executable }
+          } | Sort-Object -Unique)
+          if ($testExecutables.Count -eq 0) { throw 'Cargo did not report any test executables.' }
+          $staged = foreach ($testExecutable in $testExecutables) {
+            $testRuntime = Join-Path (Split-Path -Parent $testExecutable) 'proofing'
+            New-Item -ItemType Directory -Path $testRuntime -Force | Out-Null
+            Copy-Item -Path (Join-Path $runtime '*.dll') -Destination $testRuntime -Force
+            Get-ChildItem -LiteralPath $testRuntime -Filter '*.dll' | Select-Object Name,Length,DirectoryName
+          }
           Copy-Item -LiteralPath (Join-Path $runtime 'provenance.json') -Destination logs/native-proofing.json
-          Get-ChildItem -LiteralPath $testRuntime -Filter '*.dll' | Select-Object Name,Length | ConvertTo-Json | Tee-Object -FilePath logs/test-runtime-files.json
+          $staged | ConvertTo-Json | Tee-Object -FilePath logs/test-runtime-files.json
           cargo test --locked --all-targets 2>&1 | Tee-Object -FilePath logs/tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -149,7 +164,8 @@ jobs:
       - name: Check native Windows startup and Markdown memory
         timeout-minutes: 5
         run: |
-          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -LogDirectory logs
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Appearance Dark -LogDirectory logs/dark -LogDirectory logs
 
       - name: Build the per-user installer
         run: |
@@ -210,6 +226,7 @@ jobs:
 
 
   desktop:
+    if: ${{ !inputs.windows_only }}
     name: ${{ matrix.label }}
     strategy:
       fail-fast: false

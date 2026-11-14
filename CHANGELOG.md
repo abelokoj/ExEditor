@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-14T16:39:15-05:00 - Stage native test libraries beside actual Cargo artifacts (local CI correction)
+
+- GitHub run 43643434753 passed strict diagnostics on all three platforms. Windows executed 168 regressions: 165 passed, one failed and two network checks were intentionally ignored. The failing Voikko ABI check found no DLL beside the fork's relocated test executable; the app's packaged-runtime restriction remains intact.
+- Allow a manual Windows-only CI retry for workflow-only changes so an already-running macOS/Linux build can finish. Pushes still build all platforms by default.
+- Read Cargo's JSON test artifacts and stage the real proofing DLLs beside each reported executable before executing tests, instead of assuming target/debug/deps. This supports both normal and fork-managed output paths without overriding Cargo's build directory or weakening DLL lookup rules.
+- Extend GitHub native screenshots to both saved light/dark appearances, keep the whole window within the runner desktop, and check Ctrl+comma opens the Settings window.
+- Validation locally: exact GitHub failure-log/source inspection. Corrected CI staging and expanded native capture await GitHub; no local source tests, compilation or app launch. macOS/Linux release builds were still running when this was recorded.
+
 ## 2026-11-14T16:31:08-05:00 - Native API compatibility and GitHub Cargo selection (local correction)
 
 - The first GitHub pass installed the requested fork on macOS, but Homebrew's Cargo remained earlier on PATH. Select the installed fork for the current and later runner steps and retain the pinned compiler. The completed Windows/Linux diagnostic passes then reported native API mismatches; corrected all reported call sites, including the gesture event namespace and input-only color methods.
