@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-14T15:50:56-05:00 - Native Windows build ready and Cargo instructions saved (recording time; documentation follow-up)
+
+- GitHub run [43636475163](https://github.com/abelokoj/ExEditor/actions/runs/43636475163) succeeded for source 18fd77df826362b5f6120cb6caeea0b321a28ab1 on Windows, macOS and Linux. Strict diagnostics passed everywhere; Windows passed all 161 ordinary regressions, two separate real font/dictionary download checks, the optional-font payload exclusion gate, native startup/same-window file handoff, and installer integration. macOS/Linux compiled and packaged without executing tests.
+- Downloaded the Windows installer/portable application, macOS/Linux archives and all build records into dist/ExEditor-2026-11-14.2. Verified seven GitHub artifact digests, the exact Windows source ID and all 51 packaged Windows file hashes. The installer is 32,717,002 bytes; the portable ZIP is 42,825,464 bytes. Private notes and downloads remain excluded from Git.
+- The isolated Windows runner observed 61,870,080 working-set bytes for the initial empty document and 287,895,552 after opening a generated 185,677-byte Markdown fixture in the same window. These are controlled observations, not a direct comparison with the user's reported file or a universal memory guarantee. Native screenshots were captured and inspected; added the generated Markdown capture to the GitHub README.
+- Added AGENTS.md with the user's installed huacnlee/cargo preference and existing execution boundaries; local version inspection confirmed fork 0.102.0-9 without installing or rebuilding Cargo. This follow-up changes instructions/documentation/screenshots only and does not change the validated executable. No local application compilation, source tests or application launch occurred.
+- Full native/physical IME, assistive technology and printer acceptance, advanced Office fidelity, exact TextEdit parity, and documented SDK gaps (custom ruler tab stops, first-line/hanging indents, programmatic scrolling and precise superscript baselines) remain outstanding. The no-wrap workaround is capped at 64,000 pixels. Older private dictionary/font installations are retained while engines may hold them open.
+
 ## 2026-11-14T15:07:47-05:00 - Preserve numeric paragraph styling and expand Windows runtime evidence (local correction)
 
 - GitHub run 43633667077 passed strict diagnostics on all three platforms. Windows executed 163 regressions: 159 passed, two failed and two network checks were intentionally ignored in the ordinary test pass. Linux produced a release package; macOS release compilation was still running when this entry was recorded. No Windows installer was produced by that run.

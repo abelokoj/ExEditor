@@ -2,9 +2,15 @@
 
 ExEditor is a native Rust document editor whose interface and workflows follow macOS TextEdit. **Native Shell (nsh) draws the interface and supplies the native rich-text editor on Windows, macOS and Linux.** There is no browser editor or external LibreOffice dependency.
 
-The `rust-nsh` migration replaces GPUI Kit/GPUI Fast and the live WordCraft editor. WordCraft file/print codecs remain at RTF/Office import/export and PDF boundaries; they do not own typing, selection, undo or the editor view. This branch is under GitHub validation. Its source includes native document input and IME, formatting, selection, undo/redo, tables, images, links, formatted clipboard operations, page setup, PDF export and system printing. Windows, macOS and Linux are GitHub build targets. Build validation and interactive acceptance are recorded in [CHANGELOG.md](CHANGELOG.md); source features are not a guarantee of complete TextEdit or Word compatibility.
+The `rust-nsh` migration replaces GPUI Kit/GPUI Fast and the live WordCraft editor. WordCraft file/print codecs remain at RTF/Office import/export and PDF boundaries; they do not own typing, selection, undo or the editor view. The first native migration build has passed GitHub validation; Windows runtime checks are recorded below. Its source includes native document input and IME, formatting, selection, undo/redo, tables, images, links, formatted clipboard operations, page setup, PDF export and system printing. Windows, macOS and Linux are GitHub build targets. Build validation and interactive acceptance are recorded in [CHANGELOG.md](CHANGELOG.md); source features are not a guarantee of complete TextEdit or Word compatibility.
+
+![ExEditor native Windows build displaying a generated Markdown test document](docs/screenshots/native-windows-18fd77d.png)
+
+*Native Windows build 18fd77d on a GitHub runner. This screenshot uses a generated test document.*
 
 ## Builds and testing
+
+[Validated native build: 18fd77d](https://github.com/abelokoj/ExEditor/actions/runs/43636475163) includes three-platform packages, 161 Windows regressions, separate font/dictionary download checks, native Windows startup and same-window file opening, and installer registration checks. macOS/Linux runtime acceptance remains untested.
 
 All compilation and diagnostics run on [GitHub Actions](https://github.com/abelokoj/ExEditor/actions). Do not compile or run source tests locally. Test execution is currently restricted to Windows; macOS and Linux build and package only. Finish feature source before starting a workflow. Pushes to `main`, `nsh-edit` and `rust-nsh`, pull requests and manual dispatches run the build workflow.
 
