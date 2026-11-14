@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T17:35:25-05:00 - Prevent reactive redraws from reborrowing an active document mutation (local source)
+
+- GitHub's native keyboard pass exposed RefCell reentrancy errors in chrome/body redraws. Batch immediate shortcut actions, Ctrl+wheel actions, window-close actions and timer/queued commands so their document-model borrow ends before reactive effects redraw the interface. Keep immediate edit dispatch and native selection ordering intact.
+- The 4aab2fc screenshots showed selection and wheel zoom, but keypad frames did not change and Ctrl+comma could no longer open Settings after reactive panics. The previous screenshots establish those limits; no keypad/Settings runtime success is claimed for that run. Strict diagnostics, 166 ordinary regressions and macOS packaging passed; Linux packaging was still running at recording time.
+- Make the GitHub-native regression reject unchanged keypad/wheel frames and any application panic, as well as requiring the Settings window. This exercises the real document-window callback path that editor-session unit tests alone do not cover. Source formatting/inspection only locally; corrected native behavior and installer await GitHub.
+
 ## 2026-11-14T17:19:43-05:00 - Verify native selection and correct keypad test input (local CI correction)
 
 - GitHub run 43644881669 passed all 166 ordinary Windows regressions, optional font/dictionary download checks, release compilation and portable-package checks using the huacnlee Cargo fork. Native startup, same-window Markdown handoff and blue selection were observed in downloaded screenshots; the initial window visibly uses 12 pt and right-side controls. The run stopped because WScript rejected the keypad ADD command syntax, before the installer step.

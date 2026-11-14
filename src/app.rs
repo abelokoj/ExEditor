@@ -782,27 +782,29 @@ fn bind_shortcuts(
                 pass_through: false,
             },
             move |_| {
-                let mut model = model.borrow_mut();
-                match model.chord.resolve_keystroke(&parsed, Instant::now()) {
-                    Outcome::Action(action) => {
-                        pending.set(false);
-                        if let Some(command) = shortcut_command(action) {
-                            // Apply edits before another key can change the native selection.
-                            let mut window = window.clone();
-                            let mut context = context.clone();
-                            model.command(command, &mut window, &mut context);
-                        }
-                    }
-                    Outcome::Prefix => {
-                        pending.set(true);
-                        spawn(async move {
-                            timer(Duration::from_secs(3)).await;
+                batch(|| {
+                    let mut model = model.borrow_mut();
+                    match model.chord.resolve_keystroke(&parsed, Instant::now()) {
+                        Outcome::Action(action) => {
                             pending.set(false);
-                        });
+                            if let Some(command) = shortcut_command(action) {
+                                // Apply edits before another key can change the native selection.
+                                let mut window = window.clone();
+                                let mut context = context.clone();
+                                model.command(command, &mut window, &mut context);
+                            }
+                        }
+                        Outcome::Prefix => {
+                            pending.set(true);
+                            spawn(async move {
+                                timer(Duration::from_secs(3)).await;
+                                pending.set(false);
+                            });
+                        }
+                        Outcome::Cancelled => pending.set(false),
+                        Outcome::Ignored => {}
                     }
-                    Outcome::Cancelled => pending.set(false),
-                    Outcome::Ignored => {}
-                }
+                })
             },
         );
     }
@@ -821,19 +823,23 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
     let close_window = window.clone();
     let close_cx = cx.clone();
     window.on_close_press(move |_| {
-        let mut context = close_cx.clone();
-        let mut window = close_window.clone();
-        close_model
-            .borrow_mut()
-            .command(Command::CloseWindow, &mut window, &mut context);
+        batch(|| {
+            let mut context = close_cx.clone();
+            let mut window = close_window.clone();
+            close_model
+                .borrow_mut()
+                .command(Command::CloseWindow, &mut window, &mut context);
+        })
     });
     let poll_model = model.clone();
     let poll_window = window.clone();
     let poll_cx = cx.clone();
     set_interval(Duration::from_millis(80), move || {
-        let mut context = poll_cx.clone();
-        let mut window = poll_window.clone();
-        poll_model.borrow_mut().tick(&mut window, &mut context);
+        batch(|| {
+            let mut context = poll_cx.clone();
+            let mut window = poll_window.clone();
+            poll_model.borrow_mut().tick(&mut window, &mut context);
+        })
     });
     let pending = signal(false);
     bind_shortcuts(model.clone(), pending, false, window.clone(), cx.clone());
@@ -886,20 +892,22 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
     let wheel_cx = cx.clone();
     let wheel_remainder = Rc::new(std::cell::Cell::new(0_f32));
     let zoom_wheel = move |event: &nsh_core::WheelEvent| {
-        if !event.modifiers.ctrl {
-            wheel_remainder.set(0.);
-            return;
-        }
-        let mut pending = wheel_remainder.get();
-        let delta = crate::keyboard::wheel_zoom(event.delta, &mut pending);
-        wheel_remainder.set(pending);
-        if delta != 0 {
-            wheel_model.borrow_mut().command(
-                Command::Zoom(delta),
-                &mut wheel_window.clone(),
-                &mut wheel_cx.clone(),
-            );
-        }
+        batch(|| {
+            if !event.modifiers.ctrl {
+                wheel_remainder.set(0.);
+                return;
+            }
+            let mut pending = wheel_remainder.get();
+            let delta = crate::keyboard::wheel_zoom(event.delta, &mut pending);
+            wheel_remainder.set(pending);
+            if delta != 0 {
+                wheel_model.borrow_mut().command(
+                    Command::Zoom(delta),
+                    &mut wheel_window.clone(),
+                    &mut wheel_cx.clone(),
+                );
+            }
+        })
     };
     let paper_model = model.clone();
     let queue = model.borrow().queue.clone();

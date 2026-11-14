@@ -152,6 +152,9 @@ try {
     [ExEditorStartupCapture]::ZoomKey(0x6b)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-zoom-in.png'
+    if ((Get-FileHash (Join-Path $logs 'native-selection.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-zoom-in.png')).Hash) {
+        throw 'Ctrl+keypad plus did not visibly zoom the selected document.'
+    }
     [ExEditorStartupCapture]::ZoomKey(0x6d)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
     [ExEditorStartupCapture]::ZoomKey(0x6d)
@@ -160,6 +163,9 @@ try {
     [ExEditorStartupCapture]::WheelZoom($initialWindow)
     Start-Sleep -Milliseconds 700
     Save-NativeScreenshot $primary 'native-wheel-zoom.png'
+    if ((Get-FileHash (Join-Path $logs 'native-zoom-reset.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-wheel-zoom.png')).Hash) {
+        throw 'Ctrl+wheel did not visibly zoom the selected document.'
+    }
     $shell.SendKeys('^,')
     Start-Sleep -Milliseconds 1000
     $settingsWindow = [ExEditorStartupCapture]::FindWindow('NshWindow', 'ExEditor Settings')
@@ -167,6 +173,9 @@ try {
         Save-NativeScreenshot $primary 'native-settings.png' $settingsWindow
         $results.settings_opened = $true
     } else { throw 'Ctrl+comma did not open the native Settings window.' }
+    if (Select-String -LiteralPath (Join-Path $logs 'native-startup.stderr.log') -Pattern '^thread .*panicked' -Quiet) {
+        throw 'The native application reported a runtime panic during keyboard checks.'
+    }
     $results.keyboard_visual_evidence = @('native-selection.png', 'native-zoom-in.png', 'native-zoom-reset.png')
     $results.working_set_delta_bytes = $results.markdown.working_set_bytes - $results.initial.working_set_bytes
     $results.same_window_handoff = $true
