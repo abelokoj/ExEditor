@@ -129,7 +129,7 @@ pub fn correction_matches(
     current.get(start..end) == Some(original)
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum DictionaryStatus {
     Checking,
     Missing,

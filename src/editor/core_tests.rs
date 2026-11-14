@@ -199,3 +199,74 @@ fn paragraph_styles_survive_native_recovery_and_html_roundtrip() {
         );
     }
 }
+
+#[cfg(windows)]
+mod mounted_surface {
+    use crate::editor::{Editor, surface::surface};
+    use nsh_core::{
+        Size,
+        element::Root,
+        platform::{Idiom, Os},
+        prelude::*,
+    };
+    use nsh_engine::EngineConfig;
+    use nsh_testing::Headless;
+    use std::{rc::Rc, time::Duration};
+
+    #[derive(Clone, PartialEq, Props)]
+    struct SurfaceProps {
+        plain: bool,
+    }
+
+    #[component]
+    fn MountedSurface(props: SurfaceProps) -> impl IntoElement {
+        // The editor and its native session are created on the engine thread,
+        // just as they are in the application, rather than passed across threads.
+        let editor = Rc::new(Editor::new().expect("native editor"));
+        editor.set_plain_text_mode(props.plain).unwrap();
+        let observed = editor.clone();
+        let shown = signal((String::new(), String::new(), false));
+        set_interval(Duration::from_millis(10), move || {
+            shown.set((
+                observed.text().unwrap(),
+                observed.html().unwrap(),
+                observed.native_session().is_focused(),
+            ));
+        });
+        view()
+            .flex_col()
+            .child(view().w(px(600.)).h(px(360.)).child(surface(editor)))
+            .child(text(move || format!("Document {:?}", shown.get().0)))
+            .child(text(move || format!("Markup {}", shown.get().1)))
+            .child(text(move || format!("Editor focus {}", shown.get().2)))
+    }
+
+    #[test]
+    fn mounted_native_surface_accepts_initial_plain_and_rich_typing_and_undo() {
+        for plain in [true, false] {
+            let root = Root::new::<MountedSurface>(move || SurfaceProps { plain });
+            let mut config = EngineConfig {
+                viewport: Size::new(px(760.), px(620.)),
+                ..EngineConfig::new(crate::fonts::configure_root(root))
+            };
+            config.environment.os = Os::Windows;
+            config.environment.idiom = Idiom::Desktop;
+            let mut app = Headless::start(config).expect("mounted native surface");
+            // No click, type_text(), manual focus or model edit is allowed before
+            // this assertion: removing auto_focus must make the regression fail.
+            app.wait_for("text:Editor focus true").unwrap();
+            if !plain {
+                app.press_key("ctrl+b").unwrap();
+            }
+            for key in ["c", "a", "f", "é", "space", "😀"] {
+                app.press_key(key).unwrap();
+            }
+            app.wait_for("text:Document \"café 😀\"").unwrap();
+            if !plain {
+                app.wait_for("text:/<strong>café 😀/").unwrap();
+            }
+            app.press_key("ctrl+z").unwrap();
+            app.wait_for("text:Document \"\"").unwrap();
+        }
+    }
+}

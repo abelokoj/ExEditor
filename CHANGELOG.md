@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T14:30:53-05:00 - Follow-up native compiler corrections and mounted input regression (local correction)
+
+- GitHub run 43631702745 completed dependency setup and reached the application compiler on all three platforms. Corrected its two reported errors: the menu hover event parameter and equality for reactive dictionary download state. No application tests or installer were produced by that run.
+- Added a Windows-only regression that mounts the actual nsh editor surface, waits for automatic focus, sends Unicode key events in plain/rich modes, and checks native bold and undo behavior. This avoids model-only edits or manually focusing the input, so the original blank/non-typing view failure is exercised. Reduced repeated native window-title updates while the document UI state is unchanged.
+- Validation performed: exact GitHub compiler logs and SDK source inspection; local Rust formatting only. Corrected diagnostics and input tests remain pending on GitHub. No local compilation, source tests, or application launch.
+
 ## 2026-11-14T14:19:45-05:00 - Native SDK corrections and dictionary downloads (local source; GitHub validation pending)
 
 - Corrected native builder/event/label contracts and non-exhaustive SDK data construction from the first GitHub diagnostics. Editor views request focus on mount; keyboard commands apply immediately rather than waiting for a polling timer. Opening a file reuses only a single pristine empty tab, and a second launch activates the existing window. Saved appearance and isolated app data reach the native backend.

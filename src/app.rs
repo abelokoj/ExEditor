@@ -1671,14 +1671,14 @@ impl EditorWindow {
             self.doc.ruler,
             self.doc.zoom
         );
-        let mut attributes = WindowAttributes::default();
-        attributes.title = Some(format!(
-            "{}{} — ExEditor",
-            self.name(),
-            if self.doc.dirty { " — Edited" } else { "" }
-        ));
-        window.set(attributes);
         if self.ui_stamp != stamp {
+            let mut attributes = WindowAttributes::default();
+            attributes.title = Some(format!(
+                "{}{} — ExEditor",
+                self.name(),
+                if self.doc.dirty { " — Edited" } else { "" }
+            ));
+            window.set(attributes);
             self.ui_stamp = stamp;
             cx.notify();
         }
