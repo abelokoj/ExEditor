@@ -23,9 +23,6 @@ pub fn scale_percent() -> u16 {
 pub fn px(value: f32) -> Points {
     nsh_core::geometry::px(value * f32::from(scale_percent()) / 100.)
 }
-pub fn rem_size() -> Points {
-    px(16.)
-}
 pub fn rgb(value: u32) -> Hsla {
     nsh_core::color::rgb(value).into()
 }
@@ -376,12 +373,6 @@ pub fn command_list(
         )
 }
 
-pub fn icon(data: &'static str, color: u32) -> nsh_core::element::Svg {
-    svg(nsh_core::element::ImageSrc::svg_markup(data))
-        .size(px(14.))
-        .text_color(rgb(color))
-}
-
 pub fn heading(label: impl Into<SharedString>) -> impl IntoElement {
     text(Into::<SharedString>::into(label))
         .text_size(px(13.))
@@ -549,27 +540,6 @@ pub fn ruler(colors: Palette, zoom: u16) -> AnyElement {
         .into_element()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn textedit_palette_keeps_separate_document_and_chrome_roles() {
-        for dark in [false, true] {
-            let palette = Palette::new(dark);
-            assert_ne!(palette.ink, palette.field);
-            assert_ne!(palette.chrome, palette.paper);
-            assert_ne!(palette.accent, palette.on_accent);
-        }
-    }
-}
-pub const ALIGN_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M2 6h8M2 9h12M2 12h8"/></svg>"#;
-pub const ALIGN_CENTER: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M4 6h8M2 9h12M4 12h8"/></svg>"#;
-pub const ALIGN_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M6 6h8M2 9h12M6 12h8"/></svg>"#;
-pub const ALIGN_JUSTIFY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 3h12M2 6h12M2 9h12M2 12h12"/></svg>"#;
-pub const LIST: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M5 3h9M5 7h9M5 11h9"/><g fill="currentColor" stroke="none"><circle cx="2" cy="3" r="1"/><circle cx="2" cy="7" r="1"/><circle cx="2" cy="11" r="1"/></g></svg>"#;
-/// Lines with an up/down arrow, as on TextEdit's line and paragraph spacing control.
-pub const LINE_SPACING: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1"><path d="M7 3h7M7 6.5h7M7 10h7M7 13.5h7M3 2.5v11M1.5 4 3 2.5 4.5 4M1.5 12 3 13.5 4.5 12"/></svg>"#;
-
 pub fn icon_control(
     id: &str,
     markup: &str,
@@ -589,4 +559,18 @@ pub fn icon_control(
                     colors.ink
                 })),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn textedit_palette_keeps_separate_document_and_chrome_roles() {
+        for dark in [false, true] {
+            let palette = Palette::new(dark);
+            assert_ne!(palette.ink, palette.field);
+            assert_ne!(palette.chrome, palette.paper);
+            assert_ne!(palette.accent, palette.on_accent);
+        }
+    }
 }

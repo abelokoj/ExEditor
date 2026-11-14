@@ -44,7 +44,6 @@ pub enum EditCommand {
     LineSpacing(f32),
     Indent(i32),
     FirstLineIndent(i32),
-    TabStop(i32),
     Direction(bool),
     List(ListKind),
     ConvertCase(Case),

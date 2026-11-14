@@ -447,6 +447,7 @@ impl PickerState {
 
 /// Samples a desktop pixel using a temporary native overlay that consumes the
 /// selection click. The screenshot stays in GDI memory and is never written out.
+#[cfg(windows)]
 pub fn pick_screen_color() -> Result<Option<Rgba>> {
     screen_sampler::pick()
 }
@@ -873,12 +874,6 @@ mod screen_sampler {
             b: (native >> 16) as u8,
             a: 255,
         }));
-    }
-}
-#[cfg(not(windows))]
-mod screen_sampler {
-    pub fn pick() -> anyhow::Result<Option<super::Rgba>> {
-        anyhow::bail!("Desktop color sampling is available in the Windows application.")
     }
 }
 

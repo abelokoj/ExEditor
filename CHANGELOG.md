@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T14:43:04-05:00 - Remove obsolete migration paths and resolve strict diagnostics (local correction)
+
+- GitHub run 43632913380 passed the prior callback type errors and reached strict unused-code/style diagnostics. Removed unused compatibility IME/shortcut queues, unused viewport setter, duplicate SVG assets/helpers and an unconstructed tab-stop command. Native nsh continues to own IME/input and platform color sampling; coordinate helpers remain in tests. Connected document paper colors to the shared palette.
+- Corrected the reported nested conditional/redundant locals and test lint issues without weakening warning gates. Bound the no-wrap content-width workaround to 64,000 pixels to prevent extreme long lines from creating unbounded layout widths; exceptionally long lines may wrap, as documented. Moved source diagnostics before native spelling-runtime preparation so compiler failures stop earlier.
+- Validation: exact Windows/macOS GitHub diagnostic logs, caller searches and local Rust formatting. Runtime tests and installers remain pending on GitHub. No local compilation, source test execution, or app launch; no memory-reduction measurement is claimed.
+
 ## 2026-11-14T14:34:48-05:00 - Explicit native hover-event type (local compiler correction)
 
 - GitHub run 43632596931 reached native application diagnostics on all platforms, then found that the overloaded menu hover listener needs an explicit MouseEvent reference type to satisfy its lifetime contract. Added that type without changing preview behavior.

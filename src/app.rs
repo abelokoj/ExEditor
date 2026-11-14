@@ -298,7 +298,6 @@ fn shortcut_entries() -> Vec<MenuEntry> {
         .collect()
 }
 /// Dark-document background and the light stand-in for automatic text.
-const DARK_PAPER: u32 = 0x1e1e1e;
 const DARK_TEXT: u32 = 0xe6e6e5;
 /// Common source extensions for the Open dialog's filter; any file opens with All Files.
 const SOURCE_EXTENSIONS: &[&str] = &[
@@ -1372,8 +1371,10 @@ impl EditorWindow {
                 let (background, foreground) = highlighter.colors();
                 (background, Some(foreground))
             }
-            None if dark_paper => (DARK_PAPER, Some(DARK_TEXT)),
-            None => (0xffffff, None),
+            None => (
+                Palette::new(dark_paper).paper,
+                dark_paper.then_some(DARK_TEXT),
+            ),
         };
         editor.set_background(paper);
         editor.set_text_override(text)?;
@@ -1530,11 +1531,6 @@ impl EditorWindow {
         };
         while let Some(error) = editor.take_error() {
             show_error(&anyhow::anyhow!(error));
-        }
-        while let Some(shortcut) = editor.take_shortcut() {
-            if let Some(command) = shortcut_command(&shortcut) {
-                self.command(command, window, cx);
-            }
         }
         let Some(editor) = self.doc.editor.clone() else {
             return;
@@ -3107,7 +3103,6 @@ impl EditorWindow {
                             | EditCommand::LineSpacing(_)
                             | EditCommand::Indent(_)
                             | EditCommand::FirstLineIndent(_)
-                            | EditCommand::TabStop(_)
                             | EditCommand::List(_)
                             | EditCommand::PasteStyle
                     )
@@ -3906,9 +3901,7 @@ impl EditorWindow {
         for entry in &mut entries {
             if matches!(
                 entry.command,
-                Some(Command::Edit(
-                    EditCommand::FirstLineIndent(_) | EditCommand::TabStop(_)
-                ))
+                Some(Command::Edit(EditCommand::FirstLineIndent(_)))
             ) {
                 entry.enabled = false;
             }

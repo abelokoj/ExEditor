@@ -14,7 +14,6 @@ use nsh_base::rich_editor::{
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
     ops::Range,
     path::Path,
     sync::{
@@ -62,8 +61,6 @@ pub struct Editor {
     page: RefCell<PageSettings>,
     plain_style: RefCell<FormatState>,
     pasted: Cell<bool>,
-    viewport_width: Cell<f32>,
-    shortcuts: RefCell<VecDeque<String>>,
     completion: RefCell<Option<CompletionPopup>>,
     completion_seen: Cell<Option<(u64, usize, usize)>>,
 }
@@ -164,8 +161,6 @@ impl Editor {
                 ..Default::default()
             }),
             pasted: Cell::new(false),
-            viewport_width: Cell::new(600.),
-            shortcuts: RefCell::new(VecDeque::new()),
             completion: RefCell::new(None),
             completion_seen: Cell::new(None),
         })
@@ -249,12 +244,15 @@ impl Editor {
     pub fn plain_text_snapshot(&self) -> String {
         self.map().text
     }
+    #[cfg(test)]
     pub fn text_length(&self) -> usize {
         self.map().len()
     }
+    #[cfg(test)]
     pub fn position_at_utf16(&self, offset: usize) -> Result<usize> {
         self.map().position(offset)
     }
+    #[cfg(test)]
     pub fn utf16_at_position(&self, position: &usize) -> Option<usize> {
         Some(self.map().offset(*position))
     }
@@ -446,10 +444,6 @@ impl Editor {
         tr.replace_selection(slice).scroll_into_view();
         self.session.dispatch(tr)?;
         Ok(())
-    }
-    pub fn replace_ime(&self, range: Range<usize>, text: &str, _join_previous: bool) -> Result<()> {
-        self.select_range(range)?;
-        self.replace_current(text)
     }
     pub fn insert_rtf(&self, bytes: &[u8]) -> Result<()> {
         validate_rtf(bytes)?;
@@ -807,8 +801,9 @@ impl Editor {
             E::Direction(rtl) => {
                 return self.paragraph_style("direction", json!(if rtl { "rtl" } else { "ltr" }));
             }
-            E::FirstLineIndent(_) | E::TabStop(_) => bail!(
-                "First-line indentation and custom tab stops are not supported by NSH 0.5.0's native rich-text view."
+            E::FirstLineIndent(twips) => bail!(
+                "First-line indentation ({:.1} pt) is unavailable in this build.",
+                twips as f32 / 20.
             ),
         };
         self.run_command(id, &args)?;
@@ -1119,12 +1114,6 @@ impl Editor {
         let command = tiptap::scroll_into_view();
         self.session.run(&command);
     }
-    pub fn enqueue_shortcut(&self, shortcut: &str) {
-        self.shortcuts.borrow_mut().push_back(shortcut.into());
-    }
-    pub fn take_shortcut(&self) -> Option<String> {
-        self.shortcuts.borrow_mut().pop_front()
-    }
     pub fn display_state(&self) -> EditorDisplayState {
         let mut s = self.display.borrow().clone();
         s.revision = self.revision();
@@ -1145,7 +1134,6 @@ impl Editor {
         }
     }
     pub fn set_wrap_to_page(&self, value: bool) {
-        let value = value;
         if self.display.borrow().wrap_to_page != value {
             self.display.borrow_mut().wrap_to_page = value;
             self.invalidate_display();
@@ -1181,7 +1169,6 @@ impl Editor {
         self.invalidate_display();
     }
     pub fn set_autocomplete_enabled(&self, value: bool) {
-        let value = value;
         if self.display.borrow().autocomplete_enabled != value {
             self.display.borrow_mut().autocomplete_enabled = value;
             self.invalidate_display();
@@ -1190,12 +1177,6 @@ impl Editor {
     pub fn set_completion_language(&self, value: Option<String>) {
         self.display.borrow_mut().completion_language = value.unwrap_or_default();
         self.invalidate_display();
-    }
-    pub fn set_viewport_width(&self, width: f32) {
-        if width.is_finite() && width > 0. {
-            self.viewport_width.set(width);
-            self.invalidate_display();
-        }
     }
     pub fn apply_spans(&self, spans: &[crate::syntax::Span]) -> Result<()> {
         ensure!(

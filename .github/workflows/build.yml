@@ -56,6 +56,16 @@ jobs:
           cargo update --workspace 2>&1 | Tee-Object -FilePath logs/lockfile.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check Rust diagnostics
+        run: |
+          cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath logs/clippy.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Cache the native proofing package
         id: proofing-cache
         uses: actions/cache@v4
@@ -93,16 +103,6 @@ jobs:
         with:
           path: artifacts/proofing
           key: windows-proofing-v1-${{ hashFiles('scripts/build-proofing-deps.ps1', 'assets/licenses/proofing/**', 'vendor/box-format/**', 'Cargo.lock') }}
-
-      - name: Check formatting
-        run: |
-          cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Check Rust diagnostics
-        run: |
-          cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath logs/clippy.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run noninteractive Rust tests
         run: |

@@ -85,7 +85,10 @@ fn source_coloring_is_display_only_and_read_only_rejects_edits() {
             italic: false,
         }])
         .unwrap();
-    editor.set_proofing_marks(&[4..9]).unwrap();
+    let misspelled = 4..9;
+    editor
+        .set_proofing_marks(std::slice::from_ref(&misspelled))
+        .unwrap();
     assert_eq!(snapshot, editor.snapshot());
     assert!(!editor.is_modified());
     editor.set_read_only(true);

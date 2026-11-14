@@ -84,14 +84,14 @@ impl PluginSpec for OverlayPlugin {
         let map = TextMap::new(state.doc());
         let mut decorations = Vec::new();
         let mut add = |range: Range<usize>, class: String| {
-            if let (Ok(from), Ok(to)) = (map.position(range.start), map.position(range.end)) {
-                if from < to {
-                    decorations.push(Decoration::inline(
-                        from,
-                        to,
-                        BTreeMap::from([("class".into(), json!(class))]),
-                    ));
-                }
+            if let (Ok(from), Ok(to)) = (map.position(range.start), map.position(range.end))
+                && from < to
+            {
+                decorations.push(Decoration::inline(
+                    from,
+                    to,
+                    BTreeMap::from([("class".into(), json!(class))]),
+                ));
             }
         };
         for span in &overlay.syntax {

@@ -76,6 +76,7 @@ impl TextMap {
             self.positions.push(Some(pos));
         }
     }
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.positions.len() - 1
     }

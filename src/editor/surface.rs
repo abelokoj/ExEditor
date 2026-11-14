@@ -108,7 +108,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
             .w(px(editor.page_settings().width_twips as f32 / 20. * zoom))
             .mx(auto());
     } else if !display.wrap {
-        // shortcut: NSH has no unwrapped RichEditor prop; expand the native content box for long lines.
+        // shortcut: cap the no-wrap workaround at 64,000 px; upgrade when NSH supports native no-wrap.
         let width = editor
             .plain_text_snapshot()
             .lines()
@@ -118,7 +118,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
             * format.size
             * zoom
             + 40.;
-        content = content.min_w(px(width.max(editor.viewport_width.get())));
+        content = content.min_w(px(width.clamp(600., 64_000.)));
     }
     styles.content = Some(part(content));
     styles.root = Some(part(
