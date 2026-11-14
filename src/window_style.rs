@@ -4,6 +4,16 @@ pub fn refresh() {
     windows::refresh();
 }
 
+/// A secondary native window is created after its content's first layout.
+pub fn after_open() {
+    refresh();
+    #[cfg(windows)]
+    nsh_core::element::spawn(async {
+        nsh_core::element::timer(std::time::Duration::from_millis(100)).await;
+        refresh();
+    });
+}
+
 #[cfg(windows)]
 mod windows {
     use std::{cell::RefCell, collections::BTreeMap, ffi::c_void};

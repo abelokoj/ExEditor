@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ExecutablePath,
     [string]$LogDirectory = 'logs',
-    [ValidateSet('Light', 'Dark')][string]$Appearance = 'Light'
+    [ValidateSet('Light', 'Dark')][string]$Appearance = 'Light',
+    [ValidateRange(1, 120)][int]$Sections = 120
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -26,7 +27,7 @@ New-Item -ItemType Directory -Path $data | Out-Null
 @{ spellcheck = $false; autocomplete = $false; appearance = $Appearance } | ConvertTo-Json |
     Set-Content -LiteralPath (Join-Path $data 'preferences.json') -Encoding utf8NoBOM
 $markdown = Join-Path $testRoot 'Long Markdown café.md'
-$paragraphs = foreach ($section in 1..120) {
+$paragraphs = foreach ($section in 1..$Sections) {
     "## Section $section`n`n" + ('A native document with **bold**, *italic*, Unicode café 😀 and [a safe link](https://example.org). ' * 15) + "`n`n"
 }
 [IO.File]::WriteAllText($markdown, "# Native Markdown check`n`n" + ($paragraphs -join ''), [Text.UTF8Encoding]::new($false))
@@ -72,6 +73,14 @@ public static class ExEditorStartupCapture {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int metric);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+    [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr value);
+    public static bool Rounded(IntPtr window) {
+        var region = CreateRectRgn(0,0,0,0);
+        try { return GetWindowRgn(window, region) == 3; }
+        finally { DeleteObject(region); }
+    }
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
     public static void ZoomKey(byte key) {
@@ -134,6 +143,8 @@ try {
     $initialWindow = $primary.MainWindowHandle
     $results.initial = Measure-NativeMemory $primary
     Save-NativeScreenshot $primary 'native-startup-initial.png'
+    $results.rounded_window = [ExEditorStartupCapture]::Rounded($initialWindow)
+    if (-not $results.rounded_window) { throw 'The native document window has no rounded region.' }
     $forwarder = Start-Process -FilePath $executable -ArgumentList ('"' + $markdown + '"') -WindowStyle Hidden -PassThru
     if (-not $forwarder.WaitForExit(15000)) { throw 'The second launch did not hand the file to the existing application.' }
     if ($forwarder.ExitCode -ne 0) { throw "File forwarding failed (exit $($forwarder.ExitCode))." }

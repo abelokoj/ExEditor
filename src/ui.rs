@@ -494,6 +494,7 @@ pub fn panel_host() -> impl IntoElement {
                     }
                 })
                 .content(move || {
+                    crate::window_style::after_open();
                     view()
                         .flex_1()
                         .min_w(px(0.))

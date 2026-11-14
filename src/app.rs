@@ -812,6 +812,7 @@ fn bind_shortcuts(
 fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
     let window = desktop::current_window();
     window.set(window_attributes(None));
+    crate::window_style::after_open();
     *entry.handle.borrow_mut() = Some(window.clone());
     let cx = AppContext {
         workspace,

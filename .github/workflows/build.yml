@@ -148,6 +148,14 @@ jobs:
           cargo test --locked dictionaries::tests::github_dictionary_downloads_are_verified_and_cached -- --ignored 2>&1 | Tee-Object -FilePath logs/dictionary-downloads.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check native document controls before release compilation
+        timeout-minutes: 10
+        run: |
+          cargo build --locked --bin exeditor 2>&1 | Tee-Object -FilePath logs/debug-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/package.ps1 -ReleaseDirectory target/debug -Destination artifacts/ExEditor-debug -Commit '${{ github.sha }}'
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor-debug/ExEditor.exe -Sections 6 -LogDirectory logs/debug
+
       - name: Build the application
         run: |
           cargo build --locked --release --bin exeditor 2>&1 | Tee-Object -FilePath logs/build.log
@@ -166,7 +174,7 @@ jobs:
         timeout-minutes: 5
         run: |
           ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe
-          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Appearance Dark -LogDirectory logs/dark -LogDirectory logs
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Appearance Dark -LogDirectory logs/dark
 
       - name: Build the per-user installer
         run: |

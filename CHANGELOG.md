@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-14T17:55:24-05:00 - Validate native controls before the slow release link (local source/CI)
+
+- Run 43648937377 passed strict diagnostics, all 166 ordinary Windows regressions and macOS/Linux packaging. Native stderr no longer contains the redraw panics after batching. The keypad screenshot still did not change, so no installer was produced; selection and wheel evidence from earlier runs remain distinct from this failed keypad check.
+- Include the native-window follow-up pass so Windows compatibility hooks and rounded regions are applied after window creation, instead of relying on first layout timing. Require a rounded native document region in the GitHub check. Add a small-fixture development-build native pass on GitHub before release compilation so remaining window/input failures stop earlier. Keep large-fixture light/dark release checks and Windows-only execution.
+- Remove a duplicate LogDirectory argument in the dark-check workflow invocation. Local validation is source/SDK/log/screenshot inspection and formatting only. Updated native controls and final installer still await GitHub; no local compilation, source tests or app execution.
+
+## 2026-11-14T17:43:22-05:00 - Apply rounding after secondary native windows exist (local source)
+
+- Schedule a single follow-up rounding pass after document/panel mounting. nsh creates secondary native windows after content's initial layout, so an initial layout-only pass can miss a new popup. Keep layout-based rounding for later resizes and preserve the cached native-region handling.
+- Validation: pinned native-window creation/lifecycle source inspection and local formatting only. This timing correction awaits GitHub; no local build, source tests or app launch.
+
 ## 2026-11-14T17:35:25-05:00 - Prevent reactive redraws from reborrowing an active document mutation (local source)
 
 - GitHub's native keyboard pass exposed RefCell reentrancy errors in chrome/body redraws. Batch immediate shortcut actions, Ctrl+wheel actions, window-close actions and timer/queued commands so their document-model borrow ends before reactive effects redraw the interface. Keep immediate edit dispatch and native selection ordering intact.
