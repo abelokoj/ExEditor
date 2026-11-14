@@ -49,6 +49,7 @@ mod windows {
             let mut shapes = shapes.borrow_mut();
             shapes.retain(|handle, _| handles.iter().any(|hwnd| *hwnd as usize == *handle));
             for hwnd in handles {
+                crate::keyboard::install_keypad_aliases(hwnd);
                 let mut rect = RECT::default();
                 // SAFETY: rect is a valid out buffer; a closed HWND simply fails.
                 if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {

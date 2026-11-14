@@ -818,3 +818,100 @@ mod wheel_tests {
         );
     }
 }
+
+#[cfg(windows)]
+pub(crate) use keypad::install as install_keypad_aliases;
+
+#[cfg(windows)]
+mod keypad {
+    use std::{cell::RefCell, collections::BTreeMap};
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        System::Threading::GetCurrentProcessId,
+        UI::{
+            Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU},
+            WindowsAndMessaging::{
+                CallNextHookEx, GetClassNameW, GetWindowThreadProcessId, HHOOK, MSG,
+                SetWindowsHookExW, UnhookWindowsHookEx, WH_GETMESSAGE, WM_KEYDOWN, WM_KEYUP,
+            },
+        },
+    };
+    struct Hooks(BTreeMap<u32, HHOOK>);
+    impl Drop for Hooks {
+        fn drop(&mut self) {
+            for hook in self.0.values() {
+                // SAFETY: each handle was installed and is owned by this Hooks value.
+                unsafe { UnhookWindowsHookEx(*hook) };
+            }
+        }
+    }
+    thread_local! { static HOOKS: RefCell<Hooks> = const { RefCell::new(Hooks(BTreeMap::new())) }; }
+    fn alias(key: usize) -> usize {
+        match key {
+            0x6b => 0xbb,
+            0x6d => 0xbd,
+            _ => key,
+        }
+    }
+    unsafe extern "system" fn message(code: i32, removed: WPARAM, data: LPARAM) -> LRESULT {
+        if code == 0 && removed == 1 && data != 0 {
+            // SAFETY: WH_GETMESSAGE supplies a writable MSG for HC_ACTION.
+            let msg = unsafe { &mut *(data as *mut MSG) };
+            if matches!(msg.message, WM_KEYDOWN | WM_KEYUP) && alias(msg.wParam) != msg.wParam
+                // SAFETY: GetKeyState reads this UI thread's modifier state.
+                && unsafe { GetKeyState(VK_CONTROL as i32) } < 0
+                && unsafe { GetKeyState(VK_MENU as i32) } >= 0
+            {
+                let mut class = [0_u16; 32];
+                // Limit the compatibility alias to NSH windows, including their own field controls.
+                // SAFETY: class is a live out buffer and msg.hwnd comes from this process's queue.
+                if unsafe { GetClassNameW(msg.hwnd, class.as_mut_ptr(), 32) } == 9
+                    && class[..9] == [78, 115, 104, 87, 105, 110, 100, 111, 119]
+                {
+                    msg.wParam = alias(msg.wParam);
+                }
+            }
+        }
+        // SAFETY: preserve every other hook and message; this is never a global hook.
+        unsafe { CallNextHookEx(std::ptr::null_mut(), code, removed, data) }
+    }
+    pub(crate) fn install(hwnd: HWND) {
+        let mut process = 0;
+        // SAFETY: a live app window from window_style's filtered enumeration.
+        let thread = unsafe { GetWindowThreadProcessId(hwnd, &mut process) };
+        if thread == 0 || process != unsafe { GetCurrentProcessId() } {
+            return;
+        }
+        HOOKS.with(|hooks| {
+            let mut hooks = hooks.borrow_mut();
+            if hooks.0.contains_key(&thread) {
+                return;
+            }
+            // NSH 0.5 omits keypad +/- from its key decoder. Translate only Ctrl+keypad
+            // before that decoder, retaining the common app shortcut and zoom paths.
+            // SAFETY: nonzero thread belongs to this process; message has process lifetime.
+            let hook = unsafe {
+                SetWindowsHookExW(WH_GETMESSAGE, Some(message), std::ptr::null_mut(), thread)
+            };
+            if hook.is_null() {
+                eprintln!(
+                    "Unable to enable keypad zoom: {}",
+                    std::io::Error::last_os_error()
+                );
+            } else {
+                hooks.0.insert(thread, hook);
+            }
+        });
+    }
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn keypad_aliases_leave_other_keys_unchanged() {
+            assert_eq!(super::alias(0x6b), 0xbb);
+            assert_eq!(super::alias(0x6d), 0xbd);
+            for key in [0x41, 0xbb, 0xbd, 0x60] {
+                assert_eq!(super::alias(key), key);
+            }
+        }
+    }
+}

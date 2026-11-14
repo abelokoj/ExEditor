@@ -133,7 +133,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     styles.selected_cell = Some(selection);
     styles.selected_node = Some(part(
         StyleRefinement::default()
-            .outline_2()
+            .outline(px(2.))
             .outline_color(color(0x087ef5)),
     ));
     let mut nodes = BTreeMap::new();

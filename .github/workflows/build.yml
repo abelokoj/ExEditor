@@ -248,6 +248,9 @@ jobs:
           rustc --version | tee logs/toolchain.log
           curl --fail --silent --show-error --location https://raw.githubusercontent.com/huacnlee/cargo/v0.102.0-9/install.sh --output "$RUNNER_TEMP/install-cargo-fork.sh"
           sh "$RUNNER_TEMP/install-cargo-fork.sh" --version 0.102.0-9
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          hash -r
           command -v cargo | tee -a logs/toolchain.log
           cargo -V | tee -a logs/toolchain.log
           cargo -V | grep -F 'huacnlee/cargo 0.102.0-9'

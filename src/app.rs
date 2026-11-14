@@ -923,7 +923,7 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
                 .w_full()
                 .on_wheel(zoom_wheel)
                 // Claim Ctrl+wheel as a pinch target so native scrolling does not also move the document.
-                .on_pinch_start(|_: &nsh_core::GestureEvent| {})
+                .on_pinch_start(|_: &nsh_core::element::GestureEvent| {})
                 .child(body),
         )
         .on_file_drop(move |event: &FileDropEvent| {
@@ -1011,11 +1011,8 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             .child(lights),
         WindowControls::Custom => {
             let left = f32::from(current.prefs.window_controls_percent);
-            let before = view().flex_basis(px(0.)).flex_grow(left).min_w(px(0.));
-            let after = view()
-                .flex_basis(px(0.))
-                .flex_grow(100. - left)
-                .min_w(px(0.));
+            let before = view().w(px(0.)).flex_grow(left).min_w(px(0.));
+            let after = view().w(px(0.)).flex_grow(100. - left).min_w(px(0.));
             // Keep the caption in the larger free region so it never sits under the buttons.
             if left >= 50. {
                 title

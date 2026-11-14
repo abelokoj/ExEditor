@@ -247,7 +247,7 @@ pub fn input(
         .placeholder(label.to_string())
         .value(move || value.get())
         .caret_color(rgb(colors.ink))
-        .selection_color(rgba(0x3399ff66).into())
+        .selection_color(rgba(0x3399ff66))
         .placeholder_color(rgb(colors.muted))
         .on_change(move |next: &str| value.set(next.to_owned()))
         .submit_behavior(SubmitBehavior::Submit)
@@ -278,9 +278,6 @@ pub fn select(
         .accessibility_label(label)
         .items(items)
         .value(move || value.get())
-        .caret_color(rgb(colors.ink))
-        .selection_color(rgba(0x3399ff66).into())
-        .placeholder_color(rgb(colors.muted))
         .on_change(move |next: &Option<SharedString>| on_change(next.clone()))
         .popup_style(move |s| {
             s.p(px(4.))

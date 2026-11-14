@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T16:31:08-05:00 - Native API compatibility and GitHub Cargo selection (local correction)
+
+- The first GitHub pass installed the requested fork on macOS, but Homebrew's Cargo remained earlier on PATH. Select the installed fork for the current and later runner steps and retain the pinned compiler. The completed Windows/Linux diagnostic passes then reported native API mismatches; corrected all reported call sites, including the gesture event namespace and input-only color methods.
+- Correct title-bar flex sizing and selection outline calls to the pinned nsh API, and use the typed input color directly. Translate Windows Ctrl+keypad plus/minus inside this process's NSH message queues because nsh 0.5 does not decode those virtual keys; preserve plain keypad typing, Alt combinations and all other windows. Owned hooks are released on shutdown.
+- Validation locally: exact upstream API and GitHub setup-log inspection plus Rust formatting. Source diagnostics, regressions and native visual evidence remain pending on GitHub; no local compilation or application launch.
+
 ## 2026-11-14T16:24:38-05:00 - Editor selection, zoom, compact panels and window control placement (local source)
 
 - Set new plain and rich documents to 12 pt; preserve existing document formatting and saved custom defaults. Render numeric native font-size attributes as well as HTML strings, remove CSS quotes from displayed font families, and explicitly color text, table and node selections.
