@@ -17,6 +17,22 @@ pub enum Appearance {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowControls {
+    Left,
+    Right,
+    Custom,
+}
+impl Default for WindowControls {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Left
+        } else {
+            Self::Right
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -47,6 +63,9 @@ pub struct Preferences {
     pub code_theme: String,
     /// Offer document words and language keywords while typing.
     pub autocomplete: bool,
+    pub window_controls: WindowControls,
+    /// Horizontal position within the title bar, from left (0) to right (100).
+    pub window_controls_percent: u16,
 }
 
 impl Default for Preferences {
@@ -57,7 +76,7 @@ impl Default for Preferences {
             rich_font: crate::fonts::default_rich_font().into(),
             rich_size: 12.0,
             plain_font: crate::fonts::default_plain_font().into(),
-            plain_size: 11.0,
+            plain_size: 12.0,
             wrap_to_page: false,
             show_ruler: true,
             spellcheck: true,
@@ -74,6 +93,8 @@ impl Default for Preferences {
             dark_documents: true,
             code_theme: crate::syntax::AUTOMATIC.into(),
             autocomplete: true,
+            window_controls: WindowControls::default(),
+            window_controls_percent: 50,
         }
     }
 }
@@ -131,6 +152,10 @@ impl Preferences {
 
     fn validate(&self) -> Result<()> {
         self.proofing.validate()?;
+        ensure!(
+            self.window_controls_percent <= 100,
+            "Window control position must be between 0% and 100%."
+        );
         crate::names::validate_prefix(&self.untitled_prefix)?;
         ensure!(
             !self.rich_font.trim().is_empty() && self.rich_font.len() <= 256,
@@ -176,9 +201,28 @@ mod tests {
         assert_eq!(preferences.untitled_prefix, "Untitled");
         assert!(preferences.spellcheck);
         assert!(preferences.autocomplete);
+        assert_eq!(preferences.rich_size, 12.);
+        assert_eq!(preferences.plain_size, 12.);
+        assert_eq!(preferences.window_controls, WindowControls::default());
+        assert_eq!(preferences.window_controls_percent, 50);
         assert_eq!(preferences.autosave_seconds, 30);
     }
 
+    #[test]
+    fn window_control_position_round_trips_and_rejects_invalid_percentages() {
+        let mut preferences = Preferences {
+            window_controls: WindowControls::Custom,
+            window_controls_percent: 25,
+            ..Preferences::default()
+        };
+        let restored: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&preferences).unwrap()).unwrap();
+        assert_eq!(restored.window_controls, WindowControls::Custom);
+        assert_eq!(restored.window_controls_percent, 25);
+        assert!(restored.validate().is_ok());
+        preferences.window_controls_percent = 101;
+        assert!(preferences.validate().is_err());
+    }
     #[test]
     fn recents_deduplicate_and_remain_bounded() {
         let mut preferences = Preferences::default();

@@ -107,6 +107,25 @@ try {
     if ($primary.MainWindowHandle -ne $initialWindow) { throw 'Opening a file replaced the existing document window.' }
     $results.markdown = Measure-NativeMemory $primary
     Save-NativeScreenshot $primary 'native-startup-markdown.png'
+    $shell = New-Object -ComObject WScript.Shell
+    if (-not $shell.AppActivate($primary.Id)) { throw 'The GitHub test window could not be activated.' }
+    # These inputs are sent only to the isolated app on the GitHub runner.
+    $shell.SendKeys('^a')
+    Start-Sleep -Milliseconds 700
+    Save-NativeScreenshot $primary 'native-selection.png'
+    $shell.SendKeys('^{ADD}')
+    $shell.SendKeys('^{ADD}')
+    $shell.SendKeys('^{ADD}')
+    Start-Sleep -Milliseconds 700
+    Save-NativeScreenshot $primary 'native-zoom-in.png'
+    $shell.SendKeys('^{SUBTRACT}')
+    $shell.SendKeys('^{SUBTRACT}')
+    $shell.SendKeys('^{SUBTRACT}')
+    Start-Sleep -Milliseconds 700
+    Save-NativeScreenshot $primary 'native-zoom-reset.png'
+    $shell.SendKeys('^{,}')
+    Start-Sleep -Milliseconds 1000
+    $results.keyboard_visual_evidence = @('native-selection.png', 'native-zoom-in.png', 'native-zoom-reset.png')
     $results.working_set_delta_bytes = $results.markdown.working_set_bytes - $results.initial.working_set_bytes
     $results.same_window_handoff = $true
     $results.started = $true

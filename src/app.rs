@@ -9,7 +9,7 @@ use crate::{
     },
     editing::LineAction,
     editor::{Alignment, Case, EditCommand, Editor, FormatState, ListKind, PageSettings},
-    preferences::{Appearance, Preferences},
+    preferences::{Appearance, Preferences, WindowControls},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
     syntax::{self, CodeHighlighter},
@@ -881,12 +881,34 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
             crate::editor::surface::surface(editor)
         },
     );
+    let wheel_model = model.clone();
+    let wheel_window = window.clone();
+    let wheel_cx = cx.clone();
+    let wheel_remainder = Rc::new(std::cell::Cell::new(0_f32));
+    let zoom_wheel = move |event: &nsh_core::WheelEvent| {
+        if !event.modifiers.ctrl {
+            wheel_remainder.set(0.);
+            return;
+        }
+        let mut pending = wheel_remainder.get();
+        let delta = crate::keyboard::wheel_zoom(event.delta, &mut pending);
+        wheel_remainder.set(pending);
+        if delta != 0 {
+            wheel_model.borrow_mut().command(
+                Command::Zoom(delta),
+                &mut wheel_window.clone(),
+                &mut wheel_cx.clone(),
+            );
+        }
+    };
     let paper_model = model.clone();
     let queue = model.borrow().queue.clone();
     view()
         .flex_1()
         .min_h(px(0.))
         .overflow_hidden()
+        .rounded(px(8.))
+        .on_layout(|_: &Bounds<Points>| crate::window_style::refresh())
         .border_1()
         .border_color(move || {
             entry.revision.get();
@@ -894,7 +916,16 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
         })
         .font_family(crate::fonts::INTER_FONT)
         .child(chrome)
-        .child(view().flex_1().min_h(px(1.)).w_full().child(body))
+        .child(
+            view()
+                .flex_1()
+                .min_h(px(1.))
+                .w_full()
+                .on_wheel(zoom_wheel)
+                // Claim Ctrl+wheel as a pinch target so native scrolling does not also move the document.
+                .on_pinch_start(|_: &nsh_core::GestureEvent| {})
+                .child(body),
+        )
         .on_file_drop(move |event: &FileDropEvent| {
             for uri in &event.uris {
                 if let Ok(url) = url::Url::parse(uri)
@@ -956,16 +987,49 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                 }),
         );
     }
-    title = title
-        .child(lights)
-        .child(
-            view().flex_1().items_center().justify_center().child(
-                text(format!("{name}{}", if dirty { " — Edited" } else { "" }))
+    let title_text = || {
+        view()
+            .flex_1()
+            .min_w(px(0.))
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .child(
+                text(format!("{name}{}", if dirty { " (Edited)" } else { "" }))
                     .text_size(px(13.))
                     .text_color(ui::rgb(colors.ink)),
-            ),
-        )
-        .child(view().w(px(86.)));
+            )
+    };
+    title = match current.prefs.window_controls {
+        WindowControls::Left => title
+            .child(lights)
+            .child(title_text())
+            .child(view().w(px(86.))),
+        WindowControls::Right => title
+            .child(view().w(px(86.)))
+            .child(title_text())
+            .child(lights),
+        WindowControls::Custom => {
+            let left = f32::from(current.prefs.window_controls_percent);
+            let before = view().flex_basis(px(0.)).flex_grow(left).min_w(px(0.));
+            let after = view()
+                .flex_basis(px(0.))
+                .flex_grow(100. - left)
+                .min_w(px(0.));
+            // Keep the caption in the larger free region so it never sits under the buttons.
+            if left >= 50. {
+                title
+                    .child(before.child(title_text()))
+                    .child(lights)
+                    .child(after)
+            } else {
+                title
+                    .child(before)
+                    .child(lights)
+                    .child(after.child(title_text()))
+            }
+        }
+    };
     let mut menu = view()
         .flex_row()
         .h(px(24.))
@@ -1670,9 +1734,9 @@ impl EditorWindow {
         if self.ui_stamp != stamp {
             let mut attributes = WindowAttributes::default();
             attributes.title = Some(format!(
-                "{}{} — ExEditor",
+                "{}{} | ExEditor",
                 self.name(),
-                if self.doc.dirty { " — Edited" } else { "" }
+                if self.doc.dirty { " (Edited)" } else { "" }
             ));
             window.set(attributes);
             self.ui_stamp = stamp;
@@ -2669,7 +2733,7 @@ impl EditorWindow {
                     document,
                     page,
                 },
-                &format!("Print — {printer}"),
+                &format!("Print: {printer}"),
                 vec![
                     Field::text("Copies", 1),
                     Field::text("Pages (blank for all)", ""),
@@ -3333,7 +3397,38 @@ impl EditorWindow {
                 if let Some(autocomplete) = values.get(15) {
                     prefs.autocomplete = autocomplete == "true";
                 }
+                if let Some(position) = values.get(16) {
+                    prefs.window_controls = match position.as_str() {
+                        "left" => WindowControls::Left,
+                        "right" => WindowControls::Right,
+                        "custom" => WindowControls::Custom,
+                        _ => bail!("Choose left, right, or custom window controls"),
+                    };
+                }
+                if let Some(percent) = values.get(17) {
+                    prefs.window_controls_percent = percent.parse()?;
+                    ensure!(
+                        prefs.window_controls_percent <= 100,
+                        "Window control position must be between 0% and 100%"
+                    );
+                }
                 prefs.save()?;
+                // Apply the same persisted appearance and title-bar layout to existing windows.
+                for entry in cx
+                    .workspace
+                    .entries
+                    .borrow()
+                    .iter()
+                    .filter(|entry| entry.id != cx.id)
+                {
+                    let mut other = entry.model.borrow_mut();
+                    other.prefs.appearance = prefs.appearance;
+                    other.prefs.window_controls = prefs.window_controls;
+                    other.prefs.window_controls_percent = prefs.window_controls_percent;
+                    other.ui_stamp.clear();
+                    entry.revision.update(|value| *value += 1);
+                }
+                self.ui_stamp.clear();
                 self.prefs = prefs;
                 set_color_scheme(match self.prefs.appearance {
                     Appearance::Light => nsh_core::platform::Appearance::Light,
@@ -3815,7 +3910,7 @@ impl EditorWindow {
                     .filter(|(_, entry)| entry.id != cx.id)
                     .map(|(index, entry)| {
                         item(
-                            &format!("{} — Window {}", entry.model.borrow().name(), index + 1),
+                            &format!("{} | Window {}", entry.model.borrow().name(), index + 1),
                             "",
                             C::MoveTabs {
                                 target: entry.id,

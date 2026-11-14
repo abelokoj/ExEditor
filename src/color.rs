@@ -646,7 +646,7 @@ mod screen_sampler {
             registered,
             "Windows could not register the desktop color sampler."
         );
-        let title: Vec<u16> = "Pick a color — click or press Enter; Escape cancels\0"
+        let title: Vec<u16> = "Pick a color: click or press Enter; Escape cancels\0"
             .encode_utf16()
             .collect();
         // SAFETY: getting the foreground HWND does not transfer ownership.

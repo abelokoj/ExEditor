@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-14T16:24:38-05:00 - Editor selection, zoom, compact panels and window control placement (local source)
+
+- Set new plain and rich documents to 12 pt; preserve existing document formatting and saved custom defaults. Render numeric native font-size attributes as well as HTML strings, remove CSS quotes from displayed font families, and explicitly color text, table and node selections.
+- Wire Ctrl+wheel zoom with accumulated precise-wheel movement. Preserve normal scrolling and keep zoom separate from saved formatting. Existing Ctrl+=, Ctrl+plus, Ctrl+minus and keypad bindings remain connected to the shared zoom command.
+- Default Windows/Linux window controls to the right and macOS controls to the left. Add Settings > Open and Save > Window Controls with Left, Right and a custom horizontal position; persist and apply changes to existing windows without placing controls over the document.
+- Fit menu widths to their labels, tighten menu rows, reduce the Spelling and Grammar panel's initial height, center shared form rows, and round/clip popup content. Apply native Windows rounding to NSH windows, including frameless popups, with a region fallback and rectangular maximized windows. Remove em dashes from app-owned captions; preserve user documents and smart punctuation behavior.
+- Configure all GitHub runners to install the same pinned huacnlee Cargo fork 0.102.0-9 through its upstream checksum-verifying installer, invoke it directly, log its identity, and retain shared build caches. The Rust compiler remains pinned at 1.99.1; no local tool installation.
+- Validation performed locally: source and pinned-SDK inspection, installed huacnlee Cargo version inspection and Rust formatting only. Added preference/font/zoom/wheel regressions and GitHub-only keyboard screenshot capture. Compilation, source tests, actual popup/selection visuals and cross-platform packaging await GitHub. No local build, source tests or application launch.
+
 ## 2026-11-14T15:50:56-05:00 - Native Windows build ready and Cargo instructions saved (recording time; documentation follow-up)
 
 - GitHub run [43636475163](https://github.com/abelokoj/ExEditor/actions/runs/43636475163) succeeded for source 18fd77df826362b5f6120cb6caeea0b321a28ab1 on Windows, macOS and Linux. Strict diagnostics passed everywhere; Windows passed all 161 ordinary regressions, two separate real font/dictionary download checks, the optional-font payload exclusion gate, native startup/same-window file handoff, and installer integration. macOS/Linux compiled and packaged without executing tests.

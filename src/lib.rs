@@ -24,6 +24,7 @@ mod session;
 mod settings;
 mod syntax;
 mod ui;
+mod window_style;
 
 pub use app::App;
 use nsh_core::prelude::*;

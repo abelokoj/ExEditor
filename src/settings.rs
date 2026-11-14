@@ -3,7 +3,7 @@ use crate::{
     app::Command,
     dialogs::{Commands, FormKind},
     document::TextEncoding,
-    preferences::{Appearance, Preferences},
+    preferences::{Appearance, Preferences, WindowControls},
     ui::{self, Palette, px},
 };
 use nsh_core::{
@@ -295,6 +295,21 @@ impl Settings {
                             move || appearance.with(|p| p.appearance == value), self.colors,
                             move |_| appearance.update(|p| p.appearance = value))
                     })))
+            .child(ui::heading("Window Controls"))
+            .child(ui::radio_group("Window control position").flex_row().gap(px(20.))
+                .children([(WindowControls::Left,"Left"), (WindowControls::Right,"Right"), (WindowControls::Custom,"Custom")]
+                    .into_iter().enumerate().map(|(index,(value,label))| {
+                        ui::radio(format!("window-controls-{index}"), label,
+                            move || draft.with(|p| p.window_controls == value), self.colors,
+                            move |_| draft.update(|p| p.window_controls = value))
+                    })))
+            .child(when(move || draft.with(|p| p.window_controls == WindowControls::Custom), {
+                let colors = self.colors;
+                move || view().gap(px(4.))
+                    .child(ui::slider("Window controls: position from left to right", move || draft.with(|p| f64::from(p.window_controls_percent)), colors,
+                        move |value| draft.update(|p| p.window_controls_percent = value.round().clamp(0.,100.) as u16)))
+                    .child(ui::hint(move || format!("Position: {}% from the left", draft.with(|p| p.window_controls_percent)), colors))
+            }))
             .into_element()
     }
     fn accessories(self: &Rc<Self>) -> AnyElement {
@@ -476,6 +491,13 @@ fn settings_values(
         encoding.into(),
         prefix,
         draft.autocomplete.to_string(),
+        match draft.window_controls {
+            WindowControls::Left => "left",
+            WindowControls::Right => "right",
+            WindowControls::Custom => "custom",
+        }
+        .into(),
+        draft.window_controls_percent.to_string(),
     ])
 }
 fn validated_prefix(value: &str) -> Result<String, String> {
@@ -540,10 +562,11 @@ mod serialization_tests {
             "30",
         )
         .expect("valid settings");
-        assert_eq!(values.len(), 16);
+        assert_eq!(values.len(), 18);
         assert_eq!(&values[1..5], ["Inter", "12", "Consolas", "11"]);
         assert_eq!(values[11], "30");
         assert_eq!(values[14], "Notes");
         assert_eq!(values[15], preferences.autocomplete.to_string());
+        assert_eq!(values[17], "50");
     }
 }

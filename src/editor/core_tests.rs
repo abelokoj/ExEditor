@@ -272,3 +272,22 @@ mod mounted_surface {
         }
     }
 }
+
+#[test]
+fn font_attributes_accept_numeric_sizes_and_strip_css_family_quotes() {
+    assert_eq!(super::font_size(&serde_json::json!(12)), Some(12.));
+    assert_eq!(super::font_size(&serde_json::json!(" 12pt ")), Some(12.));
+    for value in [
+        serde_json::json!("NaN"),
+        serde_json::json!(0),
+        serde_json::json!(2000),
+    ] {
+        assert_eq!(super::font_size(&value), None);
+    }
+    assert_eq!(super::font_family("'Pretendard Std'"), "Pretendard Std");
+    assert_eq!(super::font_family("Maple Mono NF"), "Maple Mono NF");
+    let editor = Editor::new().unwrap();
+    assert_eq!(editor.formatting().size, 12.);
+    editor.set_plain_text_mode(true).unwrap();
+    assert_eq!(editor.formatting().size, 12.);
+}

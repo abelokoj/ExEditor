@@ -31,24 +31,20 @@ fn string_style(key: StyleKey, value: &str) -> Style {
 fn number_style(key: StyleKey, value: f32) -> Style {
     declaration(key, StyleValue::Number(value))
 }
-fn font_size(value: &str) -> Option<f32> {
-    let value = value.trim();
-    let size = value
-        .trim_end_matches("pt")
-        .trim_end_matches("px")
-        .parse::<f32>()
-        .ok()?;
-    (size.is_finite() && (1.0..=1638.).contains(&size)).then_some(size)
-}
 fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32) {
     for (key, value) in mark.attrs() {
-        let Some(value) = value.as_str() else {
+        let original = value;
+        let value = if let Some(text) = value.as_str() {
+            Cow::Borrowed(text)
+        } else if value.is_number() {
+            Cow::Owned(value.to_string())
+        } else {
             continue;
         };
         let style = match key.as_str() {
-            "fontFamily" => string_style(StyleKey::FontFamily, value),
+            "fontFamily" => string_style(StyleKey::FontFamily, super::font_family(&value)),
             "fontSize" => {
-                let Some(size) = font_size(value) else {
+                let Some(size) = super::font_size(original) else {
                     continue;
                 };
                 number_style(StyleKey::FontSize, size * zoom)
@@ -59,9 +55,9 @@ fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32) {
                 } else {
                     StyleKey::Color
                 },
-                value,
+                &value,
             ),
-            "backgroundColor" => string_style(StyleKey::BackgroundColor, value),
+            "backgroundColor" => string_style(StyleKey::BackgroundColor, &value),
             _ => continue,
         };
         styles.insert(format!("{}[{key}={value}]", mark.ty().name()), style);
@@ -93,7 +89,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     let mut styles = RichEditorStyles::default();
     let mut content = StyleRefinement::default()
         .p(px(20. * zoom))
-        .text_size(px(13. * zoom))
+        .text_size(px(12. * zoom))
         .font_family(if display.plain {
             format.font
         } else {
@@ -130,6 +126,15 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     ));
     styles.caret = Some(part(
         StyleRefinement::default().bg(color(display.text_override.unwrap_or(0))),
+    ));
+    // Explicit alpha keeps the selection visible on white, dark and highlighted text.
+    let selection = part(StyleRefinement::default().bg(rgba(0x3399ff66)));
+    styles.selection = Some(selection.clone());
+    styles.selected_cell = Some(selection);
+    styles.selected_node = Some(part(
+        StyleRefinement::default()
+            .outline_2()
+            .outline_color(color(0x087ef5)),
     ));
     let mut nodes = BTreeMap::new();
     let mut marks = BTreeMap::new();
@@ -331,4 +336,37 @@ pub fn surface(editor: Rc<Editor>) -> impl IntoElement {
                 }
             },
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::EditCommand;
+    #[test]
+    fn display_zoom_scales_formatted_text_without_changing_saved_content() {
+        let editor = Editor::new().unwrap();
+        editor.set_text("Zoom and selection").unwrap();
+        editor.select_range(0..4).unwrap();
+        editor.execute(EditCommand::FontSize(24.)).unwrap();
+        editor.mark_saved();
+        let snapshot = editor.snapshot().unwrap();
+        let before = styles(&editor);
+        editor.set_zoom(150);
+        let after = styles(&editor);
+        let marks = after.marks.unwrap();
+        let (_, font) = marks
+            .0
+            .iter()
+            .find(|(name, _)| name.contains("[fontSize="))
+            .expect("formatted font size");
+        assert_eq!(*font, number_style(StyleKey::FontSize, 36.));
+        assert_ne!(before.content, after.content);
+        assert_eq!(
+            after.selection,
+            Some(part(StyleRefinement::default().bg(rgba(0x3399ff66))))
+        );
+        assert_eq!(editor.snapshot().unwrap(), snapshot);
+        assert!(!editor.is_modified());
+        assert_eq!(editor.formatting().size, 24.);
+    }
 }

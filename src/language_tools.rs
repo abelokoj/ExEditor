@@ -149,9 +149,9 @@ struct LanguageTools {
 pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
     ui::show_panel(
         "language-tools",
-        "Spelling and Grammar — ExEditor",
-        620.,
-        490.,
+        "Spelling and Grammar | ExEditor",
+        580.,
+        340.,
         WindowKind::Dialog,
         move || {
             let state = Rc::new(LanguageTools {

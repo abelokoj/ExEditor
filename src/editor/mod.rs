@@ -50,6 +50,33 @@ struct CompletionPopup {
     key: (u64, usize, usize),
 }
 
+fn font_size(value: &Value) -> Option<f32> {
+    let size = match value {
+        Value::String(value) => value
+            .trim()
+            .trim_end_matches("pt")
+            .trim_end_matches("px")
+            .trim()
+            .parse::<f32>()
+            .ok()?,
+        Value::Number(value) => value.as_f64()? as f32,
+        _ => return None,
+    };
+    (size.is_finite() && (1.0..=1638.).contains(&size)).then_some(size)
+}
+fn font_family(value: &str) -> &str {
+    let value = value.trim();
+    for quote in ['\'', '"'] {
+        if let Some(value) = value
+            .strip_prefix(quote)
+            .and_then(|v| v.strip_suffix(quote))
+        {
+            return value.trim();
+        }
+    }
+    value
+}
+
 /// A stable native session survives tab switches and retains its selection and undo history.
 pub struct Editor {
     session: EditorSession,
@@ -155,7 +182,7 @@ impl Editor {
             page: RefCell::new(PageSettings::default()),
             plain_style: RefCell::new(FormatState {
                 font: crate::fonts::default_plain_font().into(),
-                size: 13.,
+                size: 12.,
                 foreground: 0,
                 background: 0xffffff,
                 ..Default::default()
@@ -881,13 +908,10 @@ impl Editor {
             font: attrs
                 .get("fontFamily")
                 .and_then(Value::as_str)
+                .map(font_family)
                 .unwrap_or(crate::fonts::default_rich_font())
                 .into(),
-            size: attrs
-                .get("fontSize")
-                .and_then(Value::as_str)
-                .and_then(|v| v.trim_end_matches("pt").trim_end_matches("px").parse().ok())
-                .unwrap_or(13.),
+            size: attrs.get("fontSize").and_then(font_size).unwrap_or(12.),
             bold: self.session.is_active(Some("bold"), None),
             italic: self.session.is_active(Some("italic"), None),
             underline: self.session.is_active(Some("underline"), None),

@@ -61,6 +61,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi",
 ] }
 windows-sys = { version = "0.61", features = [
+    "Win32_Graphics_Dwm",
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",

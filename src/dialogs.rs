@@ -71,16 +71,26 @@ impl MenuEntry {
 }
 
 pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
+    let width = entries
+        .iter()
+        .filter(|e| e.command.is_some())
+        .map(|e| {
+            text_metrics("12px Inter", &e.label).width.0
+                + text_metrics("11px Inter", &e.shortcut).width.0
+                + 64.
+        })
+        .fold(112_f32, f32::max)
+        .min(480.);
     let height = (entries
         .iter()
-        .map(|e| if e.command.is_some() { 28. } else { 9. })
+        .map(|e| if e.command.is_some() { 25. } else { 9. })
         .sum::<f32>()
         + 12.)
-        .min(650.);
+        .min(500.);
     ui::show_panel(
         "menu",
         "ExEditor menu",
-        290.,
+        width,
         height,
         WindowKind::Popup,
         move || {
@@ -128,7 +138,7 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                         .element_ref(&item_ref)
                         .disabled(!entry.enabled)
                         .accessibility_label(entry.label.clone())
-                        .h(px(28.))
+                        .h(px(25.))
                         .px(px(8.))
                         .flex_row()
                         .items_center()
@@ -163,6 +173,8 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
             effect(move || focus.focus());
             view()
                 .flex_1()
+                .rounded(px(8.))
+                .overflow_hidden()
                 .bg(rgb(colors.field))
                 .child(
                     nsh_base::menu()
@@ -171,9 +183,10 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                         .margin(px(0.))
                         .trigger(view().w_full().h(px(0.)))
                         .popup_style(move |s| {
-                            s.w(px(288.))
+                            s.w(px(width - 2.))
+                                .max_h(px(height - 2.))
                                 .p(px(5.))
-                                .rounded(px(4.))
+                                .rounded(px(8.))
                                 .border_1()
                                 .border_color(rgb(colors.border))
                                 .bg(rgb(colors.field))

@@ -268,6 +268,23 @@ impl State {
     }
 }
 
+/// Accumulate precise wheel movement; one mouse notch changes zoom by ten percent.
+pub fn wheel_zoom(delta: nsh_core::WheelDelta, remainder: &mut f32) -> i16 {
+    let y = delta.xy().1;
+    if !y.is_finite() {
+        return 0;
+    }
+    let units = if delta.precise() { y / 48. } else { y / 3. };
+    // Reversing direction should react immediately, not cancel an old partial notch.
+    if remainder.signum() != units.signum() {
+        *remainder = 0.;
+    }
+    *remainder += units;
+    let steps = remainder.trunc().clamp(-10., 10.);
+    *remainder -= steps;
+    -(steps as i16) * 10
+}
+
 /// NSH spelling of a catalog key; keypad aliases resolve to the same native action.
 pub fn native_binding(binding: &Binding) -> Option<String> {
     use nsh_core::keymap::Key;
@@ -766,5 +783,38 @@ mod tests {
             assert_eq!(modifiers_for_key(name, CTRL), CTRL, "{name}");
             assert_eq!(modifiers_for_key(name, CTRL_SHIFT), CTRL_SHIFT, "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::wheel_zoom;
+    use nsh_core::{
+        WheelDelta,
+        geometry::{point, px},
+    };
+    #[test]
+    fn wheel_zoom_accumulates_precision_and_reverses_direction() {
+        let mut pending = 0.;
+        assert_eq!(
+            wheel_zoom(WheelDelta::Lines(point(0., -3.)), &mut pending),
+            10
+        );
+        assert_eq!(
+            wheel_zoom(WheelDelta::Lines(point(0., 3.)), &mut pending),
+            -10
+        );
+        assert_eq!(
+            wheel_zoom(WheelDelta::Points(point(px(0.), px(-24.))), &mut pending),
+            0
+        );
+        assert_eq!(
+            wheel_zoom(WheelDelta::Points(point(px(0.), px(-24.))), &mut pending),
+            10
+        );
+        assert_eq!(
+            wheel_zoom(WheelDelta::Lines(point(0., f32::NAN)), &mut pending),
+            0
+        );
     }
 }

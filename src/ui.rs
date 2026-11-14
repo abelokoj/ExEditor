@@ -246,6 +246,9 @@ pub fn input(
         .label(label.clone())
         .placeholder(label.to_string())
         .value(move || value.get())
+        .caret_color(rgb(colors.ink))
+        .selection_color(rgba(0x3399ff66).into())
+        .placeholder_color(rgb(colors.muted))
         .on_change(move |next: &str| value.set(next.to_owned()))
         .submit_behavior(SubmitBehavior::Submit)
         .h(px(30.))
@@ -275,6 +278,9 @@ pub fn select(
         .accessibility_label(label)
         .items(items)
         .value(move || value.get())
+        .caret_color(rgb(colors.ink))
+        .selection_color(rgba(0x3399ff66).into())
+        .placeholder_color(rgb(colors.muted))
         .on_change(move |next: &Option<SharedString>| on_change(next.clone()))
         .popup_style(move |s| {
             s.p(px(4.))
@@ -392,7 +398,7 @@ pub fn row(label: impl Into<SharedString>, control: impl IntoElement) -> impl In
         .min_h(px(30.))
         .child(
             text(Into::<SharedString>::into(label))
-                .w(px(174.))
+                .w(px(150.))
                 .flex_shrink(0.)
                 .text_size(px(12.)),
         )
@@ -403,8 +409,8 @@ pub fn surface(colors: Palette) -> nsh_core::element::View {
         .flex_1()
         .min_w(px(0.))
         .min_h(px(0.))
-        .gap(px(12.))
-        .p(px(16.))
+        .gap(px(10.))
+        .p(px(14.))
         .bg(rgb(colors.chrome))
         .text_color(rgb(colors.ink))
         .font_family(crate::fonts::INTER_FONT)
@@ -490,7 +496,16 @@ pub fn panel_host() -> impl IntoElement {
                             .update(|state| state.windows.retain(|window| window.serial != serial));
                     }
                 })
-                .content(move || (panel.content)())
+                .content(move || {
+                    view()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .min_h(px(0.))
+                        .rounded(px(8.))
+                        .overflow_hidden()
+                        .on_layout(|_: &Bounds<Points>| crate::window_style::refresh())
+                        .child((panel.content)())
+                })
         },
     )
 }

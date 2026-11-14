@@ -37,7 +37,13 @@ jobs:
           rustup toolchain install $toolchain --profile minimal --component rustfmt --component clippy
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --version | Tee-Object -FilePath logs/toolchain.log
-          cargo --version | Tee-Object -FilePath logs/toolchain.log -Append
+          $installer = Join-Path $env:RUNNER_TEMP 'install-cargo-fork.ps1'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/huacnlee/cargo/v0.102.0-9/install.ps1' -OutFile $installer
+          & $installer -Version '0.102.0-9'
+          Get-Command cargo | Select-Object Source | Out-String | Tee-Object -FilePath logs/toolchain.log -Append
+          $cargoVersion = cargo -V
+          $cargoVersion | Tee-Object -FilePath logs/toolchain.log -Append
+          if ($LASTEXITCODE -ne 0 -or $cargoVersion -notmatch 'huacnlee/cargo 0.102.0-9') { throw 'The configured Cargo fork is not active.' }
 
       - name: Cache Cargo downloads and compilation
         uses: actions/cache@v4
@@ -46,10 +52,11 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+            ~/.cargo/targets
             target
-          key: windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
-            windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-
+            windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Resolve source dependency changes on GitHub
         run: |
@@ -197,8 +204,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+            ~/.cargo/targets
             target
-          key: windows-2025-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-${{ github.run_id }}
+          key: windows-2025-cargo-fork-9-rust-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-${{ github.run_id }}
 
 
   desktop:
@@ -238,9 +246,15 @@ jobs:
           toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml","rb"))["toolchain"]["channel"])')
           rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy
           rustc --version | tee logs/toolchain.log
+          curl --fail --silent --show-error --location https://raw.githubusercontent.com/huacnlee/cargo/v0.102.0-9/install.sh --output "$RUNNER_TEMP/install-cargo-fork.sh"
+          sh "$RUNNER_TEMP/install-cargo-fork.sh" --version 0.102.0-9
+          command -v cargo | tee -a logs/toolchain.log
+          cargo -V | tee -a logs/toolchain.log
+          cargo -V | grep -F 'huacnlee/cargo 0.102.0-9'
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.target }}-native-shell
+          shared-key: ${{ matrix.target }}-native-shell-cargo-fork-9
+          cache-directories: ~/.cargo/targets
           cache-on-failure: true
       - name: Resolve source dependency changes
         shell: bash
