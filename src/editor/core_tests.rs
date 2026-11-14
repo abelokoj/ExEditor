@@ -190,11 +190,8 @@ fn paragraph_styles_survive_native_recovery_and_html_roundtrip() {
     let parsed = DomParser::from_schema(restored.manager.borrow().schema())
         .parse(&html, &ParseOptions::default());
     let attrs = parsed.first_child().expect("formatted paragraph").attrs();
-    for (key, expected) in [
-        ("lineHeight", "1.5"),
-        ("indent", "24px"),
-        ("direction", "rtl"),
-    ] {
+    assert_eq!(attrs.get("lineHeight").and_then(Value::as_f64), Some(1.5));
+    for (key, expected) in [("indent", "24px"), ("direction", "rtl")] {
         assert_eq!(
             attrs.get(key).and_then(Value::as_str),
             Some(expected),
@@ -261,9 +258,11 @@ mod mounted_surface {
             if !plain {
                 app.press_key("ctrl+b").unwrap();
             }
-            for key in ["c", "a", "f", "é", "space", "😀"] {
+            for key in ["c", "a", "f"] {
                 app.press_key(key).unwrap();
             }
+            app.wait_for("text:Document \"caf\"").unwrap();
+            app.type_text("label:Document editor", "é 😀").unwrap();
             app.wait_for("text:Document \"café 😀\"").unwrap();
             if !plain {
                 app.wait_for("text:/<strong>café 😀/").unwrap();

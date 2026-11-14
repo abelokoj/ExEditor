@@ -780,7 +780,7 @@ impl Editor {
                     lines.is_finite() && (0.5..=10.).contains(&lines),
                     "line spacing must be between 0.5 and 10"
                 );
-                return self.paragraph_style("lineHeight", json!(lines.to_string()));
+                return self.paragraph_style("lineHeight", json!(lines));
             }
             E::Indent(twips) => {
                 let current = self

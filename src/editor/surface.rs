@@ -12,7 +12,7 @@ use nsh_core::{
     element::{Style, StyleRefinement},
     prelude::*,
 };
-use std::{collections::BTreeMap, rc::Rc, time::Duration};
+use std::{borrow::Cow, collections::BTreeMap, rc::Rc, time::Duration};
 
 fn part(style: StyleRefinement) -> PartStyle {
     Style::from(style).into()
@@ -69,14 +69,18 @@ fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32) {
 }
 fn node_styles(node: &Node, styles: &mut BTreeMap<String, Style>) {
     for (key, value) in node.attrs() {
-        let Some(value) = value.as_str() else {
+        let value = if let Some(text) = value.as_str() {
+            Cow::Borrowed(text)
+        } else if value.is_number() {
+            Cow::Owned(value.to_string())
+        } else {
             continue;
         };
         let style = match key.as_str() {
-            "textAlign" => string_style(StyleKey::TextAlign, value),
-            "lineHeight" => string_style(StyleKey::LineHeight, value),
-            "indent" => string_style(StyleKey::MarginLeft, value),
-            "direction" => string_style(StyleKey::WritingDirection, value),
+            "textAlign" => string_style(StyleKey::TextAlign, &value),
+            "lineHeight" => string_style(StyleKey::LineHeight, &value),
+            "indent" => string_style(StyleKey::MarginLeft, &value),
+            "direction" => string_style(StyleKey::WritingDirection, &value),
             _ => continue,
         };
         styles.insert(format!("{}[{key}={value}]", node.ty().name()), style);

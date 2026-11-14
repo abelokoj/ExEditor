@@ -139,6 +139,11 @@ jobs:
         run: |
           ./scripts/package.ps1 -ReleaseDirectory target/release -Destination artifacts/ExEditor -Commit '${{ github.sha }}'
 
+      - name: Check native Windows startup and Markdown memory
+        timeout-minutes: 5
+        run: |
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -LogDirectory logs
+
       - name: Build the per-user installer
         run: |
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-14T15:07:47-05:00 - Preserve numeric paragraph styling and expand Windows runtime evidence (local correction)
+
+- GitHub run 43633667077 passed strict diagnostics on all three platforms. Windows executed 163 regressions: 159 passed, two failed and two network checks were intentionally ignored in the ordinary test pass. Linux produced a release package; macOS release compilation was still running when this entry was recorded. No Windows installer was produced by that run.
+- The HTML parser correctly turns unitless line height into a number; the app's style renderer previously accepted only strings. Use numeric line-height values and render both numeric and textual paragraph styles. Keep the regression checking HTML/recovery values. Correct the mounted input test to prove autofocus and initial US-layout key entry before using the native text-input helper for Unicode, which the physical-key-name API does not accept.
+- Added a Windows-GitHub-only packaged-app startup check, same-window file handoff, isolated long-Markdown memory observations and optional native-window screenshots. Memory numbers are evidence rather than an environment-dependent pass threshold. It is guarded against running on the user's device. Marked dictionary archives/parts as binary to preserve download hashes across checkouts.
+- Validation locally: source/SDK/failure-log inspection and formatting with the user's installed huacnlee Cargo fork. No local application compilation, source tests, native app launch or Cargo installation. Corrected tests and the new packaged-app check await GitHub execution.
+
 ## 2026-11-14T14:59:30-05:00 - Record installed Cargo fork and project execution rules (local documentation)
 
 - Added root AGENTS.md with the user's huacnlee/cargo build preference: use the installed Cargo directly, preserve its shared caches and pinned Rust compiler, avoid routine clean/custom target directories, and retain existing build/test gates. Recorded existing GitHub-only compilation, Windows-only test execution, dist artifact storage and private-note exclusions.

@@ -2,3 +2,8 @@
 /assets/fonts/**/OFL.txt text eol=lf
 /assets/fonts/**/*.ttf binary
 /assets/accessories/fonts.json text eol=lf
+
+# Dictionary archives and multipart sources keep their published bytes.
+/assets/dictionaries/*.zip binary
+/assets/dictionaries/*.zip.part* binary
+/assets/accessories/dictionaries.json text eol=lf
