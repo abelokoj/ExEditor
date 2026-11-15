@@ -155,6 +155,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/package.ps1 -ReleaseDirectory target/debug -Destination artifacts/ExEditor-debug -Commit '${{ github.sha }}'
           ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor-debug/ExEditor.exe -Sections 6 -LogDirectory logs/debug
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor-debug/ExEditor.exe -Sections 6 -Appearance Dark -LogDirectory logs/debug-dark
 
       - name: Build the application
         run: |

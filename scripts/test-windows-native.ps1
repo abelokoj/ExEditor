@@ -167,6 +167,19 @@ try {
     if ($primary.MainWindowHandle -ne $initialWindow) { throw 'Opening a file replaced the existing document window.' }
     $results.markdown = Measure-NativeMemory $primary
     Save-NativeScreenshot $primary 'native-startup-markdown.png'
+    if ($Appearance -eq 'Dark') {
+        $image = [Drawing.Bitmap]::new((Join-Path $logs 'native-startup-markdown.png'))
+        try {
+            # The generated fixture's first heading lies below its title/menu area.
+            $visibleHeadingPixels = 0
+            foreach ($y in 85..115) { foreach ($x in 20..340) {
+                $pixel = $image.GetPixel($x, $y)
+                if ($pixel.R -gt 150 -and $pixel.G -gt 150 -and $pixel.B -gt 150) { $visibleHeadingPixels++ }
+            } }
+            if ($visibleHeadingPixels -lt 40) { throw 'The generated heading is not readable on the dark document.' }
+            $results.dark_heading_visible = $true
+        } finally { $image.Dispose() }
+    }
     $shell = New-Object -ComObject WScript.Shell
     if (-not $shell.AppActivate($primary.Id)) { throw 'The GitHub test window could not be activated.' }
     # These inputs are sent only to the isolated app on the GitHub runner.

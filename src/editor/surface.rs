@@ -31,7 +31,7 @@ fn string_style(key: StyleKey, value: &str) -> Style {
 fn number_style(key: StyleKey, value: f32) -> Style {
     declaration(key, StyleValue::Number(value))
 }
-fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32) {
+fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32, ink: Option<u32>) {
     for (key, value) in mark.attrs() {
         let original = value;
         let value = if let Some(text) = value.as_str() {
@@ -49,14 +49,23 @@ fn mark_styles(mark: &Mark, styles: &mut BTreeMap<String, Style>, zoom: f32) {
                 };
                 number_style(StyleKey::FontSize, size * zoom)
             }
-            "color" => string_style(
-                if mark.ty().name() == "highlight" {
+            "color" => {
+                let key = if mark.ty().name() == "highlight" {
                     StyleKey::BackgroundColor
                 } else {
                     StyleKey::Color
-                },
-                &value,
-            ),
+                };
+                let screen_ink = ink.filter(|_| {
+                    key == StyleKey::Color
+                        && value
+                            .parse::<csscolorparser::Color>()
+                            .is_ok_and(|c| c.to_rgba8() == [0, 0, 0, 255])
+                });
+                match screen_ink {
+                    Some(ink) => string_style(key, &format!("#{ink:06x}")),
+                    None => string_style(key, &value),
+                }
+            }
             "backgroundColor" => string_style(StyleKey::BackgroundColor, &value),
             _ => continue,
         };
@@ -122,7 +131,9 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     }
     styles.content = Some(part(content));
     styles.root = Some(part(
-        StyleRefinement::default().bg(color(display.background)),
+        StyleRefinement::default()
+            .bg(color(display.background))
+            .text_color(color(display.text_override.unwrap_or(0))),
     ));
     styles.caret = Some(part(
         StyleRefinement::default().bg(color(display.text_override.unwrap_or(0))),
@@ -167,8 +178,14 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     );
     marks.insert(
         "link".into(),
-        string_style(StyleKey::TextDecorationLine, "underline")
-            .then(&string_style(StyleKey::Color, "#2259bd")),
+        string_style(StyleKey::TextDecorationLine, "underline").then(&string_style(
+            StyleKey::Color,
+            if color(display.background).luminance() < 0.18 {
+                "#8fc7ff"
+            } else {
+                "#2259bd"
+            },
+        )),
     );
     marks.insert(
         "subscript".into(),
@@ -184,7 +201,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
     state.doc().descendants(&mut |node, _, _, _| {
         node_styles(node, &mut nodes);
         for mark in node.marks() {
-            mark_styles(mark, &mut marks, zoom);
+            mark_styles(mark, &mut marks, zoom, display.text_override);
         }
         true
     });
@@ -368,5 +385,26 @@ mod tests {
         assert_eq!(editor.snapshot().unwrap(), snapshot);
         assert!(!editor.is_modified());
         assert_eq!(editor.formatting().size, 24.);
+    }
+    #[test]
+    fn dark_document_adapts_black_text_without_rewriting_chosen_colors() {
+        let editor = Editor::new().unwrap();
+        editor.insert_html(r##"<h2><span style="color:#000000">Heading</span></h2><p><strong><span style="color:#000000">Bold</span></strong><span style="color:#ff0000">Red</span><a href="https://example.org">Link</a></p>"##).unwrap();
+        editor.mark_saved();
+        let snapshot = editor.snapshot().unwrap();
+        editor.set_background(0x1e1e1e);
+        editor.set_text_override(Some(0xeeeeee)).unwrap();
+        let dark = styles(&editor);
+        let marks = dark.marks.unwrap().0;
+        assert!(marks.iter().any(|(key, style)| key.contains("[color=")
+            && *style == string_style(StyleKey::Color, "#eeeeee")));
+        assert!(
+            marks
+                .values()
+                .any(|style| *style == string_style(StyleKey::Color, "#ff0000"))
+        );
+        assert!(color(0x8fc7ff).contrast_ratio(color(0x1e1e1e)) >= 4.5);
+        assert_eq!(editor.snapshot().unwrap(), snapshot);
+        assert!(!editor.is_modified());
     }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T19:23:35-05:00 - Preserve readable rich-text contrast on dark paper (local source)
+
+- Run 43654814781 passed all Windows gates and produced an installer, including large-fixture light/dark native checks and shell integration. Downloaded and SHA-256-verified all seven Windows/macOS/Linux artifacts and 51 Windows payload files into dist/ExEditor-2026-11-14.3. Desktop packages use ec34286 and Windows uses 88bf6a8; these commits differ only in CI/changelog files.
+- Final screenshot inspection found black imported headings/bold spans and dim links on dark paper despite those automated passes. Adapt opaque default-black text marks to the existing screen-only foreground override, set root ink as well as content ink, and choose a brighter dark-paper link color. Preserve chosen nonblack colors and saved document/undo content.
+- Add a document-style regression proving original black/red markup remains unchanged and a GitHub-native assertion for the generated dark heading. Check dark contrast in the small-fixture pass before release linking. The correction is only inspected/formatted locally and still awaits GitHub; the downloaded .3 installer predates it. No local compilation, source tests, installation or app launch.
+
 ## 2026-11-14T18:45:03-05:00 - Deliver real Ctrl+wheel input to the GitHub native window (local CI correction)
 
 - Run 43653470059 passed diagnostics, 166 ordinary Windows regressions, optional downloads, the full small-fixture native control pass, release compilation and macOS packaging. Release screenshots confirm rounded corners, main/keypad zoom, visible selection and populated 12 pt Settings fields in the development package. The long-fixture release check stopped at its wheel-frame assertion, before dark-mode/installer gates.
