@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T21:20:51-05:00 - Keep installer binary and display versions compatible (local packaging correction)
+
+- Inno Setup requires dotted numeric binary product versions. Retain Cargo's 0.3.0 in that numeric field and use VersionInfoProductTextVersion for the full vYY-MM-DD.N-vSEMVER release tag, matching the application's resource and About text. Verify the compiled installer's displayed ProductVersion on the Windows runner.
+- GitHub resolved the corrected lifetime candidate as v26-11-14.17-v0.3.0. Its release-numbering regressions passed before this packaging correction; final source/runtime/installer validation is still pending. No local compilation, source tests, installation or app launch.
+
 ## 2026-11-14T21:13:46-05:00 - Count releases from the first ExEditor installer (local source)
 
 - Clarify N as the lifetime successful-release number, with no daily reset and no failed/cancelled build increments. Audit all 61 repository workflow records and their successful installer steps: 16 completed installer releases predate this naming migration. Preserve their real source commits/workflow identities in release-history.json; recorded timestamps are workflow creation times, not invented publication times.
