@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T21:07:39-05:00 - Use the requested two-digit release year (local source)
+
+- Refine the newly adopted ExcellentBible-style names to App-vYY-MM-DD.N-vSEMVER-platform, as requested: for example, ExEditor-v26-11-14.N-v0.3.0-win-x64.exe. Apply the shared short-year tag to every artifact, package, About dialog and future dist delivery folder; retain the full ISO release date in build-info for provenance.
+- Update release-name regression expectations and persistent project/delivery instructions. The 30% control enlargement still keeps the original title-row height. Source inspection only; the final short-year build and installer checks await GitHub. No local compilation, tests, installation or app launch.
+
 ## 2026-11-14T19:50:41-05:00 - Match ExcellentBible release numbering (local source)
 
 - Adopt ExEditor-vYYYY-MM-DD.N-vSEMVER-platform names from ExcellentBible, retaining ExEditor's Cargo version 0.3.0. Resolve the America/New_York date and GitHub workflow-run counter once and share them across all platform jobs, packages, artifact labels, installer product metadata and About ExEditor. Keep numeric OS versions and the stable installer ID/path intact.

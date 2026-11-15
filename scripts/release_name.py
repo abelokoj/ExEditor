@@ -16,7 +16,8 @@ def make_release(version, day, number):
         raise ValueError("The release date must be valid YYYY-MM-DD.")
     if not re.fullmatch(r"[1-9][0-9]*", number) or int(number) > 2147483647:
         raise ValueError("The release number must be a positive 32-bit integer.")
-    tag = f"v{day}.{number}-v{version}"
+    short_day = date.fromisoformat(day).strftime("%y-%m-%d")
+    tag = f"v{short_day}.{number}-v{version}"
     return {"version": version, "release_date": day, "release_number": number,
             "release_tag": tag, "release_base": f"ExEditor-{tag}"}
 

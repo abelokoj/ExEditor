@@ -15,7 +15,7 @@
 - Compilation, source checks and source tests run on GitHub, not on the user's device. Selecting the installed Cargo does not change this existing restriction.
 - GitHub may build/package Windows, macOS and Linux. Execute tests and native application checks on Windows only until the user changes that scope.
 - Local source inspection, formatting and tool-version checks are allowed. Finish feature source before starting that feature's GitHub validation.
-- Save downloaded GitHub builds and their provenance under `dist/ExEditor-vYYYY-MM-DD.N-vSEMVER/`, following the existing installer, portable-package and build-record naming pattern.
+- Save downloaded GitHub builds and their provenance under `dist/ExEditor-vYY-MM-DD.N-vSEMVER/`, following the existing installer, portable-package and build-record naming pattern.
 
 ## Project boundaries
 
@@ -25,6 +25,6 @@
 
 ## Release numbering
 
-- Follow ExcellentBible's scheme: `ExEditor-vYYYY-MM-DD.N-vSEMVER-platform`. Use the America/New_York release date and Cargo.toml package version; preserve existing semantic versions unless a version bump is requested.
+- Follow ExcellentBible's scheme: `ExEditor-vYY-MM-DD.N-vSEMVER-platform`. Use the America/New_York release date and Cargo.toml package version; preserve existing semantic versions unless a version bump is requested.
 - GitHub's shared release-name job resolves the date and workflow-run counter once, then passes that identity to every platform. Windows installers end in `-win-x64.exe`, portable ZIPs in `-win-x64-port.zip`; macOS/Linux packages retain their actual platform/architecture suffixes. About, package build-info and installer product metadata must agree.
-- Keep downloaded deliveries under `dist/ExEditor-vYYYY-MM-DD.N-vSEMVER/` with those filenames. Preserve older deliveries and refuse to overwrite an existing numbered release. Do not rename the installed app or change its stable upgrade identity.
+- Keep downloaded deliveries under `dist/ExEditor-vYY-MM-DD.N-vSEMVER/` with those filenames. Preserve older deliveries and refuse to overwrite an existing numbered release. Do not rename the installed app or change its stable upgrade identity.
