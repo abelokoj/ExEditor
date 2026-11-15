@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-14T19:45:59-05:00 - Enlarge titlebar controls within the existing row (local source)
+
+- Increase the shared Close, Minimize and Zoom circles from 12 to 15.6 logical pixels (30%). Preserve the 31-pixel title row, its vertical centering, 86-pixel control group, gaps, caption layout and Left/Right/Custom placement behavior. The enlarged group still fits its reserved horizontal space.
+- Source inspection only for this size change; GitHub validation and a new installer are pending. No local compilation, source tests, installation or app launch.
+- Record the preceding base validation: source 460689a, GitHub run 43657982350 completed successfully on all three build targets. Windows passed 167 ordinary regressions, both separate accessory download checks, small/large-fixture light/dark native checks and installer/shell registration checks. macOS/Linux were built and packaged without runtime execution.
+- The base packages are saved under dist/ExEditor-2026-11-14.4. Verified all seven artifact digests and 51 Windows payload hashes; inspected generated-fixture screenshots confirming readable dark headings/links, blue selection, 12 pt defaults and right-side controls. This base installer predates the control-size change. Native hardware/IME/accessibility/printer and user-document acceptance remain outstanding.
+
 ## 2026-11-14T19:23:35-05:00 - Preserve readable rich-text contrast on dark paper (local source)
 
 - Run 43654814781 passed all Windows gates and produced an installer, including large-fixture light/dark native checks and shell integration. Downloaded and SHA-256-verified all seven Windows/macOS/Linux artifacts and 51 Windows payload files into dist/ExEditor-2026-11-14.3. Desktop packages use ec34286 and Windows uses 88bf6a8; these commits differ only in CI/changelog files.

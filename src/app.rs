@@ -1018,7 +1018,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
         lights = lights.child(
             nsh_base::button()
                 .accessibility_label(label)
-                .size(px(12.))
+                .size(px(15.6))
                 .rounded_full()
                 .bg(ui::rgb(color))
                 .on_press(move || match command {
