@@ -1,0 +1,33 @@
+name: Check installer release metadata
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  metadata:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect installer version resources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP ('ExEditor version fixture ' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $fixture | Out-Null
+          Set-Content -LiteralPath (Join-Path $fixture 'ExEditor.exe') -Value 'Metadata fixture only, never installed or distributed.'
+          $script = Get-Content scripts/installer.iss -Raw
+          $script = $script.Replace('OutputDir=..\artifacts\installers', "OutputDir=$fixture")
+          $script = $script.Replace('SetupIconFile=..\assets\ExEditor.ico', "SetupIconFile=$((Resolve-Path assets/ExEditor.ico).Path)")
+          $fixtureScript = Join-Path $fixture 'fixture.iss'
+          Set-Content -LiteralPath $fixtureScript -Value $script
+          $tag = 'v26-11-14.17-v0.3.0'
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DAppVersion=0.3.0' '/DReleaseBase=ExEditor-version-fixture' "/DReleaseTag=$tag" "/DAppSource=$fixture" $fixtureScript
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $file = Join-Path $fixture 'ExEditor-version-fixture-win-x64.exe'
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)
+          $info | Select-Object FileVersion,ProductVersion,FileDescription,ProductName,Language | ConvertTo-Json
+          $adapted = (Get-Item -LiteralPath $file).VersionInfo
+          $adapted | Select-Object FileVersion,ProductVersion | ConvertTo-Json
+          if ($info.ProductVersion -ne $tag) { throw "Actual product version: '$($info.ProductVersion)'; expected: '$tag'." }

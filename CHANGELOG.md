@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T21:48:18-05:00 - Isolate the installer metadata check on GitHub (local diagnostics)
+
+- Run43667381630/source51d2f80 passed both desktop packages, all Windows tests and the early/large light-dark native checks. Its installer compiled successfully, then the ProductVersion equality guard failed before shell checks/upload. Downloaded and inspected its native evidence; larger controls remain inside the original row, with readable dark headings and visible selection/zoom.
+- Add a manually dispatched Windows-only metadata fixture that compiles the existing installer script with tiny, clearly marked nondistributable data in RUNNER_TEMP. Print direct FileVersionInfo and PowerShell-adapted version values to isolate the failed guard without recompiling Rust. The fixture is never installed or published as an application. No local tests, build, installation or app launch; the lifetime release number remains17 pending successful delivery.
+
 ## 2026-11-14T21:20:51-05:00 - Keep installer binary and display versions compatible (local packaging correction)
 
 - Inno Setup requires dotted numeric binary product versions. Retain Cargo's 0.3.0 in that numeric field and use VersionInfoProductTextVersion for the full vYY-MM-DD.N-vSEMVER release tag, matching the application's resource and About text. Verify the compiled installer's displayed ProductVersion on the Windows runner.
