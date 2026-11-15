@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: exeditor-${{ github.workflow }}-${{ github.ref }}${{ inputs.windows_only && '-windows' || '' }}
@@ -33,6 +34,8 @@ jobs:
           persist-credentials: false
       - name: Match ExcellentBible release numbering
         id: identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/release_name.py --github-output
 
   windows:

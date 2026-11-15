@@ -26,5 +26,7 @@
 ## Release numbering
 
 - Follow ExcellentBible's scheme: `ExEditor-vYY-MM-DD.N-vSEMVER-platform`. Use the America/New_York release date and Cargo.toml package version; preserve existing semantic versions unless a version bump is requested.
-- GitHub's shared release-name job resolves the date and workflow-run counter once, then passes that identity to every platform. Windows installers end in `-win-x64.exe`, portable ZIPs in `-win-x64-port.zip`; macOS/Linux packages retain their actual platform/architecture suffixes. About, package build-info and installer product metadata must agree.
+- GitHub's shared release-name job resolves the date and lifetime release counter once, then passes that identity to every platform. Windows installers end in `-win-x64.exe`, portable ZIPs in `-win-x64-port.zip`; macOS/Linux packages retain their actual platform/architecture suffixes. About, package build-info and installer product metadata must agree.
 - Keep downloaded deliveries under `dist/ExEditor-vYY-MM-DD.N-vSEMVER/` with those filenames. Preserve older deliveries and refuse to overwrite an existing numbered release. Do not rename the installed app or change its stable upgrade identity.
+
+- `N` counts successful installer releases since the first ExEditor release, across all dates; never use GITHUB_RUN_NUMBER or reset it daily. Preserve the numbered `release-history.json` ledger and reconcile successful workflow runs not yet recorded there. Failed/cancelled workflows consume no number. After a successful delivery, append its exact source commit and workflow ID to the ledger in the documentation checkpoint with CI skipped; retain all previous rows. Do not start independent release builds concurrently across branches.

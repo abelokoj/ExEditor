@@ -1,0 +1,101 @@
+{
+  "format": 1,
+  "releases": [
+    {
+      "number": 1,
+      "workflow_run": 41979561408,
+      "source_commit": "3924eef1c31b01a724b698edb0cc398289d81550",
+      "workflow_created_at": "2026-11-05T06:18:46Z"
+    },
+    {
+      "number": 2,
+      "workflow_run": 41989798768,
+      "source_commit": "78bd8d1d885ecd3c32673d709d945f801eb8862c",
+      "workflow_created_at": "2026-11-05T07:48:17Z"
+    },
+    {
+      "number": 3,
+      "workflow_run": 42005378825,
+      "source_commit": "71d0ba2d76cc11e4168cd00607e983b3c66c2796",
+      "workflow_created_at": "2026-11-05T09:48:09Z"
+    },
+    {
+      "number": 4,
+      "workflow_run": 42048777736,
+      "source_commit": "533c7e4cf611e48ff4c1b5c94b77c3477639b397",
+      "workflow_created_at": "2026-11-05T14:49:40Z"
+    },
+    {
+      "number": 5,
+      "workflow_run": 42092853148,
+      "source_commit": "34f66f35e85d2d74a6773ea819f580a06aa09999",
+      "workflow_created_at": "2026-11-05T19:19:57Z"
+    },
+    {
+      "number": 6,
+      "workflow_run": 42101227695,
+      "source_commit": "dd61c4b170105f57cc8a9945ebf1b8207a4d39fe",
+      "workflow_created_at": "2026-11-05T20:12:37Z"
+    },
+    {
+      "number": 7,
+      "workflow_run": 42115720539,
+      "source_commit": "f40961777f2f97d97e24c9d6f9f75af030aea8ba",
+      "workflow_created_at": "2026-11-05T21:46:53Z"
+    },
+    {
+      "number": 8,
+      "workflow_run": 42133920727,
+      "source_commit": "c5a7ac4295629e5efa60dd39123423d92db0d477",
+      "workflow_created_at": "2026-11-06T00:02:49Z"
+    },
+    {
+      "number": 9,
+      "workflow_run": 42170660470,
+      "source_commit": "ba0748daafcacbbea23579a04c34d69ed7a926fd",
+      "workflow_created_at": "2026-11-06T05:49:17Z"
+    },
+    {
+      "number": 10,
+      "workflow_run": 42177182056,
+      "source_commit": "a1116098da00476ecf4c384c7e971f53d9bf4455",
+      "workflow_created_at": "2026-11-06T06:52:18Z"
+    },
+    {
+      "number": 11,
+      "workflow_run": 42311910950,
+      "source_commit": "20636ffec5c9d05781025d6e105b04fd748fbabb",
+      "workflow_created_at": "2026-11-06T23:26:25Z"
+    },
+    {
+      "number": 12,
+      "workflow_run": 42412982327,
+      "source_commit": "665e783a2dfa81d34dc892226cf8626f03bbff79",
+      "workflow_created_at": "2026-11-07T20:50:35Z"
+    },
+    {
+      "number": 13,
+      "workflow_run": 42418107228,
+      "source_commit": "9cbdea3f3651ed43c5a84ae1364caf237d88fd59",
+      "workflow_created_at": "2026-11-07T21:54:59Z"
+    },
+    {
+      "number": 14,
+      "workflow_run": 43636475163,
+      "source_commit": "18fd77df826362b5f6120cb6caeea0b321a28ab1",
+      "workflow_created_at": "2026-11-14T20:14:58Z"
+    },
+    {
+      "number": 15,
+      "workflow_run": 43654814781,
+      "source_commit": "88bf6a877c0a11aa4d1958398c1d046b3a6e1284",
+      "workflow_created_at": "2026-11-14T23:45:28Z"
+    },
+    {
+      "number": 16,
+      "workflow_run": 43657982350,
+      "source_commit": "460689a6b9e6e07647181f97640035ad7f85aef9",
+      "workflow_created_at": "2026-11-15T00:24:07Z"
+    }
+  ]
+}

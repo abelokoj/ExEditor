@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from release_name import make_release, release_metadata
+from release_name import make_release, next_release_number, release_metadata
 
 
 class ReleaseNameTests(unittest.TestCase):
@@ -13,6 +13,15 @@ class ReleaseNameTests(unittest.TestCase):
         release = make_release("0.3.0", "2026-11-14", "123")
         self.assertEqual(release["release_tag"], "v26-11-14.123-v0.3.0")
         self.assertEqual(release["release_base"], "ExEditor-v26-11-14.123-v0.3.0")
+
+    def test_lifetime_counter_ignores_dates_failed_runs_and_duplicate_records(self):
+        history = [{"number": 1, "workflow_run": 100}, {"number": 2, "workflow_run": 101}]
+        self.assertEqual(next_release_number(history, [100, 101]), 3)
+        self.assertEqual(next_release_number(history, [100, 101, 102, 102]), 4)
+        # A failed attempt never enters the completed-success set or changes the ledger.
+        self.assertEqual(next_release_number(history, [100, 101]), 3)
+        for day in ["2026-11-14", "2026-11-15", "2027-01-01"]:
+            self.assertIn(".3-v0.3.0", make_release("0.3.0", day, "3")["release_tag"])
 
     def test_rejects_invalid_dates_paths_and_numbers(self):
         for version, day, number in [

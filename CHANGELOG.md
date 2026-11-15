@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T21:13:46-05:00 - Count releases from the first ExEditor installer (local source)
+
+- Clarify N as the lifetime successful-release number, with no daily reset and no failed/cancelled build increments. Audit all 61 repository workflow records and their successful installer steps: 16 completed installer releases predate this naming migration. Preserve their real source commits/workflow identities in release-history.json; recorded timestamps are workflow creation times, not invented publication times.
+- Resolve the next number from the durable ledger plus any newer successful build workflows not yet recorded. Share it across all platforms and retain App-vYY-MM-DD.N-vSEMVER-platform names. Document ledger updates at successful delivery and require sequential release builds. Add a Windows-only regression for date changes, repeated successful-run records and failed-attempt stability.
+- The previous long-year attempt43660268656 passed 167 Rust and three naming tests, small-fixture light/dark native checks and macOS/Linux packaging, then stopped at its release Ctrl+wheel check. Its screenshots show enlarged controls in the unchanged title row. The short-year attempt43666320439 is still running; final counter/naming and installer validation await the next completed GitHub run. No local build, source tests or app execution.
+
 ## 2026-11-14T21:07:39-05:00 - Use the requested two-digit release year (local source)
 
 - Refine the newly adopted ExcellentBible-style names to App-vYY-MM-DD.N-vSEMVER-platform, as requested: for example, ExEditor-v26-11-14.N-v0.3.0-win-x64.exe. Apply the shared short-year tag to every artifact, package, About dialog and future dist delivery folder; retain the full ISO release date in build-info for provenance.
