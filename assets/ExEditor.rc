@@ -20,7 +20,7 @@ BEGIN
       VALUE "InternalName", "exeditor\0"
       VALUE "OriginalFilename", "ExEditor.exe\0"
       VALUE "ProductName", "ExEditor\0"
-      VALUE "ProductVersion", "@VERSION_STRING@\0"
+      VALUE "ProductVersion", "@RELEASE_STRING@\0"
     END
   END
   BLOCK "VarFileInfo"
@@ -29,4 +29,4 @@ BEGIN
   END
 END
 
-// GPUI supplies the process manifest; resource 1 must only be embedded once.
+// Keep the process manifest separate from this icon/version resource.

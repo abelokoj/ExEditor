@@ -1,5 +1,11 @@
 #ifndef AppVersion
-#define AppVersion "0.1.0"
+#error AppVersion must be supplied from Cargo.toml
+#endif
+#ifndef ReleaseBase
+#error ReleaseBase must be supplied by the shared release-name job
+#endif
+#ifndef ReleaseTag
+#error ReleaseTag must be supplied by the shared release-name job
 #endif
 #ifndef AppSource
 #define AppSource "..\artifacts\ExEditor"
@@ -8,6 +14,8 @@
 AppId={{AB30A2AE-13B6-4CDA-A937-3E61C122BA51}
 AppName=ExEditor
 AppVersion={#AppVersion}
+AppVerName=ExEditor {#ReleaseTag}
+VersionInfoProductVersion={#ReleaseTag}
 AppPublisher=ExEditor contributors
 AppPublisherURL=https://github.com/abelokoj/ExEditor
 DefaultDirName={localappdata}\Programs\ExEditor
@@ -18,7 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 DisableProgramGroupPage=yes
 OutputDir=..\artifacts\installers
-OutputBaseFilename=ExEditor-Setup-x64
+OutputBaseFilename={#ReleaseBase}-win-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

@@ -19,7 +19,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release:
+    name: Resolve release identity
+    runs-on: ubuntu-24.04
+    outputs:
+      release_date: ${{ steps.identity.outputs.release_date }}
+      release_number: ${{ steps.identity.outputs.release_number }}
+      release_tag: ${{ steps.identity.outputs.release_tag }}
+      release_base: ${{ steps.identity.outputs.release_base }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Match ExcellentBible release numbering
+        id: identity
+        run: python3 scripts/release_name.py --github-output
+
   windows:
+    needs: release
     name: Windows x64
     runs-on: windows-2025
     timeout-minutes: 90
@@ -29,6 +46,10 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
+      EXEDITOR_RELEASE_DATE: ${{ needs.release.outputs.release_date }}
+      EXEDITOR_RELEASE_NUMBER: ${{ needs.release.outputs.release_number }}
+      EXEDITOR_RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+      EXEDITOR_RELEASE_BASE: ${{ needs.release.outputs.release_base }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +93,11 @@ jobs:
       - name: Check formatting
         run: |
           cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath logs/format.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check release numbering
+        run: |
+          python scripts/test_release_name.py 2>&1 | Tee-Object -FilePath logs/release-naming.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check Rust diagnostics
@@ -170,6 +196,10 @@ jobs:
       - name: Package the downloadable application
         run: |
           ./scripts/package.ps1 -ReleaseDirectory target/release -Destination artifacts/ExEditor -Commit '${{ github.sha }}'
+          New-Item -ItemType Directory -Path artifacts/packages -Force | Out-Null
+          $portable = "artifacts/packages/$env:EXEDITOR_RELEASE_BASE-win-x64-port.zip"
+          if (Test-Path -LiteralPath $portable) { throw 'The numbered portable release already exists.' }
+          Compress-Archive -Path artifacts/ExEditor/* -DestinationPath $portable
 
       - name: Check native Windows startup and Markdown memory
         timeout-minutes: 5
@@ -185,36 +215,38 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
-          & $compiler "/DAppVersion=$version" "/DAppSource=$((Resolve-Path artifacts/ExEditor).Path)" scripts/installer.iss
+          $installer = "artifacts/installers/$env:EXEDITOR_RELEASE_BASE-win-x64.exe"
+          if (Test-Path -LiteralPath $installer) { throw 'The numbered installer already exists.' }
+          & $compiler "/DAppVersion=$version" "/DReleaseBase=$env:EXEDITOR_RELEASE_BASE" "/DReleaseTag=$env:EXEDITOR_RELEASE_TAG" "/DAppSource=$((Resolve-Path artifacts/ExEditor).Path)" scripts/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check installer shell integration
         timeout-minutes: 10
         run: |
-          ./scripts/test-shell-integration.ps1 -InstallerPath artifacts/installers/ExEditor-Setup-x64.exe -LogDirectory logs
+          ./scripts/test-shell-integration.ps1 -InstallerPath artifacts/installers/${{ env.EXEDITOR_RELEASE_BASE }}-win-x64.exe -LogDirectory logs
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: ExEditor-installer-windows-x64-${{ github.sha }}
-          path: artifacts/installers/ExEditor-Setup-x64.exe
+          name: ${{ env.EXEDITOR_RELEASE_BASE }}-win-x64-installer-${{ github.sha }}
+          path: artifacts/installers/${{ env.EXEDITOR_RELEASE_BASE }}-win-x64.exe
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload ExEditor
         uses: actions/upload-artifact@v4
         with:
-          name: ExEditor-windows-x64-${{ github.sha }}
-          path: artifacts/ExEditor/
+          name: ${{ env.EXEDITOR_RELEASE_BASE }}-win-x64-port-${{ github.sha }}
+          path: artifacts/packages/${{ env.EXEDITOR_RELEASE_BASE }}-win-x64-port.zip
           if-no-files-found: error
           retention-days: 14
-          compression-level: 6
+          compression-level: 0
 
       - name: Upload build records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ExEditor-build-records-${{ github.sha }}
+          name: ${{ env.EXEDITOR_RELEASE_BASE }}-win-x64-build-records-${{ github.sha }}
           path: |
             logs/
             Cargo.lock
@@ -236,6 +268,7 @@ jobs:
 
 
   desktop:
+    needs: release
     if: ${{ !inputs.windows_only }}
     name: ${{ matrix.label }}
     strategy:
@@ -254,6 +287,10 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       RUST_BACKTRACE: '1'
+      EXEDITOR_RELEASE_DATE: ${{ needs.release.outputs.release_date }}
+      EXEDITOR_RELEASE_NUMBER: ${{ needs.release.outputs.release_number }}
+      EXEDITOR_RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+      EXEDITOR_RELEASE_BASE: ${{ needs.release.outputs.release_base }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -302,14 +339,14 @@ jobs:
         run: python3 scripts/package-desktop.py --target '${{ matrix.target }}' --commit '${{ github.sha }}'
       - uses: actions/upload-artifact@v4
         with:
-          name: ExEditor-${{ matrix.target }}-${{ github.sha }}
+          name: ${{ env.EXEDITOR_RELEASE_BASE }}-${{ matrix.target }}-${{ github.sha }}
           path: artifacts/desktop/*
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ExEditor-build-records-${{ matrix.target }}-${{ github.sha }}
+          name: ${{ env.EXEDITOR_RELEASE_BASE }}-${{ matrix.target }}-build-records-${{ github.sha }}
           path: |
             logs/
             Cargo.lock

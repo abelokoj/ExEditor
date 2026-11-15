@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14T19:50:41-05:00 - Match ExcellentBible release numbering (local source)
+
+- Adopt ExEditor-vYYYY-MM-DD.N-vSEMVER-platform names from ExcellentBible, retaining ExEditor's Cargo version 0.3.0. Resolve the America/New_York date and GitHub workflow-run counter once and share them across all platform jobs, packages, artifact labels, installer product metadata and About ExEditor. Keep numeric OS versions and the stable installer ID/path intact.
+- Replace the stale About dialog's 0.1.0/GPUI wording with the actual compiled release tag and Native Shell. Add full release identity to packaged build-info files, produce named Windows portable ZIPs, prevent named package overwrites and persist the convention in AGENTS.md/README. Existing dist deliveries are preserved.
+- Add Windows-only release-name regressions covering the expected format, malformed dates/version paths/counters and disagreement between job metadata and Cargo. The preceding 30% control enlargement retains the same 31-pixel title row. Source changes are complete; new naming, Windows runtime/installer checks and three-platform packages await GitHub. No local compilation, source tests, installation or application launch.
+
 ## 2026-11-14T19:45:59-05:00 - Enlarge titlebar controls within the existing row (local source)
 
 - Increase the shared Close, Minimize and Zoom circles from 12 to 15.6 logical pixels (30%). Preserve the 31-pixel title row, its vertical centering, 86-pixel control group, gaps, caption layout and Left/Right/Custom placement behavior. The enlarged group still fits its reserved horizontal space.

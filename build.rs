@@ -4,6 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/ExEditor.rc");
     println!("cargo:rerun-if-changed=assets/ExEditor.ico");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-env-changed=EXEDITOR_RELEASE_TAG");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
@@ -25,6 +26,10 @@ fn main() {
         .expect("reading the ExEditor resource template")
         .replace("@VERSION_NUMBER@", &format!("{major},{minor},{patch},0"))
         .replace("@VERSION_STRING@", &version)
+        .replace(
+            "@RELEASE_STRING@",
+            &env::var("EXEDITOR_RELEASE_TAG").unwrap_or_else(|_| version.clone()),
+        )
         .replace(
             "@ICON_PATH@",
             &icon_path.to_string_lossy().replace('\\', "/"),

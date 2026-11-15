@@ -76,7 +76,15 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/wordcraft') -Des
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/nsh') -Destination (Join-Path $packageRoot 'licenses/nsh') -Recurse
 $toolchainText = Get-Content -LiteralPath (Join-Path $projectRoot 'rust-toolchain.toml') -Raw
 $rustVersion = [regex]::Match($toolchainText, 'channel\s*=\s*"([^"]+)"').Groups[1].Value
+$releaseJson = & python (Join-Path $PSScriptRoot 'release_name.py')
+if ($LASTEXITCODE -ne 0) { throw 'Release identity validation failed.' }
+$release = $releaseJson | ConvertFrom-Json
 $buildInfo = [ordered]@{
+    version = $release.version
+    release_tag = $release.release_tag
+    release_base = $release.release_base
+    release_date = $release.release_date
+    release_number = $release.release_number
     application = 'ExEditor'
     editor_engine = 'NSH RichEditor'
     interface = 'Native Shell'

@@ -13,6 +13,8 @@ import tempfile
 import tomllib
 from datetime import datetime, timezone
 
+from release_name import release_metadata
+
 
 def package(target, commit):
     project = Path(__file__).resolve().parent.parent
@@ -23,7 +25,12 @@ def package(target, commit):
         raise SystemExit("A complete source commit is required.")
     output = project / "artifacts/desktop"
     output.mkdir(parents=True, exist_ok=True)
-    version = tomllib.loads((project / "Cargo.toml").read_text())["package"]["version"]
+    release = release_metadata(project)
+    version = release["version"]
+    base = release["release_base"]
+    archive_name = f"{base}-macos-{platform.machine()}.zip" if target.startswith("macos") else f"{base}-linux-x64.tar.gz"
+    if (output / archive_name).exists():
+        raise SystemExit(f"The release package already exists: {archive_name}")
     with tempfile.TemporaryDirectory(prefix="exeditor-package-") as temporary:
         staging = Path(temporary)
         if target.startswith("macos"):
@@ -40,6 +47,7 @@ def package(target, commit):
                 "CFBundleIdentifier": "com.abelokoj.ExEditor", "CFBundleExecutable": "exeditor",
                 "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
                 "CFBundleVersion": version, "CFBundleIconFile": "ExEditor.icns",
+                "CFBundleGetInfoString": "ExEditor " + release["release_tag"],
                 "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
                 "NSSupportsAutomaticGraphicsSwitching": True,
                 "CFBundleDocumentTypes": [{"CFBundleTypeName": "Text and rich documents", "CFBundleTypeRole": "Editor",
@@ -71,7 +79,7 @@ def package(target, commit):
             directory.mkdir(parents=True, exist_ok=True)
             shutil.copy2(project/"assets/fonts"/font/"OFL.txt", directory/"OFL.txt")
         toolchain = tomllib.loads((project/"rust-toolchain.toml").read_text())["toolchain"]["channel"]
-        info = {"application":"ExEditor", "version":version, "source_commit":commit,
+        info = {"application":"ExEditor", **release, "source_commit":commit,
                 "target":target, "architecture":platform.machine(), "editor_engine":"NSH RichEditor", "interface":"Native Shell",
                 "nsh_commit":"f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
                 "wordcraft_commit":"729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b",
@@ -83,9 +91,9 @@ def package(target, commit):
         sums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}" for path in sorted(root.rglob("*")) if path.is_file()]
         (root/"SHA256SUMS.txt").write_text("\n".join(sums)+"\n", encoding="utf-8")
         if target.startswith("macos"):
-            subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(root), str(output/"ExEditor-macos.zip")], check=True)
+            subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(root), str(output/archive_name)], check=True)
         else:
-            with tarfile.open(output/"ExEditor-linux-x64.tar.gz", "w:gz") as archive:
+            with tarfile.open(output/archive_name, "w:gz") as archive:
                 archive.add(root, arcname="ExEditor")
 
 

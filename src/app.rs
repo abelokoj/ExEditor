@@ -3242,7 +3242,14 @@ impl EditorWindow {
             }
             Command::Submit(kind, values) => self.submit(kind, values, window, cx)?,
             Command::About => {
-                MessageDialog::new().set_title("About ExEditor").set_description("ExEditor 0.1.0\nA editor document editor built with Rust and GPUI Kit.\nhttps://github.com/abelokoj/ExEditor\n\nTextEdit is a trademark of Apple Inc. ExEditor is an independent application.").show();
+                let version =
+                    option_env!("EXEDITOR_RELEASE_TAG").unwrap_or(env!("CARGO_PKG_VERSION"));
+                MessageDialog::new()
+                    .set_title("About ExEditor")
+                    .set_description(format!(
+                        "ExEditor {version}\nA native document editor built with Rust and Native Shell.\nhttps://github.com/abelokoj/ExEditor\n\nTextEdit is a trademark of Apple Inc. ExEditor is an independent application."
+                    ))
+                    .show();
             }
             Command::Help => {
                 spawn(async {
