@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T21:53:37-05:00 - Compare complete installer tags without fixed-width padding (local CI correction)
+
+- The focused Windows run43669651580 passed all five naming regressions and exposed the exact mismatch: Inno Setup's ProductVersion contains the correct v26-11-14.17-v0.3.0 followed by fixed-width spaces. Normalize trailing resource padding only; retain exact full-tag equality. Set both numeric file/product versions explicitly to Cargo semver and both displayed strings to the release tag, with numeric-version assertions in the small fixture.
+- Capture actual installer version fields in GitHub build records. No app/editor source changed; earlier source51d2f80's Windows native and macOS/Linux package results remain valid for the application. Repeat the focused metadata check before the Windows-only packaging retry. No local tests, compilation, installation or app execution; release17 remains pending.
+
 ## 2026-11-14T21:50:20-05:00 - Run metadata diagnostics through the registered workflow (local CI)
 
 - GitHub only registers manually dispatchable workflows from the default branch. Route the small Windows installer fixture through the existing build workflow's installer_metadata_only input, skipping Rust compilation and platform release jobs. Retain the fixture as a focused packaging regression.

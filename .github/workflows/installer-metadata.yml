@@ -31,7 +31,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $file = Join-Path $fixture 'ExEditor-version-fixture-win-x64.exe'
           $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)
-          $info | Select-Object FileVersion,ProductVersion,FileDescription,ProductName,Language | ConvertTo-Json
+          $info | Select-Object FileVersion,ProductVersion,FileMajorPart,FileMinorPart,FileBuildPart,FilePrivatePart,FileDescription,ProductName,Language | ConvertTo-Json
           $adapted = (Get-Item -LiteralPath $file).VersionInfo
           $adapted | Select-Object FileVersion,ProductVersion | ConvertTo-Json
-          if ($info.ProductVersion -ne $tag) { throw "Actual product version: '$($info.ProductVersion)'; expected: '$tag'." }
+          if ($info.ProductVersion.TrimEnd() -ne $tag -or $info.FileVersion.TrimEnd() -ne $tag) {
+            throw 'The complete displayed release tag does not match after trimming resource padding.'
+          }
+          if ($info.FileMajorPart -ne 0 -or $info.FileMinorPart -ne 3 -or $info.FileBuildPart -ne 0 -or $info.FilePrivatePart -ne 0) {
+            throw 'The numeric installer version does not match Cargo semver 0.3.0.'
+          }

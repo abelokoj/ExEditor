@@ -231,8 +231,10 @@ jobs:
           if (Test-Path -LiteralPath $installer) { throw 'The numbered installer already exists.' }
           & $compiler "/DAppVersion=$version" "/DReleaseBase=$env:EXEDITOR_RELEASE_BASE" "/DReleaseTag=$env:EXEDITOR_RELEASE_TAG" "/DAppSource=$((Resolve-Path artifacts/ExEditor).Path)" scripts/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-Item -LiteralPath $installer).VersionInfo.ProductVersion -ne $env:EXEDITOR_RELEASE_TAG) {
-            throw 'The installer product version does not match its release tag.'
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $installer).Path)
+          $info | Select-Object FileVersion,ProductVersion,FileMajorPart,FileMinorPart,FileBuildPart | ConvertTo-Json | Tee-Object -FilePath logs/installer-version.json
+          if ($info.ProductVersion.TrimEnd() -ne $env:EXEDITOR_RELEASE_TAG -or $info.FileVersion.TrimEnd() -ne $env:EXEDITOR_RELEASE_TAG) {
+            throw 'The installer displayed versions do not match the complete release tag.'
           }
 
       - name: Check installer shell integration
