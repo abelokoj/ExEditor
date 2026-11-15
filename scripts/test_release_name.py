@@ -1,11 +1,13 @@
 """Release-name regressions, executed only by the Windows GitHub job."""
 import os
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from release_name import make_release, next_release_number, release_metadata
+from release_name import make_release, next_release_number, release_metadata, successful_workflow_runs
 
 
 class ReleaseNameTests(unittest.TestCase):
@@ -22,6 +24,17 @@ class ReleaseNameTests(unittest.TestCase):
         self.assertEqual(next_release_number(history, [100, 101]), 3)
         for day in ["2026-11-14", "2026-11-15", "2027-01-01"]:
             self.assertIn(".3-v0.3.0", make_release("0.3.0", day, "3")["release_tag"])
+
+    def test_metadata_only_workflows_do_not_count_as_releases(self):
+        responses = [
+            {"workflow_runs": [{"id": 100}, {"id": 101}, {"id": 102}]},
+            {"jobs": [{"steps": [{"name": "Inspect installer version resources", "conclusion": "success"}]}]},
+            {"jobs": [{"steps": [{"name": "Upload installer", "conclusion": "success"}]}]},
+        ]
+        streams = [io.BytesIO(json.dumps(value).encode()) for value in responses]
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "example/app", "GITHUB_TOKEN": "fixture"}, clear=True):
+            with patch("urllib.request.urlopen", side_effect=streams):
+                self.assertEqual(successful_workflow_runs({100}), [102])
 
     def test_rejects_invalid_dates_paths_and_numbers(self):
         for version, day, number in [

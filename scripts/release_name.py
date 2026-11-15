@@ -42,7 +42,7 @@ def next_release_number(records, completed_runs):
     return len(records) + len(set(completed_runs) - recorded) + 1
 
 
-def successful_workflow_runs():
+def successful_workflow_runs(recorded):
     repository = os.environ["GITHUB_REPOSITORY"]
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "ExEditor-release-numbering",
                "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"]}
@@ -52,7 +52,15 @@ def successful_workflow_runs():
         url = f"https://api.github.com/repos/{repository}/actions/workflows/build.yml/runs?status=success&per_page=100&page={page}"
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
             batch = json.load(response)["workflow_runs"]
-        runs.extend(r["id"] for r in batch)
+        for run in batch:
+            if run["id"] in recorded:
+                continue
+            jobs_url = f"https://api.github.com/repos/{repository}/actions/runs/{run['id']}/jobs?per_page=100"
+            with urllib.request.urlopen(urllib.request.Request(jobs_url, headers=headers), timeout=30) as response:
+                jobs = json.load(response)["jobs"]
+            if any(step["name"] == "Upload installer" and step["conclusion"] == "success"
+                   for job in jobs for step in job["steps"]):
+                runs.append(run["id"])
         if len(batch) < 100:
             return runs
         page += 1
@@ -68,7 +76,7 @@ def release_metadata(project):
         records = read_history(project)
         current = int(os.environ["GITHUB_RUN_ID"])
         previous = next((r["number"] for r in records if r["workflow_run"] == current), None)
-        number = str(previous or next_release_number(records, successful_workflow_runs()))
+        number = str(previous or next_release_number(records, successful_workflow_runs({r["workflow_run"] for r in records})))
     release = make_release(version, day, number)
     for key in ("release_tag", "release_base"):
         supplied = os.environ.get("EXEDITOR_" + key.upper())

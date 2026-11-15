@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14T21:50:20-05:00 - Run metadata diagnostics through the registered workflow (local CI)
+
+- GitHub only registers manually dispatchable workflows from the default branch. Route the small Windows installer fixture through the existing build workflow's installer_metadata_only input, skipping Rust compilation and platform release jobs. Retain the fixture as a focused packaging regression.
+- Count unrecorded successful workflows only when their Upload installer step succeeded; successful diagnostic jobs never consume a lifetime release number. Add a Windows-only mocked-API regression for that distinction. Existing ledger entries are preserved without repeated historical job lookups. Five naming regressions now await GitHub; no local tests, builds, installation or app launch.
+
 ## 2026-11-14T21:48:18-05:00 - Isolate the installer metadata check on GitHub (local diagnostics)
 
 - Run43667381630/source51d2f80 passed both desktop packages, all Windows tests and the early/large light-dark native checks. Its installer compiled successfully, then the ProductVersion equality guard failed before shell checks/upload. Downloaded and inspected its native evidence; larger controls remain inside the original row, with readable dark headings and visible selection/zoom.

@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      installer_metadata_only:
+        description: 'Inspect installer metadata with a nondistributable fixture; no Rust compilation'
+        type: boolean
+        default: false
       windows_only:
         description: 'Validate Windows after CI-only changes without restarting other platform builds'
         type: boolean
@@ -20,7 +24,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  installer-metadata:
+    if: ${{ inputs.installer_metadata_only }}
+    uses: ./.github/workflows/installer-metadata.yml
+
   release:
+    if: ${{ !inputs.installer_metadata_only }}
     name: Resolve release identity
     runs-on: ubuntu-24.04
     outputs:
