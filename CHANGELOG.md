@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-16T00:01:05-05:00 - Bind the gutter to its independent revision (local wiring correction)
+
+- Pass the separate gutter signal into the gutter wrapper, completing the preceding split between display settings and document styles. Source inspection caught this remaining call-site binding before validation completed. No local builds/tests/app execution; the full GitHub workflow remains required.
+
 ## 2026-11-16T00:00:17-05:00 - Separate gutter updates from document styling (local correction)
 
 - Windows run43804856065/sourcea329957 passed203Rust regressions,accessory checks and both early light/dark native checks, then compiled the release binary. Its185,677-byte Markdown fixture passed selection/key/keypad/wheel zoom, but the gutter assertion observed the previous editor origin after its fixed650ms wait.

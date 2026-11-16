@@ -377,7 +377,7 @@ fn build_surface(
             },
         )
         .into_element();
-    super::gutter::wrap(editor, content, style_revision)
+    super::gutter::wrap(editor, content, gutter_revision)
 }
 
 #[cfg(test)]
