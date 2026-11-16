@@ -2,17 +2,21 @@
 
 ExEditor is a native Rust document editor whose interface and workflows follow macOS TextEdit. **Native Shell (nsh) draws the interface and supplies the native rich-text editor on Windows, macOS and Linux.** There is no browser editor or external LibreOffice dependency.
 
-The `rust-nsh` migration replaces GPUI Kit/GPUI Fast and WordCraft. NSH RichEditor owns typing, selection, undo and native views. App-owned offline codecs handle RTF, HTML, DOCX, ODT and legacy DOC import; an independent Cosmic Text/Krilla renderer handles PDF output, with native printer submission. No WordCraft crates remain in the source dependency manifest. The new split-view, line-number and codec changes are pending GitHub validation; the previous validated release is recorded below. Build validation and interactive acceptance are recorded in [CHANGELOG.md](CHANGELOG.md); source features are not a guarantee of complete TextEdit or Word compatibility.
+The `rust-nsh` migration replaces GPUI Kit/GPUI Fast and WordCraft. NSH RichEditor owns typing, selection, undo and native views. App-owned offline codecs handle RTF, HTML, DOCX, ODT and legacy DOC import; an independent Cosmic Text/Krilla renderer handles PDF output, with native printer submission. No WordCraft crates remain in the source dependency manifest. The split-view, line-number and codec changes passed the GitHub validation recorded below. Build validation and interactive acceptance are recorded in [CHANGELOG.md](CHANGELOG.md); source features are not a guarantee of complete TextEdit or Word compatibility.
 
-![ExEditor native Windows light appearance with larger titlebar controls](docs/screenshots/native-windows-95aefae-light.png)
+![ExEditor native Windows light appearance](docs/screenshots/native-windows-d3e8b4f-light.png)
 
-![ExEditor native Windows dark appearance with readable headings and links](docs/screenshots/native-windows-95aefae-dark.png)
+![ExEditor native Windows dark appearance](docs/screenshots/native-windows-d3e8b4f-dark.png)
 
-*Native Windows release v26-11-14.17-v0.3.0, source 95aefae, captured on GitHub with a generated Markdown document.*
+![ExEditor native four-pane grid](docs/screenshots/native-windows-d3e8b4f-grid.png)
+
+![ExEditor with configurable line numbers](docs/screenshots/native-windows-d3e8b4f-lines.png)
+
+*Native Windows release v26-11-16.18-v0.3.0, source d3e8b4f, captured on GitHub with a generated Markdown document.*
 
 ## Builds and testing
 
-[Validated native release: v26-11-14.17-v0.3.0](https://github.com/abelokoj/ExEditor/actions/runs/43670049222) includes three-platform packages, 167 Windows Rust regressions, 5 release-numbering regressions, separate font/dictionary download checks, and light/dark native Windows startup, selection, keyboard/keypad/wheel zoom, Settings, rounded-window, dark-heading, same-window file-opening and installer registration checks. macOS/Linux runtime acceptance remains untested. Desktop package checks: [macOS](https://github.com/abelokoj/ExEditor/actions/runs/43667381630/job/132670654438), [Linux](https://github.com/abelokoj/ExEditor/actions/runs/43667381630/job/132670654422).
+[Validated native release: v26-11-16.18-v0.3.0](https://github.com/abelokoj/ExEditor/actions/runs/43807573381) includes three-platform packages, 203 Windows Rust regressions, 5 release-numbering regressions, separate font/dictionary download checks, and light/dark native checks for selection, zoom, Settings, rounded windows, same-window opening, right-side titlebar ordering, line numbers, split panes and installer registration. macOS/Linux compile/package only: [macOS](https://github.com/abelokoj/ExEditor/actions/runs/43807573381/job/133101865673), [Linux](https://github.com/abelokoj/ExEditor/actions/runs/43807573381/job/133101865834).
 
 All compilation and diagnostics run on [GitHub Actions](https://github.com/abelokoj/ExEditor/actions). Do not compile or run source tests locally. Test execution is currently restricted to Windows; macOS and Linux build and package only. Finish feature source before starting a workflow. Pushes to `main`, `nsh-edit` and `rust-nsh`, pull requests and manual dispatches run the build workflow.
 

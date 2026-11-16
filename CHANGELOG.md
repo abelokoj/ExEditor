@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-16T00:24:02-05:00 - Deliver validated release v26-11-16.18-v0.3.0 (GitHub-built, downloaded)
+
+- Windows source d3e8b4f6358bf7b24cffdac8ac5bc61416220218, [GitHub run 43807573381](https://github.com/abelokoj/ExEditor/actions/runs/43807573381): all build, diagnostics, 203 ordinary Rust regressions, five naming regressions, optional font/dictionary checks, early/release light-dark native controls and installer/shell checks passed. Desktop package source d3e8b4f6358bf7b24cffdac8ac5bc61416220218 from https://github.com/abelokoj/ExEditor/actions/runs/43807573381 compiled and packaged both macOS/Linux; no execution there.
+- Deliver native resizable split views, independent pane selection/scroll with shared document/history, configurable line-number font/size/gutter width, and red Close at the far right within the unchanged31px title row. Native checks assert caption geometry/order/colors, gutter show/hide width, two-column split, four-pane grid and return to one editor. Publish source-matched generated-document screenshots.
+- WordCraft libraries are absent from the GitHub-resolved lockfile. Native app-owned RTF/Office codecs and the independent Cosmic Text/Krilla PDF renderer replace the old paths; retained historical clipboard source attribution remains packaged. Selection caches avoid repeated full-document work; recovery, open and PDF work use background workers.
+- Downloaded all seven artifacts into dist/ExEditor-v26-11-16.18-v0.3.0; verified every artifact digest and 51 Windows payload hashes. Installer ExEditor-v26-11-16.18-v0.3.0-win-x64.exe: 27443834 bytes, SHA-256 acc1bebf15ff59a07c41f97357685780d16fde13c8dba956bc9439df84c1ff8c. Record lifetime release18, retain prior ledger entries and semver0.3.0; failed attempts did not advance the counter.
+- Local work used source edits/formatting, artifact verification and screenshot inspection only. No local compilation, source tests, installation or app launch. Advanced Office/PDF layout can simplify as documented; physical-printer, broad document/IME/accessibility and macOS/Linux runtime acceptance remain untested. Performance checks on generated fixtures do not guarantee zero lag for all documents/hardware.
+
 ## 2026-11-16T00:01:05-05:00 - Bind the gutter to its independent revision (local wiring correction)
 
 - Pass the separate gutter signal into the gutter wrapper, completing the preceding split between display settings and document styles. Source inspection caught this remaining call-site binding before validation completed. No local builds/tests/app execution; the full GitHub workflow remains required.
