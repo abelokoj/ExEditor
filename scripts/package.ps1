@@ -73,6 +73,8 @@ foreach ($family in @('pretendard-std', 'maple-mono-nf', 'inter', 'noto-color-em
     Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $licenseDirectory 'OFL.txt')
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/nsh') -Destination (Join-Path $packageRoot 'licenses/nsh') -Recurse
+# Retained clipboard-adapter source still requires its historical MIT notice.
+Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/licenses/wordcraft') -Destination (Join-Path $packageRoot 'licenses/clipboard-adapters') -Recurse
 $toolchainText = Get-Content -LiteralPath (Join-Path $projectRoot 'rust-toolchain.toml') -Raw
 $rustVersion = [regex]::Match($toolchainText, 'channel\s*=\s*"([^"]+)"').Groups[1].Value
 $releaseJson = & python (Join-Path $PSScriptRoot 'release_name.py')

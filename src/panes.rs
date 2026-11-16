@@ -6,10 +6,7 @@ use crate::{
     ui::{self, Palette, px},
 };
 use nsh_base::{h_resizable, resizable_panel, v_resizable};
-use nsh_core::{
-    element::{Style, StyleRefinement},
-    prelude::*,
-};
+use nsh_core::prelude::*;
 use std::rc::Rc;
 
 /// The supported arrangements of independently selectable document panes.
@@ -201,9 +198,7 @@ fn split(columns: bool, panes: Vec<AnyElement>, colors: Signal<Palette>) -> AnyE
         } else {
             "Resize document pane heights"
         })
-        .handle_style(move || {
-            Style::from(StyleRefinement::default().bg(ui::rgb(colors.get().border)))
-        })
+        .handle_style(move |style| style.bg(ui::rgb(colors.get().border)))
         // Unspecified sizes share the available space equally until a handle is dragged.
         .children(panes.into_iter().map(move |pane| {
             resizable_panel()

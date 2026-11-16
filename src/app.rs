@@ -1483,7 +1483,7 @@ impl EditorWindow {
         });
         ui::set_scale_percent(prefs.interface_scale);
         let doc = DocumentTab::new(&prefs);
-        let mut this = Self {
+        let this = Self {
             doc,
             tabs: vec![None],
             active_tab: 0,

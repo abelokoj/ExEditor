@@ -325,7 +325,7 @@ pub(super) fn wrap(
         .child(gutter)
         .child(
             view()
-                .element_ref(content_ref)
+                .element_ref(&content_ref)
                 .flex_1()
                 .min_w(px(0.))
                 .h_full()
