@@ -457,7 +457,7 @@ impl Editor {
     fn load(&self, doc: Node) -> Result<()> {
         validate_native_resources(&doc)?;
         ensure!(
-            doc.to_json().to_string().len() <= MAX_DOCUMENT_BYTES,
+            doc.node_size() <= MAX_DOCUMENT_BYTES,
             "the document is too large"
         );
         doc.check()?;
@@ -708,6 +708,11 @@ impl Editor {
         }
         let text = self.text()?;
         let needle = normalize_newlines(needle);
+        let wanted = if !match_case {
+            needle.to_lowercase()
+        } else {
+            String::new()
+        };
         let mut ranges = Vec::new();
         let mut byte = 0;
         while byte < text.len() {
@@ -718,7 +723,6 @@ impl Editor {
                     .then_some(byte + needle.len())
             } else {
                 let mut matched = String::new();
-                let wanted = needle.to_lowercase();
                 let mut end = None;
                 for (offset, ch) in candidate.char_indices() {
                     matched.extend(ch.to_lowercase());

@@ -1210,15 +1210,21 @@ impl Exporter {
                     .unwrap_or(1)
                     .clamp(1, 1000);
                 if self.kind == Kind::Word {
-                    let _ = write!(
-                        out,
-                        "<w:tc><w:tcPr><w:gridSpan w:val=\"{colspan}\"/></w:tcPr>"
-                    );
-                } else {
+                    if colspan > 1 {
+                        let _ = write!(
+                            out,
+                            "<w:tc><w:tcPr><w:gridSpan w:val=\"{colspan}\"/></w:tcPr>"
+                        );
+                    } else {
+                        out.push_str("<w:tc>");
+                    }
+                } else if colspan > 1 {
                     let _ = write!(
                         out,
                         "<table:table-cell table:number-columns-spanned=\"{colspan}\" office:value-type=\"string\">"
                     );
+                } else {
+                    out.push_str("<table:table-cell office:value-type=\"string\">");
                 }
                 let has_blocks = cell
                     .children()

@@ -11,8 +11,8 @@ license = "MIT"
 anyhow = "1"
 ureq = "3.5.1"
 sha2 = "0.10"
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-base = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-core = "=0.5.1"
+nsh-base = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "6"
@@ -42,11 +42,13 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 percent-encoding = "2"
 url = "2"
-arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "a3e0b5a9440d18f19422a9dca13516747b7d3181" }
 
+[target.'cfg(not(windows))'.dependencies]
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
+
 [target.'cfg(windows)'.dependencies]
-nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-windows = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 clipboard-win = { version = "5.4", features = ["std"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -82,12 +84,12 @@ windows-sys = { version = "0.61", features = [
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-macos = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-linux = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 wl-clipboard-rs = "0.9"
 x11rb = "0.13"
 
@@ -101,8 +103,8 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [dev-dependencies]
 ttf-parser = "0.25"
-nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
-nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
+nsh-engine = { version = "=0.5.1", default-features = false }
+nsh-testing = { version = "=0.5.1", default-features = false }
 box-format = { path = "vendor/box-format", default-features = false, features = ["writer"] }
 
 [build-dependencies]

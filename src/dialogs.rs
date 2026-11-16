@@ -333,12 +333,53 @@ fn valid_form(kind: &FormKind, values: &[String]) -> bool {
             .and_then(|s| s.trim().trim_end_matches('%').trim().parse::<u16>().ok())
             .is_some_and(|n| ui::SCALE_RANGE.contains(&n)),
         FormKind::Table => {
-            !values.is_empty()
-                && values.iter().all(|s| {
-                    s.trim()
-                        .parse::<u16>()
-                        .is_ok_and(|n| (1..=100).contains(&n))
-                })
+            let rows = values.first().and_then(|s| s.trim().parse::<u16>().ok());
+            let cols = values.get(1).and_then(|s| s.trim().parse::<u16>().ok());
+            rows.is_some_and(|r| (1..=100).contains(&r))
+                && cols.is_some_and(|c| (1..=30).contains(&c))
+        }
+        FormKind::Link => values.first().is_some_and(|s| {
+            let s = s.trim();
+            s.starts_with("https://") || s.starts_with("http://") || s.starts_with("mailto:")
+        }),
+        FormKind::Spacing => {
+            number(values.first()).is_some_and(|n| n.is_finite() && (0.5..=10.).contains(&n))
+        }
+        FormKind::GoToLine => values
+            .first()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .is_some_and(|n| n > 0),
+        FormKind::PageSetup => {
+            let width = number(values.first());
+            let height = number(values.get(1));
+            let ml = number(values.get(2));
+            let mr = number(values.get(3));
+            let mt = number(values.get(4));
+            let mb = number(values.get(5));
+            if let (Some(w), Some(h), Some(l), Some(r), Some(t), Some(b)) =
+                (width, height, ml, mr, mt, mb)
+            {
+                w > 0.
+                    && h > 0.
+                    && l >= 0.
+                    && r >= 0.
+                    && t >= 0.
+                    && b >= 0.
+                    && (l + r) < w
+                    && (t + b) < h
+            } else {
+                false
+            }
+        }
+        FormKind::Preferences => {
+            let rf = values.get(1).map(|s| s.trim()).unwrap_or("");
+            let rs = number(values.get(2));
+            let pf = values.get(3).map(|s| s.trim()).unwrap_or("");
+            let ps = number(values.get(4));
+            !rf.is_empty()
+                && !pf.is_empty()
+                && rs.is_some_and(|s| s.is_finite() && s > 0.)
+                && ps.is_some_and(|s| s.is_finite() && s > 0.)
         }
         _ => true,
     }
@@ -355,5 +396,17 @@ mod tests {
         assert!(valid_form(&FormKind::InterfaceScale, &["150 %".into()]));
         assert!(!valid_form(&FormKind::InterfaceScale, &["301".into()]));
         assert!(!valid_form(&FormKind::Table, &[]));
+        assert!(valid_form(&FormKind::Table, &["5".into(), "10".into()]));
+        assert!(!valid_form(&FormKind::Table, &["5".into(), "35".into()]));
+        assert!(valid_form(
+            &FormKind::Link,
+            &["https://example.com".into(), "Example".into()]
+        ));
+        assert!(!valid_form(&FormKind::Link, &["ftp://example.com".into()]));
+        assert!(valid_form(&FormKind::GoToLine, &["42".into()]));
+        assert!(!valid_form(&FormKind::GoToLine, &["0".into()]));
+        assert!(!valid_form(&FormKind::GoToLine, &["abc".into()]));
+        assert!(valid_form(&FormKind::Spacing, &["1.5".into()]));
+        assert!(!valid_form(&FormKind::Spacing, &["0.2".into()]));
     }
 }

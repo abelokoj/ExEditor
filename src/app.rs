@@ -693,13 +693,15 @@ pub fn App() -> impl IntoElement {
             },
             |id| *id,
             move |id, _| {
-                let entry = others
+                let Some(entry) = others
                     .entries
                     .borrow()
                     .iter()
                     .find(|entry| entry.id == id.get_untracked())
                     .cloned()
-                    .expect("live window id");
+                else {
+                    return view().into_element();
+                };
                 let store = others.clone();
                 let model = entry.model.clone();
                 let live = entry.open;
@@ -942,15 +944,10 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
         move |_, _| {
             let layout = surface_model.borrow().split_layout;
             if layout == crate::panes::Layout::Single {
-                return crate::editor::surface::surface(
-                    surface_model
-                        .borrow()
-                        .doc
-                        .editor
-                        .clone()
-                        .expect("a live document surface"),
-                )
-                .into_element();
+                let Some(editor) = surface_model.borrow().doc.editor.clone() else {
+                    return view().into_element();
+                };
+                return crate::editor::surface::surface(editor).into_element();
             }
             let read_model = surface_model.clone();
             let read: crate::panes::ReadPane = Rc::new(move |index| {
@@ -1386,10 +1383,9 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                     desktop::MenuItem::submenu(
                         title,
                         entries.into_iter().map(|entry| {
-                            if entry.command.is_none() {
+                            let Some(command) = entry.command else {
                                 return desktop::MenuItem::separator();
-                            }
-                            let command = entry.command.expect("action entry");
+                            };
                             let queue = queue.clone();
                             if matches!(command, Command::Quit) {
                                 return desktop::MenuItem::role(nsh_core::desktop::MenuRole::Quit);

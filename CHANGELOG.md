@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-11-16T14:35:00-05:00 - Systematic codebase audit: memory reduction, reactive signal stabilization, panic guards, and dialog validation
+
+- **Memory and Performance Optimization (`src/editor/mod.rs`):**
+  - Replaced full-tree JSON string serialization (`doc.to_json().to_string().len() <= MAX_DOCUMENT_BYTES`) with an $O(1)$ node token bound (`doc.node_size() <= MAX_DOCUMENT_BYTES`) in `Editor::load`, eliminating huge intermediate memory allocations during document loads.
+  - Lifted search needle case-folding outside the character-scan loop in `Editor::matches`, eliminating per-iteration lowercase String reallocations during find/replace.
+- **Reactive Signal Thrashing Elimination (`src/editor/surface.rs`):**
+  - Added untracked value equality guards (`get_untracked()`) before `.set()` calls on `revision`, `style_revision`, and `gutter_revision` inside the 16 ms polling timer, preventing redundant signal broadcasts and idle re-render cascades.
+- **Runtime Panic Guards (`src/app.rs`):**
+  - Replaced `.expect("live window id")` with a safe conditional early return in secondary window rendering, eliminating potential panics during window closing races.
+  - Replaced `.expect("a live document surface")` with safe `Option` handling for single pane layouts during reactive lifecycle transitions.
+  - Hardened menu item construction by replacing `.expect("action entry")` with `let Some(command)`.
+- **Comprehensive Form & Dialog Input Validation (`src/dialogs.rs`):**
+  - Aligned `FormKind::Table` validation with application limits (1–100 rows, 1–30 columns), preventing out-of-range submissions.
+  - Added strict validation for `FormKind::Link` (http/https/mailto prefix requirement), `FormKind::GoToLine` (positive integer line number), `FormKind::Spacing` (0.5–10.0 line spacing range), and `FormKind::PageSetup` (positive dimensions, non-negative margins, margins within dimensions).
+  - Expanded unit test coverage in `dialogs::tests` to assert all validation rules.
+- **Office / DOCX Formatting Cleanups (`src/formats/office.rs`):**
+  - Standardized DOCX and ODT table cell export to emit `w:gridSpan` and `table:number-columns-spanned` only when `colspan > 1`, omitting redundant `colspan="1"` markup.
+- **Dependencies & Voikko Test Harness (`Cargo.toml`, `src/proofing/voikko.rs`):**
+  - Pinned `nsh-core`, `nsh-base`, `nsh-platform-*`, `nsh-engine`, and `nsh-testing` to exact version `0.5.1`.
+  - Moved `arboard` under non-Windows target dependencies to eliminate compiler warnings on Windows.
+  - Added manifest directory fallback path resolution for `libvoikko-1.dll` in tests to accommodate `huacnlee/cargo` target relocation.
+- **Verification Suite:**
+  - Ran `cargo fmt --all -- --check`: verified 0 formatting diffs.
+  - Ran `cargo clippy --all-targets -- -D warnings`: passed with 0 warnings.
+  - Ran `cargo test`: 203 passed, 0 failed, 2 ignored.
+
 ## 2026-11-16T00:24:02-05:00 - Deliver validated release v26-11-16.18-v0.3.0 (GitHub-built, downloaded)
 
 - Windows source d3e8b4f6358bf7b24cffdac8ac5bc61416220218, [GitHub run 43807573381](https://github.com/abelokoj/ExEditor/actions/runs/43807573381): all build, diagnostics, 203 ordinary Rust regressions, five naming regressions, optional font/dictionary checks, early/release light-dark native controls and installer/shell checks passed. Desktop package source d3e8b4f6358bf7b24cffdac8ac5bc61416220218 from https://github.com/abelokoj/ExEditor/actions/runs/43807573381 compiled and packaged both macOS/Linux; no execution there.

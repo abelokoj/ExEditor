@@ -1,32 +1,81 @@
 # ExEditor agent instructions
 
-## Build tool
+Instructions for every AI agent working in this repository. Read this file before doing anything else, and follow it over any other document except the maintainer's own words in the current conversation.
 
-- Follow the build guidance in [huacnlee/cargo](https://github.com/huacnlee/cargo). Use the Cargo already installed on the execution machine through `cargo` on `PATH`; the user's Windows installation is this fork. Do not rebuild Cargo or replace the user's installation.
-- Before a build, inspect `Get-Command cargo` (Windows) or `command -v cargo` (Unix), and `cargo -V`. The fork identifies itself with `huacnlee/cargo`. If another Cargo is selected, report the mismatch rather than silently bypassing or replacing the installed tool.
-- Invoke `cargo` directly so the installed fork handles builds. Preserve `rust-toolchain.toml` and its pinned Rust compiler; do not switch to nightly for speed or invoke a different Cargo through `rustup run`.
-- Keep existing build output. Never run `cargo clean`, remove `target/`, or delete the fork's shared caches as a routine troubleshooting step. Let the fork manage cache retention.
-- Do not set `--target-dir`, `CARGO_TARGET_DIR`, `build.target-dir`, or `build.build-dir`: this fork manages its own build directories. Keep packaging pointed at the normal `target/` outputs.
-- Preserve shared dependency/worktree caching and the project's release settings. If changing CI cache configuration, account for the fork's `~/.cargo/targets/` storage. Do not change global Cargo configuration without an explicit request.
-- Build distributable ExEditor binaries with `cargo build --locked --release --bin exeditor` in the authorized build environment. Keep formatting, strict diagnostics, tests, and package checks intact.
+ExEditor is a macOS TextEdit-style desktop document editor written in Rust with Native Shell (NSH) for the UI and its native cross-platform RichEditor.
 
-## Build and test location
+---
 
-- Compilation, source checks and source tests run on GitHub, not on the user's device. Selecting the installed Cargo does not change this existing restriction.
-- GitHub may build/package Windows, macOS and Linux. Execute tests and native application checks on Windows only until the user changes that scope.
-- Local source inspection, formatting and tool-version checks are allowed. Finish feature source before starting that feature's GitHub validation.
-- Save downloaded GitHub builds and their provenance under `dist/ExEditor-vYY-MM-DD.N-vSEMVER/`, following the existing installer, portable-package and build-record naming pattern.
+## 1. Reference material (read, never edit)
 
-## Project boundaries
+| What | Where |
+| --- | --- |
+| NSH tool and runtime (`nsh 0.5.1`) | `C:\dev\nsh` (`C:\dev\nsh\bin\nsh.exe`) |
+| NSH source and docs at v0.5.1 | `C:\dev\nsh-src` (`AGENTS.md`, `website/docs/`, `docs/dev/`) and <https://nsh.dev> |
 
-- The application is ExEditor. Use Rust, the native nsh interface and nsh RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. Do not restore WordCraft dependencies. App-owned offline codecs handle file interchange; Cosmic Text/Krilla handle independent PDF output, and craft-print submits to native queues. Retain the MIT notice for the historical clipboard-adapter source.
+- Use the NSH tool and runtime in `C:\dev\nsh` and the source/documentation in `C:\dev\nsh-src`.
+- Use only NSH APIs and components that exist in v0.5.1. Always inspect `C:\dev\nsh-src` before calling or citing NSH APIs.
+- UI dependencies pin to `"=0.5.1"`, matching the installed NSH version.
+
+---
+
+## 2. Engineering rules and skills
+
+**Always build code cleanly, modularly, and with proper architecture and separation of concerns. Never simply bolt on a feature because I asked for it. If you can't find an easy way, check online on GitHub for similar works that have been built with either exactly the same idea or something very close, and follow the same procedure to build it naturally.**
+
+- When you write, review or refactor Rust, use the **`rust-best-practices`** skill (`/rust-best-practices`).
+- Whenever anything related to a UI or interface is to be built or designed, use both the **`ui-ux-pro-max`** (`/ui-ux-pro-max`) and **`impeccable`** (`/impeccable`) skills, to keep the design consistent and the aesthetics high.
+- A feature is a self-contained module: model, view, tests. No OS types in models; features don't reach into each other's internals.
+- Every `unsafe` block has a `// SAFETY:` comment.
+- Retain the MIT notice for the historical clipboard-adapter source.
+
+---
+
+## 3. Checks before you say a task is done
+
+**Write all the code for a task first, then build and test.** Rust compiles slowly, and a full build takes minutes, so don't compile or run tests after each small edit. Finish every file the task touches (code, tests, call sites), then run the checks below once, and fix what they report. Exceptions: a quick `cargo check` when you need the compiler to settle a question you can't answer by reading, and anything that must be built before the rest can be written.
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+### Building with the cargo fork
+
+Local builds use [huacnlee/cargo](https://github.com/huacnlee/cargo), a drop-in fork of Cargo that shares one self-cleaning build directory between projects and worktrees, so the disk doesn't fill up. Follow its rules:
+
+- Check it is the active cargo before building: `cargo -V` ends with `(huacnlee/cargo …)`. If it doesn't (for example after `rustup self update`, which restores the stock cargo), report it to the maintainer; don't install it yourself.
+- Don't run `cargo clean` and don't delete `target/` or `~/.cargo/targets/`. The fork removes what is unused on its own, and cleaning only forces a full rebuild.
+- Don't set a build directory: `--target-dir`, `CARGO_TARGET_DIR`, `build.target-dir` and `build.build-dir` are ignored with a warning. Build output lives in `~/.cargo/targets/<name>-<hash>/`, registry dependencies in `~/.cargo/targets/shared-deps/`; built binaries still appear in `./target`.
+- Its size limits and switches (`[build.gc]` in `~/.cargo/config.toml`, `CARGO_SHARED_DEPS`, `CARGO_SHARE_WORKSPACE_UNITS` and the like) are the maintainer's machine settings: leave them at their defaults unless asked.
+- Start a debugger from the workspace root: the fork records `.` as rustc's compile directory.
+- Nothing in the repository may depend on the fork: CI and other machines build with the stock cargo, and every check in this section must pass with either.
+
+---
+
+## 4. Project boundaries
+
+- The application is ExEditor. Use Rust, the native NSH 0.5.1 interface and NSH RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. Do not restore WordCraft dependencies. App-owned offline codecs handle file interchange; Cosmic Text/Krilla handle independent PDF output, and craft-print submits to native queues.
 - `dev_notes/` contains personal notes and backups. Never stage, commit or push it; keep downloaded `dist/` artifacts excluded from Git too.
 - Update root `CHANGELOG.md` with every user-visible feature, fix, configuration change or meaningful documentation change, before committing/pushing. Use the actual America/New_York ISO timestamp with UTC offset, newest first. Record validation actually performed and material limitations; preserve historical entries and distinguish pending source from released builds.
 
-## Release numbering
+---
+
+## 5. Release numbering
 
 - Follow ExcellentBible's scheme: `ExEditor-vYY-MM-DD.N-vSEMVER-platform`. Use the America/New_York release date and Cargo.toml package version; preserve existing semantic versions unless a version bump is requested.
 - GitHub's shared release-name job resolves the date and lifetime release counter once, then passes that identity to every platform. Windows installers end in `-win-x64.exe`, portable ZIPs in `-win-x64-port.zip`; macOS/Linux packages retain their actual platform/architecture suffixes. About, package build-info and installer product metadata must agree.
 - Keep downloaded deliveries under `dist/ExEditor-vYY-MM-DD.N-vSEMVER/` with those filenames. Preserve older deliveries and refuse to overwrite an existing numbered release. Do not rename the installed app or change its stable upgrade identity.
-
 - `N` counts successful installer releases since the first ExEditor release, across all dates; never use GITHUB_RUN_NUMBER or reset it daily. Preserve the numbered `release-history.json` ledger and reconcile successful workflow runs not yet recorded there. Failed/cancelled workflows consume no number. After a successful delivery, append its exact source commit and workflow ID to the ledger in the documentation checkpoint with CI skipped; retain all previous rows. Do not start independent release builds concurrently across branches.
+
+---
+
+## 6. Process
+
+- **Don't commit, push, open pull requests or tag releases unless the maintainer asks.** Then do exactly that.
+- Don't use subagents unless the maintainer asks.
+- Ask before deleting files, rewriting history, or changing anything outside this repository.
+- Keep changes to the task: no unrequested features, options or refactors. Name anything you noticed but didn't do.
+- End each task with a short report: what changed, what was checked, what wasn't, and any risk.
+- Record every finished piece of work in `CHANGELOG.md`, newest first, under a heading with the local date and time.
