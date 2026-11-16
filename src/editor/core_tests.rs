@@ -363,7 +363,11 @@ fn line_number_settings_never_change_document_or_undo_content() {
     let snapshot = editor.snapshot();
     let lines = editor.logical_line_positions();
     assert_eq!(lines.len(), 3);
+    let style = editor.style_revision();
+    let gutter = editor.gutter_revision();
     editor.set_line_numbers(true, "Inter", 16., 72.);
+    assert_eq!(editor.style_revision(), style);
+    assert_ne!(editor.gutter_revision(), gutter);
     assert_eq!(snapshot, editor.snapshot());
     assert!(!editor.is_modified());
     assert!(Arc::ptr_eq(&lines, &editor.logical_line_positions()));

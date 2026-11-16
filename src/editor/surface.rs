@@ -316,11 +316,13 @@ fn build_surface(
 ) -> AnyElement {
     let revision = signal(editor.revision());
     let style_revision = signal(editor.style_revision());
+    let gutter_revision = signal(editor.gutter_revision());
     let tick = editor.clone();
     set_interval(Duration::from_millis(16), move || {
         tick.refresh_completion();
         revision.set(tick.revision());
         style_revision.set(tick.style_revision());
+        gutter_revision.set(tick.gutter_revision());
     });
     let editable = editor.clone();
     let styled = editor.clone();

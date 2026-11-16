@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-16T00:00:17-05:00 - Separate gutter updates from document styling (local correction)
+
+- Windows run43804856065/sourcea329957 passed203Rust regressions,accessory checks and both early light/dark native checks, then compiled the release binary. Its185,677-byte Markdown fixture passed selection/key/keypad/wheel zoom, but the gutter assertion observed the previous editor origin after its fixed650ms wait.
+- Keep line-number settings on a separate view revision so toggles/font/size/width changes do not regenerate all document styles. Extend the existing gutter regression to require unchanged document-style revision and changed gutter revision. The native harness now waits for the exact48px geometry transition, records its observed wait, retains strict width checks and saves failure messages/screenshots in build records.
+- The generated large fixture used about264MB working set in that run; this is an observation, not a benchmark against the user's document. Corrected source awaits all-platform diagnostics/builds and Windows native validation. No local compilation/source tests/installation/app launch. Release18 remains pending.
+
 ## 2026-11-15T23:33:26-05:00 - Capture the owned Windows app above runner terminals (local CI correction)
 
 - Source2a2d11e/run43801214049 passed strict diagnostics on all platforms, both desktop release packages,203 ordinary Windows Rust regressions,five naming regressions and both accessory download checks. The light native check also passed caption geometry/order/colors,gutter toggling,two columns,four-grid,collapse,Settings and zoom.

@@ -180,6 +180,17 @@ function Get-NativeBounds($Element) {
     if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'A native control has no visible bounds.' }
     [pscustomobject]@{ left = $bounds.Left; top = $bounds.Top; width = $bounds.Width; height = $bounds.Height }
 }
+function Wait-NativeEditorLeft([Diagnostics.Process]$Process, [double]$Expected, [double]$Tolerance) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $bounds = Get-NativeBounds (@(Wait-NativeNamedElements $Process 'Document editor' 1)[0])
+        if ([Math]::Abs($bounds.left - $Expected) -le $Tolerance) {
+            return [pscustomobject]@{ bounds = $bounds; observed_wait_ms = $watch.ElapsedMilliseconds }
+        }
+        Start-Sleep -Milliseconds 100
+    } while ($watch.Elapsed.TotalSeconds -lt 12)
+    throw "The document origin remained $($bounds.left); expected $Expected within $Tolerance after layout."
+}
 function Save-RequiredNativeScreenshot([Diagnostics.Process]$Process, [string]$Name) {
     Save-NativeScreenshot $Process $Name
     if (-not (Test-Path -LiteralPath (Join-Path $logs $Name))) { throw "Native regression screenshot was not saved: $Name" }
@@ -313,11 +324,14 @@ try {
     # Display changes must keep native editing mounted and preserve the original window.
     $editorBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
     Send-NativeChord 0x4c $false
-    $gutterBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
+    $gutterLayout = Wait-NativeEditorLeft $primary ($editorBounds.left + 48.0 * $nativeScale) (2.0 * $nativeScale)
+    $gutterBounds = $gutterLayout.bounds
+    $results.line_number_layout_wait_ms = $gutterLayout.observed_wait_ms
     Assert-NativeClose (($gutterBounds.left - $editorBounds.left) / $nativeScale) 48.0 2.0 'The line-number gutter width'
     Save-RequiredNativeScreenshot $primary 'native-line-numbers.png'
     Send-NativeChord 0x4c $false
-    $hiddenBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
+    $hiddenLayout = Wait-NativeEditorLeft $primary $editorBounds.left (2.0 * $nativeScale)
+    $hiddenBounds = $hiddenLayout.bounds
     Assert-NativeClose $hiddenBounds.left $editorBounds.left (2.0 * $nativeScale) 'The hidden gutter editor origin'
     $results.line_number_toggle = $true
 
@@ -361,6 +375,10 @@ try {
     $results.memory_is_observation_only = $true
     Write-Output 'Native Windows startup and same-window Markdown handoff passed.'
     Write-Output ($results | ConvertTo-Json -Depth 5)
+} catch {
+    $results.failure = $_.Exception.Message
+    if ($null -ne $primary -and -not $primary.HasExited) { Save-NativeScreenshot $primary 'native-failure.png' }
+    throw
 } finally {
     $env:EXEDITOR_DATA_DIR = $previousData
     foreach ($owned in @($forwarder, $primary)) {

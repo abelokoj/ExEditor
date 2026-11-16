@@ -92,6 +92,7 @@ pub struct Editor {
     display: RefCell<EditorDisplayState>,
     display_revision: std::rc::Rc<Cell<u64>>,
     completion_revision: Cell<u64>,
+    gutter_revision: Cell<u64>,
     plain_mode: std::rc::Rc<Cell<bool>>,
     page: std::rc::Rc<RefCell<PageSettings>>,
     map_cache: CachedTextMap,
@@ -211,6 +212,7 @@ impl Editor {
             display: RefCell::new(EditorDisplayState::default()),
             display_revision: std::rc::Rc::new(Cell::new(1)),
             completion_revision: Cell::new(0),
+            gutter_revision: Cell::new(0),
             plain_mode: std::rc::Rc::new(Cell::new(false)),
             page: std::rc::Rc::new(RefCell::new(PageSettings::default())),
             map_cache: Arc::new(Mutex::new(None)),
@@ -256,6 +258,7 @@ impl Editor {
             display: RefCell::new(display),
             display_revision: self.display_revision.clone(),
             completion_revision: Cell::new(0),
+            gutter_revision: Cell::new(0),
             plain_mode: self.plain_mode.clone(),
             page: self.page.clone(),
             map_cache: self.map_cache.clone(),
@@ -298,7 +301,8 @@ impl Editor {
         display.line_number_size = size;
         display.line_number_width = width;
         drop(display);
-        self.invalidate_display();
+        self.gutter_revision
+            .set(self.gutter_revision.get().wrapping_add(1));
     }
     pub fn report_error(&self, error: String) {
         self.overlays
@@ -399,6 +403,10 @@ impl Editor {
     }
     pub(super) fn style_revision(&self) -> (u64, u64) {
         (self.document_revision(), self.display_revision.get())
+    }
+    pub(super) fn gutter_revision(&self) -> (u64, u64) {
+        let (document, display) = self.style_revision();
+        (document, display.wrapping_add(self.gutter_revision.get()))
     }
     pub fn text(&self) -> Result<String> {
         Ok(self.map().text.clone())
