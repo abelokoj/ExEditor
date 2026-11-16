@@ -953,19 +953,18 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
                 .into_element();
             }
             let read_model = surface_model.clone();
-            let read: Rc<dyn Fn(usize) -> Option<(String, Rc<Editor>, bool)>> =
-                Rc::new(move |index| {
-                    let current = read_model.borrow();
-                    let pane = current.panes.get(index)?;
-                    let name = current.tab_by_id(&pane.document_id).map(|tab| {
-                        tab.path
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| tab.untitled_name.clone())
-                    })?;
-                    Some((name, pane.editor.clone(), current.active_pane == index))
-                });
+            let read: crate::panes::ReadPane = Rc::new(move |index| {
+                let current = read_model.borrow();
+                let pane = current.panes.get(index)?;
+                let name = current.tab_by_id(&pane.document_id).map(|tab| {
+                    tab.path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| tab.untitled_name.clone())
+                })?;
+                Some((name, pane.editor.clone(), current.active_pane == index))
+            });
             let colors = signal_with(
                 surface_model.borrow().colors(&pane_window),
                 nsh_core::element::SignalEquals::Never,
@@ -1513,23 +1512,21 @@ impl EditorWindow {
         Ok(())
     }
     fn editor(&self) -> Result<Rc<Editor>> {
-        if self.split_layout != crate::panes::Layout::Single {
-            if let Some(pane) = self.panes.get(self.active_pane) {
-                if pane.document_id == self.doc.recovery_id
-                    && self
-                        .doc
-                        .editor
-                        .as_ref()
-                        .is_some_and(|e| e.same_document(&pane.editor))
-                {
-                    return Ok(pane.editor.clone());
-                }
-            }
+        if self.split_layout != crate::panes::Layout::Single
+            && let Some(pane) = self.panes.get(self.active_pane)
+            && pane.document_id == self.doc.recovery_id
+            && self
+                .doc
+                .editor
+                .as_ref()
+                .is_some_and(|canonical| canonical.same_document(&pane.editor))
+        {
+            return Ok(pane.editor.clone());
         }
         self.doc
             .editor
             .clone()
-            .context("The document editor could not be created")
+            .context("The document editor is unavailable")
     }
     fn tab_by_id(&self, id: &str) -> Option<&DocumentTab> {
         std::iter::once(&self.doc)
@@ -1583,10 +1580,9 @@ impl EditorWindow {
             .panes
             .iter()
             .position(|p| p.editor.native_session().is_focused())
+            && (self.active_pane != index || self.panes[index].document_id != self.doc.recovery_id)
         {
-            if self.active_pane != index || self.panes[index].document_id != self.doc.recovery_id {
-                self.focus_pane(index)?;
-            }
+            self.focus_pane(index)?;
         }
         Ok(())
     }
@@ -1666,10 +1662,9 @@ impl EditorWindow {
             if let Some(canonical) = self
                 .tab_by_id(&pane.document_id)
                 .and_then(|tab| tab.editor.as_ref())
+                && !canonical.same_document(&pane.editor)
             {
-                if !canonical.same_document(&pane.editor) {
-                    replacements.push((index, canonical.split_view()?));
-                }
+                replacements.push((index, canonical.split_view()?));
             }
         }
         for (index, editor) in replacements {
@@ -1789,10 +1784,10 @@ impl EditorWindow {
         editor.set_background(paper);
         editor.set_text_override(text)?;
         tab.paper = paper;
-        if let Some(highlighter) = &mut tab.highlighter {
-            if tab.last_text.len() <= syntax::MAX_BYTES {
-                editor.apply_spans(&highlighter.all_spans(&tab.last_text))?;
-            }
+        if let Some(highlighter) = &mut tab.highlighter
+            && tab.last_text.len() <= syntax::MAX_BYTES
+        {
+            editor.apply_spans(&highlighter.all_spans(&tab.last_text))?;
         }
         Ok(())
     }
@@ -4525,6 +4520,8 @@ impl EditorWindow {
     }
 }
 
+type RecoveryBuilder = Box<dyn FnOnce() -> Result<RecoveryDocument> + Send>;
+
 impl DocumentTab {
     fn new(prefs: &Preferences) -> Self {
         let editor = match Editor::new() {
@@ -4677,9 +4674,7 @@ impl DocumentTab {
     fn canonical_editor(&self) -> Option<&Rc<Editor>> {
         self.markdown_source.as_ref().or(self.editor.as_ref())
     }
-    fn snapshot_builder(
-        &mut self,
-    ) -> Result<Option<Box<dyn FnOnce() -> Result<RecoveryDocument> + Send>>> {
+    fn snapshot_builder(&mut self) -> Result<Option<RecoveryBuilder>> {
         if !self.retain_buffer {
             return Ok(None);
         }

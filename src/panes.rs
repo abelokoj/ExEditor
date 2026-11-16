@@ -50,7 +50,7 @@ pub(crate) struct Pane {
     pub editor: Rc<Editor>,
 }
 
-type ReadPane = Rc<dyn Fn(usize) -> Option<(String, Rc<Editor>, bool)>>;
+pub(crate) type ReadPane = Rc<dyn Fn(usize) -> Option<(String, Rc<Editor>, bool)>>;
 
 #[derive(Clone)]
 struct EditorMount(Rc<Editor>);

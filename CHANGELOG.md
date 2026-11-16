@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-15T22:56:10-05:00 - Clear strict diagnostics for new native paths (local correction)
+
+- GitHub run43800325579/source31190d6 cleared the native API type errors and reached strict Rust linting. Remove the obsolete recovery wrapper, scope snapshot/interchange helpers used only by tests accordingly, name repeated callback/cache types, and simplify the reported condition/iterator/RTF-writing forms without relaxing diagnostics or validation.
+- Windows all-target and desktop library diagnostics identified these corrections; source edits and Rust formatting are local, while the corrected diagnostics, new regressions and native/installer checks remain GitHub-only and pending. No local compilation/tests/app execution; release18 is not yet delivered.
+
+## 2026-11-15T22:50:17-05:00 - Keep failed imports atomic and PDF defaults at12pt (local correction)
+
+- Preserve the current page geometry when native import/recovery rejects its document; apply page settings only after a successful load. Add a rejected external-image snapshot regression that compares the entire original snapshot.
+- Match PDF paragraph defaults to the app's12pt default and assert the parsed output style. Existing source inspection/formatting only; these regressions await the GitHub Windows suite. No local tests/build/app launch.
+
 ## 2026-11-15T22:46:10-05:00 - Resolve native builder API diagnostics and lock dependencies (local correction)
 
 - GitHub run43799607837/source4a9ae35 passed dependency resolution and the no-WordCraft guard, then desktop diagnostics exposed a borrowed element handle, resize-style callback arity and an obsolete mutable binding. Correct those integration calls; strict diagnostics remain enabled.

@@ -38,10 +38,10 @@ impl TextMap {
             }
             map.bytes.push(Some(byte + ch.len_utf8()));
             units += ch.len_utf16();
-            if ch == '\n' {
-                if let Ok(pos) = map.position(units) {
-                    lines.push(pos);
-                }
+            if ch == '\n'
+                && let Ok(pos) = map.position(units)
+            {
+                lines.push(pos);
             }
         }
         map.line_starts = Arc::new(lines);

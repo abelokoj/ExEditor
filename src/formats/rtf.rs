@@ -304,18 +304,18 @@ fn metadata(tokens: &[Token], fonts: &mut BTreeMap<i32, String>, colors: &mut Ve
             match destination(group) {
                 Some("fonttbl") => {
                     for token in group {
-                        if let Token::Group(font) = token {
-                            if let Some(index) = control(font, "f") {
-                                let mut text = Vec::new();
-                                plain_tokens(font, &mut text);
-                                let text = encoding_rs::WINDOWS_1252
-                                    .decode(&text)
-                                    .0
-                                    .trim()
-                                    .trim_end_matches(';')
-                                    .to_owned();
-                                fonts.insert(index, text);
-                            }
+                        if let Token::Group(font) = token
+                            && let Some(index) = control(font, "f")
+                        {
+                            let mut text = Vec::new();
+                            plain_tokens(font, &mut text);
+                            let text = encoding_rs::WINDOWS_1252
+                                .decode(&text)
+                                .0
+                                .trim()
+                                .trim_end_matches(';')
+                                .to_owned();
+                            fonts.insert(index, text);
                         }
                     }
                 }
@@ -406,10 +406,10 @@ impl Renderer {
                             }
                         }
                         for child in group {
-                            if let Token::Group(g) = child {
-                                if destination(g) == Some("fldrslt") {
-                                    self.render(g, field_state.clone())?;
-                                }
+                            if let Token::Group(g) = child
+                                && destination(g) == Some("fldrslt")
+                            {
+                                self.render(g, field_state.clone())?;
                             }
                         }
                     } else if dest == "pict" {
@@ -428,8 +428,11 @@ impl Renderer {
                             hex.len() as u64 <= MAX_IMAGE_BYTES * 2,
                             "RTF image exceeds its resource limit."
                         );
-                        ensure!(hex.len() % 2 == 0, "RTF image has an incomplete hex byte.");
-                        for pair in hex.chunks_exact(2) {
+                        ensure!(
+                            hex.len().is_multiple_of(2),
+                            "RTF image has an incomplete hex byte."
+                        );
+                        for pair in hex.as_chunks::<2>().0 {
                             bytes.push(
                                 u8::from_str_radix(std::str::from_utf8(pair)?, 16)
                                     .context("Invalid RTF image hex")?,
@@ -827,19 +830,18 @@ impl Writer {
                                 .trim_end_matches("pt")
                                 .trim_end_matches("px")
                                 .parse::<f32>()
+                                && value.is_finite()
                             {
-                                if value.is_finite() {
-                                    let word = if key.trim() == "margin-left" {
-                                        "li"
-                                    } else {
-                                        "fi"
-                                    };
-                                    let _ = write!(
-                                        out,
-                                        "\\{word}{}",
-                                        (value * 20.).round().clamp(-28800., 28800.) as i32
-                                    );
-                                }
+                                let word = if key.trim() == "margin-left" {
+                                    "li"
+                                } else {
+                                    "fi"
+                                };
+                                let _ = write!(
+                                    out,
+                                    "\\{word}{}",
+                                    (value * 20.).round().clamp(-28800., 28800.) as i32
+                                );
                             }
                         }
                         _ => {}
@@ -918,9 +920,9 @@ pub(super) fn write(document: &RichDocument) -> Result<Vec<u8>> {
     }
     out.push('}');
     let p = &document.page;
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}\n",
+        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}",
         p.width_twips, p.height_twips, p.margin_left, p.margin_right, p.margin_top, p.margin_bottom
     );
     writer.children(parsed.root_element(), false, &mut out)?;

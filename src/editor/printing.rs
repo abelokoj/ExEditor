@@ -86,6 +86,7 @@ pub(super) fn validate_page_settings(page: &PageSettings) -> Result<()> {
 ///
 /// # Errors
 /// Invalid dimensions or margins leave the document unchanged.
+#[cfg(test)]
 pub fn apply_page_settings(doc: &mut RichDocument, page: &PageSettings) -> Result<()> {
     validate_page_settings(page)?;
     doc.page = page.clone();

@@ -209,10 +209,10 @@ fn word_properties(node: Node<'_, '_>) -> Style {
                 }
             }
             "sz" => {
-                if let Ok(size) = value.parse::<f32>() {
-                    if (2.0..=3276.0).contains(&size) {
-                        style.insert("font-size".into(), format!("{}pt", size / 2.));
-                    }
+                if let Ok(size) = value.parse::<f32>()
+                    && (2.0..=3276.0).contains(&size)
+                {
+                    style.insert("font-size".into(), format!("{}pt", size / 2.));
                 }
             }
             "color" if value.len() == 6 && value.bytes().all(|b| b.is_ascii_hexdigit()) => {
@@ -421,13 +421,11 @@ impl WordReader<'_> {
                     let id = attr(blip, "embed").or_else(|| attr(blip, "id"));
                     if let Some(relation) =
                         id.and_then(|id| self.rels.get(id)).filter(|r| !r.external)
-                    {
-                        if let Some(uri) = safe_package_path("word", &relation.target)
+                        && let Some(uri) = safe_package_path("word", &relation.target)
                             .and_then(|name| self.files.get(&name))
                             .and_then(|bytes| image_uri(bytes))
-                        {
-                            let _ = write!(out, "<img src=\"{uri}\">");
-                        }
+                    {
+                        let _ = write!(out, "<img src=\"{uri}\">");
                     }
                 }
             }
@@ -499,8 +497,7 @@ pub(super) fn read_docx(bytes: &[u8]) -> Result<RichDocument> {
     let mut page = PageSettings::default();
     if let Some(section) = doc
         .descendants()
-        .filter(|n| n.has_tag_name((WORD, "sectPr")))
-        .last()
+        .rfind(|n| n.has_tag_name((WORD, "sectPr")))
     {
         if let Some(size) = child(section, "pgSz") {
             page.width_twips = number(size, "w").unwrap_or(page.width_twips);
@@ -662,10 +659,9 @@ fn odt_render(
                 .attribute((XLINK, "href"))
                 .and_then(|name| safe_package_path("", name))
                 .and_then(|name| files.get(&name))
+                && let Some(uri) = image_uri(bytes)
             {
-                if let Some(uri) = image_uri(bytes) {
-                    let _ = write!(out, "<img src=\"{uri}\">");
-                }
+                let _ = write!(out, "<img src=\"{uri}\">");
             }
         }
         "line-break" => out.push_str("<br>"),
@@ -1419,8 +1415,10 @@ mod tests {
             .write_to(&mut image, image::ImageFormat::Png)
             .unwrap();
         let uri = image_uri(&image.into_inner()).unwrap();
-        let mut page = PageSettings::default();
-        page.margin_left = 1440;
+        let page = PageSettings {
+            margin_left: 1440,
+            ..Default::default()
+        };
         let doc = RichDocument {
             html: format!(
                 "<h2>Heading</h2><p><b>bold café 😀</b> <a href='https://example.com'>link</a><img src='{uri}'></p><table><tr><td>A</td><td>B</td></tr></table>"

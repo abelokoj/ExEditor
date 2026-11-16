@@ -380,3 +380,19 @@ fn plain_output_preserves_spaces_tabs_and_chosen_font_size() {
     assert!(snapshot.html.contains("font-size:14pt"));
     assert!(snapshot.html.contains("  indented\tvalue"));
 }
+
+#[test]
+fn rejected_recovery_preserves_document_and_page_geometry() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("keep this document").unwrap();
+    let before = editor.snapshot();
+    let mut page = editor.page_settings();
+    page.width_twips += 720;
+    let bad = serde_json::json!({"doc":{"type":"doc","content":[{"type":"image","attrs":{"src":"https://example.org/never-fetch.png"}}]},"page":page});
+    assert!(
+        editor
+            .set_snapshot(&serde_json::to_vec(&bad).unwrap())
+            .is_err()
+    );
+    assert_eq!(before, editor.snapshot());
+}

@@ -142,15 +142,6 @@ fn restore_buffers_in(folder: &Path) -> Result<RestoreResult> {
     Ok(result)
 }
 
-/// Each tab permits one outstanding snapshot. Its lease lives until the write
-/// completes; callers drain this receiver before saving, discarding or closing.
-pub fn queue_recovery(
-    snapshot: RecoveryDocument,
-    lease: std::sync::Arc<BufferLease>,
-) -> std::sync::mpsc::Receiver<Result<()>> {
-    queue_recovery_with(move || Ok(snapshot), lease)
-}
-
 /// Builds and writes one recovery snapshot on the existing background worker.
 /// The exclusive lease covers both operations, including a failed builder; callers
 /// keep the same one-outstanding-job limit and drain the completion before closing.

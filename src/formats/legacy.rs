@@ -96,7 +96,7 @@ fn piece_text(word: &[u8], table: &[u8]) -> Result<String> {
     let length = u32_at(clx, offset + 1)? as usize;
     let plc = range(clx, offset + 5, length)?;
     ensure!(
-        length >= 4 && (length - 4) % 12 == 0,
+        length >= 4 && (length - 4).is_multiple_of(12),
         "Invalid legacy Word piece-table size."
     );
     let pieces = (length - 4) / 12;
@@ -133,8 +133,10 @@ fn piece_text(word: &[u8], table: &[u8]) -> Result<String> {
             )?;
             units.extend(
                 bytes
-                    .chunks_exact(2)
-                    .map(|b| u16::from_le_bytes([b[0], b[1]])),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| u16::from_le_bytes(*b)),
             );
         }
     }

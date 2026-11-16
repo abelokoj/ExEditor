@@ -106,6 +106,7 @@ pub(crate) fn markdown_document(source: &str, directory: &Path) -> Result<RichDo
 }
 
 /// Clipboard markup cannot read neighbouring files or download remote media.
+#[cfg(test)]
 pub(crate) fn clipboard_document(source: &str) -> Result<RichDocument> {
     validate_clipboard_html(source)?;
     let html = sanitize_html(source, None, crate::clipboard_html::MAX_BYTES)?;
@@ -257,29 +258,29 @@ fn sanitize_children(
         if tag == "img" {
             let src = element.value().attr("src").unwrap_or("");
             let bytes = image_data(src).or_else(|| directory.and_then(|dir| local_image(dir, src)));
-            if let Some(bytes) = bytes {
-                if let Some(uri) = image_uri(&bytes) {
-                    *image_bytes += bytes.len() as u64;
-                    ensure!(
-                        *image_bytes <= MAX_HTML_BYTES as u64,
-                        "Embedded images exceed the document resource limit."
-                    );
-                    out.push_str("<img src=\"");
-                    out.push_str(&uri);
-                    out.push('"');
-                    for attr in ["alt", "title", "width", "height"] {
-                        if let Some(value) = element.value().attr(attr) {
-                            if matches!(attr, "width" | "height")
-                                && !value.parse::<u32>().is_ok_and(|n| (1..=32768).contains(&n))
-                            {
-                                continue;
-                            }
-                            attribute(out, attr, value);
+            if let Some(bytes) = bytes
+                && let Some(uri) = image_uri(&bytes)
+            {
+                *image_bytes += bytes.len() as u64;
+                ensure!(
+                    *image_bytes <= MAX_HTML_BYTES as u64,
+                    "Embedded images exceed the document resource limit."
+                );
+                out.push_str("<img src=\"");
+                out.push_str(&uri);
+                out.push('"');
+                for attr in ["alt", "title", "width", "height"] {
+                    if let Some(value) = element.value().attr(attr) {
+                        if matches!(attr, "width" | "height")
+                            && !value.parse::<u32>().is_ok_and(|n| (1..=32768).contains(&n))
+                        {
+                            continue;
                         }
+                        attribute(out, attr, value);
                     }
-                    out.push('>');
-                    continue;
                 }
+                out.push('>');
+                continue;
             }
             if let Some(alt) = element.value().attr("alt") {
                 out.push_str(&escape(alt));
@@ -307,14 +308,13 @@ fn sanitize_children(
                 attribute(out, attr, value);
             }
         }
-        if tag == "a" {
-            if let Some(href) = element
+        if tag == "a"
+            && let Some(href) = element
                 .value()
                 .attr("href")
                 .filter(|href| is_safe_href(href))
-            {
-                attribute(out, "href", href);
-            }
+        {
+            attribute(out, "href", href);
         }
         out.push('>');
         if !matches!(tag, "br" | "hr") {

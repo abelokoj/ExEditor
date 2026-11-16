@@ -29,7 +29,7 @@ impl Default for Style {
     fn default() -> Self {
         Self {
             family: "Inter".into(),
-            size: 11.,
+            size: 12.,
             bold: false,
             italic: false,
             underline: false,
@@ -471,6 +471,7 @@ mod tests {
             spans.iter().map(|s| s.text.as_str()).collect::<String>(),
             "Hello café Ελληνικά 😀\nnext"
         );
+        assert_eq!(spans[0].style.size, 12.);
         assert!(spans[1].style.bold);
         assert_eq!(spans[1].style.color, [255, 0, 0, 255]);
         assert!(matches!(&blocks[1], Block::Paragraph { spans, .. } if spans.is_empty()));

@@ -79,6 +79,8 @@ fn font_family(value: &str) -> &str {
     value
 }
 
+type CachedTextMap = Arc<Mutex<Option<(Node, Arc<core_positions::TextMap>)>>>;
+
 /// A stable native session survives tab switches and retains its selection and undo history.
 pub struct Editor {
     session: EditorSession,
@@ -92,7 +94,7 @@ pub struct Editor {
     completion_revision: Cell<u64>,
     plain_mode: std::rc::Rc<Cell<bool>>,
     page: std::rc::Rc<RefCell<PageSettings>>,
-    map_cache: Arc<Mutex<Option<(Node, Arc<core_positions::TextMap>)>>>,
+    map_cache: CachedTextMap,
     format_cache: RefCell<Option<((u64, u64), FormatState)>>,
     plain_style: std::rc::Rc<RefCell<FormatState>>,
     pasted: Cell<bool>,
@@ -315,6 +317,7 @@ impl Editor {
         self.session.clone()
     }
     /// JSON of the native document, never a WordCraft recovery payload.
+    #[cfg(test)]
     pub fn snapshot(&self) -> Option<Vec<u8>> {
         serde_json::to_vec(
             &json!({"doc":self.session.state().doc().to_json(),"page":self.page_settings()}),
@@ -337,12 +340,15 @@ impl Editor {
             .get("page")
             .map(|value| serde_json::from_value::<PageSettings>(value.clone()))
             .transpose()?;
-        if let Some(page) = page {
-            printing::validate_page_settings(&page)?;
-            *self.page.borrow_mut() = page;
+        if let Some(page) = &page {
+            printing::validate_page_settings(page)?;
         }
         doc.check()?;
-        self.load(doc)
+        self.load(doc)?;
+        if let Some(page) = page {
+            *self.page.borrow_mut() = page;
+        }
+        Ok(())
     }
     /// Converts only at an import/export or printing boundary.
     pub fn document_snapshot(&self) -> Result<Document> {
@@ -355,6 +361,7 @@ impl Editor {
     pub(crate) fn output_plain_style(&self) -> Option<FormatState> {
         self.is_plain().then(|| self.plain_style.borrow().clone())
     }
+    #[cfg(test)]
     pub fn html(&self) -> Result<String> {
         Ok(doc_to_html(self.session.state().doc()))
     }
@@ -376,12 +383,12 @@ impl Editor {
     fn map(&self) -> Arc<core_positions::TextMap> {
         let doc = self.session.state().doc().clone();
         let mut cache = self.map_cache.lock().expect("text map cache poisoned");
-        if let Some((cached, map)) = &*cache {
-            if cached.ptr_eq(&doc) || cached == &doc {
-                let map = map.clone();
-                *cache = Some((doc, map.clone()));
-                return map;
-            }
+        if let Some((cached, map)) = &*cache
+            && (cached.ptr_eq(&doc) || cached == &doc)
+        {
+            let map = map.clone();
+            *cache = Some((doc, map.clone()));
+            return map;
         }
         let map = Arc::new(core_positions::TextMap::new(&doc));
         *cache = Some((doc, map.clone()));
@@ -471,10 +478,11 @@ impl Editor {
     }
     pub fn set_document(&self, document: Document) -> Result<()> {
         printing::validate_page_settings(&document.page)?;
-        *self.page.borrow_mut() = document.page;
         let doc = DomParser::from_schema(self.manager.borrow().schema())
             .parse(&document.html, &ParseOptions::default());
-        self.load(doc)
+        self.load(doc)?;
+        *self.page.borrow_mut() = document.page;
+        Ok(())
     }
     pub fn set_text(&self, text: &str) -> Result<()> {
         validate_text(text)?;
@@ -1010,10 +1018,10 @@ impl Editor {
     }
     pub fn formatting(&self) -> FormatState {
         let key = (self.session.state().revision(), self.display_revision.get());
-        if let Some((cached, value)) = &*self.format_cache.borrow() {
-            if *cached == key {
-                return value.clone();
-            }
+        if let Some((cached, value)) = &*self.format_cache.borrow()
+            && *cached == key
+        {
+            return value.clone();
         }
         let value = self.read_formatting();
         *self.format_cache.borrow_mut() = Some((key, value.clone()));
