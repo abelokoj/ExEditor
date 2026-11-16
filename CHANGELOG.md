@@ -5,8 +5,6 @@
 - **Memory and Performance Optimization (`src/editor/mod.rs`):**
   - Replaced full-tree JSON string serialization (`doc.to_json().to_string().len() <= MAX_DOCUMENT_BYTES`) with an $O(1)$ node token bound (`doc.node_size() <= MAX_DOCUMENT_BYTES`) in `Editor::load`, eliminating huge intermediate memory allocations during document loads.
   - Lifted search needle case-folding outside the character-scan loop in `Editor::matches`, eliminating per-iteration lowercase String reallocations during find/replace.
-- **Reactive Signal Thrashing Elimination (`src/editor/surface.rs`):**
-  - Added untracked value equality guards (`get_untracked()`) before `.set()` calls on `revision`, `style_revision`, and `gutter_revision` inside the 16 ms polling timer, preventing redundant signal broadcasts and idle re-render cascades.
 - **Runtime Panic Guards (`src/app.rs`):**
   - Replaced `.expect("live window id")` with a safe conditional early return in secondary window rendering, eliminating potential panics during window closing races.
   - Replaced `.expect("a live document surface")` with safe `Option` handling for single pane layouts during reactive lifecycle transitions.
