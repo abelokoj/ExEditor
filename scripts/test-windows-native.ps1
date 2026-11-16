@@ -24,7 +24,7 @@ if (-not $testRoot.StartsWith($runnerTemp + '\', [StringComparison]::OrdinalIgno
 New-Item -ItemType Directory -Path $testRoot, $logs -Force | Out-Null
 $data = Join-Path $testRoot 'Isolated app data'
 New-Item -ItemType Directory -Path $data | Out-Null
-@{ spellcheck = $false; autocomplete = $false; appearance = $Appearance } | ConvertTo-Json |
+@{ spellcheck = $false; autocomplete = $false; appearance = $Appearance; window_controls = 'Right'; interface_scale = 100; show_line_numbers = $false; line_number_width = 48.0 } | ConvertTo-Json |
     Set-Content -LiteralPath (Join-Path $data 'preferences.json') -Encoding utf8NoBOM
 $markdown = Join-Path $testRoot 'Long Markdown café.md'
 $paragraphs = foreach ($section in 1..$Sections) {
@@ -72,6 +72,9 @@ public static class ExEditorStartupCapture {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string title);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int metric);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+    [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window, ref Point point);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
     [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
@@ -146,6 +149,91 @@ public static class ExEditorStartupCapture {
         Write-Warning "Native screenshot capture unavailable: $_"
     }
 }
+function Get-NativeNamedElements([Diagnostics.Process]$Process, [string]$Name) {
+    $root = [Windows.Automation.AutomationElement]::FromHandle($Process.MainWindowHandle)
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $Name)
+    foreach ($element in $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+        if (-not $element.Current.IsOffscreen) { $element }
+    }
+}
+function Wait-NativeNamedElements([Diagnostics.Process]$Process, [string]$Name, [int]$Count) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    do {
+        $Process.Refresh()
+        if ($Process.HasExited) { throw "The native application exited while waiting for $Name." }
+        $elements = @(Get-NativeNamedElements $Process $Name)
+        if ($elements.Count -eq $Count) { return $elements }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Expected $Count visible native elements named '$Name'; found $($elements.Count)."
+}
+function Get-NativeBounds($Element) {
+    $bounds = $Element.Current.BoundingRectangle
+    if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'A native control has no visible bounds.' }
+    [pscustomobject]@{ left = $bounds.Left; top = $bounds.Top; width = $bounds.Width; height = $bounds.Height }
+}
+function Save-RequiredNativeScreenshot([Diagnostics.Process]$Process, [string]$Name) {
+    Save-NativeScreenshot $Process $Name
+    if (-not (Test-Path -LiteralPath (Join-Path $logs $Name))) { throw "Native regression screenshot was not saved: $Name" }
+}
+function Send-NativeChord([byte]$Key, [bool]$Control) {
+    [ExEditorStartupCapture]::ZoomKey(0x4b)
+    if ($Control) { [ExEditorStartupCapture]::ZoomKey($Key) }
+    else { $shell.SendKeys(([string][char]$Key).ToLowerInvariant()) }
+    Start-Sleep -Milliseconds 650
+}
+function Assert-NativeClose([double]$Actual, [double]$Expected, [double]$Tolerance, [string]$Description) {
+    if ([Math]::Abs($Actual - $Expected) -gt $Tolerance) { throw "$Description was $Actual; expected $Expected within $Tolerance." }
+}
+function Get-NativePaneHeaders([Diagnostics.Process]$Process, [int]$Count) {
+    $headers = for ($index = 1; $index -le $Count; $index++) {
+        $element = @(Wait-NativeNamedElements $Process "Choose document for pane $index" 1)
+        Get-NativeBounds $element[0]
+    }
+    for ($index = $Count + 1; $index -le 4; $index++) {
+        Wait-NativeNamedElements $Process "Choose document for pane $index" 0 | Out-Null
+    }
+    $headers
+}
+function Assert-NativeCaption([Diagnostics.Process]$Process, [double]$Scale) {
+    $client = [ExEditorStartupCapture+Point]::new()
+    if (-not [ExEditorStartupCapture]::ClientToScreen($Process.MainWindowHandle, [ref]$client)) { throw 'The native client origin is unavailable.' }
+    $window = [ExEditorStartupCapture+Rect]::new()
+    [ExEditorStartupCapture]::GetWindowRect($Process.MainWindowHandle, [ref]$window) | Out-Null
+    $controls = foreach ($name in @('Minimize', 'Zoom', 'Close')) {
+        $element = @(Wait-NativeNamedElements $Process $name 1)
+        Get-NativeBounds $element[0]
+    }
+    $file = @(Wait-NativeNamedElements $Process 'File' 1)
+    $menu = Get-NativeBounds $file[0]
+    # The22px menu control is centered in its24px row immediately below the31px caption.
+    $captionHeight = ($menu.top - $client.Y) / $Scale - 1.0
+    Assert-NativeClose $captionHeight 31.0 1.5 'The logical title-row height'
+    foreach ($control in $controls) {
+        Assert-NativeClose ($control.width / $Scale) 15.6 1.5 'A traffic-light width'
+        Assert-NativeClose ($control.height / $Scale) 15.6 1.5 'A traffic-light height'
+        Assert-NativeClose (($control.top + $control.height / 2 - $client.Y) / $Scale) 15.5 1.5 'A traffic-light vertical center'
+    }
+    if (-not ($controls[0].left -lt $controls[1].left -and $controls[1].left -lt $controls[2].left)) {
+        throw 'Right-side native controls are not ordered minimize, maximize, close.'
+    }
+    $rightGap = ($window.Right - ($controls[2].left + $controls[2].width)) / $Scale
+    if ($controls[0].left -lt ($window.Left + $window.Right) / 2 -or $rightGap -lt 0 -or $rightGap -gt 32) {
+        throw 'The red Close control is not at the far-right end of the title row.'
+    }
+    $image = [Drawing.Bitmap]::new((Join-Path $logs 'native-startup-initial.png'))
+    try {
+        $colors = @(@(255, 189, 46), @(40, 200, 64), @(255, 95, 87))
+        for ($index = 0; $index -lt 3; $index++) {
+            $control = $controls[$index]
+            $pixel = $image.GetPixel([int]($control.left + $control.width / 2 - $window.Left), [int]($control.top + $control.height / 2 - $window.Top))
+            Assert-NativeClose $pixel.R $colors[$index][0] 16 'A traffic-light red channel'
+            Assert-NativeClose $pixel.G $colors[$index][1] 16 'A traffic-light green channel'
+            Assert-NativeClose $pixel.B $colors[$index][2] 16 'A traffic-light blue channel'
+        }
+    } finally { $image.Dispose() }
+    [ordered]@{ order = @('yellow minimize', 'green maximize', 'red close'); title_height_logical = $captionHeight; circles = @($controls); right_gap_logical = $rightGap }
+}
 try {
     $env:EXEDITOR_DATA_DIR = $data
     $env:EXEDITOR_NATIVE_DIAGNOSTICS = '1' 
@@ -157,6 +245,10 @@ try {
     $initialWindow = $primary.MainWindowHandle
     $results.initial = Measure-NativeMemory $primary
     Save-NativeScreenshot $primary 'native-startup-initial.png'
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $nativeScale = [ExEditorStartupCapture]::GetDpiForWindow($initialWindow) / 96.0
+    if ($nativeScale -le 0) { throw 'The native window DPI is unavailable.' }
+    $results.right_caption = Assert-NativeCaption $primary $nativeScale
     $results.rounded_window = [ExEditorStartupCapture]::Rounded($initialWindow)
     $results.window_details = [ExEditorStartupCapture]::WindowDetails($initialWindow)
     if (-not $results.rounded_window) { throw 'The native document window has no rounded corners.' }
@@ -210,6 +302,40 @@ try {
     if ((Get-FileHash (Join-Path $logs 'native-zoom-reset.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-wheel-zoom.png')).Hash) {
         throw 'Ctrl+wheel did not visibly zoom the selected document.'
     }
+    # Display changes must keep native editing mounted and preserve the original window.
+    $editorBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
+    Send-NativeChord 0x4c $false
+    $gutterBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
+    Assert-NativeClose (($gutterBounds.left - $editorBounds.left) / $nativeScale) 48.0 2.0 'The line-number gutter width'
+    Save-RequiredNativeScreenshot $primary 'native-line-numbers.png'
+    Send-NativeChord 0x4c $false
+    $hiddenBounds = Get-NativeBounds (@(Wait-NativeNamedElements $primary 'Document editor' 1)[0])
+    Assert-NativeClose $hiddenBounds.left $editorBounds.left (2.0 * $nativeScale) 'The hidden gutter editor origin'
+    $results.line_number_toggle = $true
+
+    [ExEditorStartupCapture]::ZoomKey(0xdc)
+    $columns = @(Get-NativePaneHeaders $primary 2)
+    if (-not ($columns[0].left -lt $columns[1].left)) { throw 'Two-column split did not arrange panes horizontally.' }
+    Assert-NativeClose $columns[0].top $columns[1].top (2.0 * $nativeScale) 'Two-column header alignment'
+    Wait-NativeNamedElements $primary 'Document editor' 2 | Out-Null
+    Save-RequiredNativeScreenshot $primary 'native-split-columns.png'
+    Send-NativeChord 0x47 $true
+    $grid = @(Get-NativePaneHeaders $primary 4)
+    if (-not ($grid[0].left -lt $grid[1].left -and $grid[0].top -lt $grid[2].top -and $grid[2].left -lt $grid[3].left)) {
+        throw 'The four-pane layout is not arranged as a two-by-two grid.'
+    }
+    Assert-NativeClose $grid[0].top $grid[1].top (2.0 * $nativeScale) 'Top grid-row alignment'
+    Assert-NativeClose $grid[2].top $grid[3].top (2.0 * $nativeScale) 'Bottom grid-row alignment'
+    Wait-NativeNamedElements $primary 'Document editor' 4 | Out-Null
+    Save-RequiredNativeScreenshot $primary 'native-split-grid.png'
+    Send-NativeChord 0x31 $true
+    Get-NativePaneHeaders $primary 0 | Out-Null
+    Wait-NativeNamedElements $primary 'Document editor' 1 | Out-Null
+    Save-RequiredNativeScreenshot $primary 'native-single-pane.png'
+    $primary.Refresh()
+    if ($primary.MainWindowHandle -ne $initialWindow) { throw 'Changing split views replaced the existing window.' }
+    $results.split_views = @('same document: two columns', 'open tabs: four-pane grid', 'return to single pane')
+    $results.split_visual_evidence = @('native-line-numbers.png', 'native-split-columns.png', 'native-split-grid.png', 'native-single-pane.png')
     $shell.SendKeys('^,')
     Start-Sleep -Milliseconds 1000
     $settingsWindow = [ExEditorStartupCapture]::FindWindow('NshWindow', 'ExEditor Settings')

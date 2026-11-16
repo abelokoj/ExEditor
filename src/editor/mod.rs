@@ -1,4 +1,5 @@
 //! Native NSH editing sessions. Public ranges count UTF-16 code units.
+use crate::formats::RichDocument as Document;
 use anyhow::{Context as _, Result, bail, ensure};
 use nsh_base::rich_editor::{
     commands::{BoxCommand, tiptap},
@@ -21,12 +22,13 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-use wordcraft_doc::Document;
 
 pub mod clipboard;
 mod core_positions;
+mod gutter;
 mod overlays;
 pub mod printing;
+mod session_group;
 pub mod surface;
 mod types;
 pub use types::{
@@ -80,17 +82,43 @@ fn font_family(value: &str) -> &str {
 /// A stable native session survives tab switches and retains its selection and undo history.
 pub struct Editor {
     session: EditorSession,
-    manager: RefCell<ExtensionManager>,
+    manager: std::rc::Rc<RefCell<ExtensionManager>>,
+    group: Arc<session_group::SessionGroup>,
+    _member: Arc<session_group::Member>,
     changes: Arc<Changes>,
     overlays: Arc<Mutex<overlays::Overlays>>,
     display: RefCell<EditorDisplayState>,
-    display_revision: Cell<u64>,
-    page: RefCell<PageSettings>,
-    plain_style: RefCell<FormatState>,
+    display_revision: std::rc::Rc<Cell<u64>>,
+    completion_revision: Cell<u64>,
+    plain_mode: std::rc::Rc<Cell<bool>>,
+    page: std::rc::Rc<RefCell<PageSettings>>,
+    map_cache: Arc<Mutex<Option<(Node, Arc<core_positions::TextMap>)>>>,
+    format_cache: RefCell<Option<((u64, u64), FormatState)>>,
+    plain_style: std::rc::Rc<RefCell<FormatState>>,
     pasted: Cell<bool>,
     completion: RefCell<Option<CompletionPopup>>,
     completion_seen: Cell<Option<(u64, usize, usize)>>,
 }
+pub(crate) fn snapshot_document(
+    doc: &Node,
+    page: PageSettings,
+    plain: Option<FormatState>,
+) -> Result<Document> {
+    let html = if let Some(style) = plain {
+        let text = PlainTextFormat::default().serialize(doc)?;
+        let content = Document::from_text(&text).html;
+        format!(
+            "<div style=\"font-family:{};font-size:{}pt;color:#{:06x}\">{content}</div>",
+            crate::formats::escape(&style.font),
+            style.size,
+            style.foreground & 0xffffff
+        )
+    } else {
+        doc_to_html(doc)
+    };
+    Ok(Document { html, page })
+}
+
 fn manager(plain: bool, auto_links: bool) -> Result<ExtensionManager> {
     let extensions = if plain {
         vec![
@@ -150,15 +178,14 @@ impl Editor {
     pub fn new() -> Result<Self> {
         let manager = manager(false, true)?;
         let overlays = Arc::new(Mutex::new(overlays::Overlays::default()));
-        let state = EditorState::create(
-            EditorStateConfig::new(manager.schema().clone()).plugins(plugins(
-                &manager,
-                overlays.clone(),
-                false,
-                true,
-            )),
-        )?;
+        let group = session_group::SessionGroup::new(overlays.clone());
+        let state =
+            EditorState::create(
+                EditorStateConfig::new(manager.schema().clone())
+                    .plugins(group.wrap_plugins(plugins(&manager, overlays.clone(), false, true))),
+            )?;
         let session = EditorSession::new(state, NodeViews::new());
+        let member = group.join(session.clone());
         let changes = Arc::new(Changes::default());
         let updated = changes.clone();
         session.on(
@@ -174,23 +201,102 @@ impl Editor {
         );
         Ok(Self {
             session,
-            manager: RefCell::new(manager),
+            manager: std::rc::Rc::new(RefCell::new(manager)),
+            group,
+            _member: member,
             changes,
             overlays,
             display: RefCell::new(EditorDisplayState::default()),
-            display_revision: Cell::new(1),
-            page: RefCell::new(PageSettings::default()),
-            plain_style: RefCell::new(FormatState {
+            display_revision: std::rc::Rc::new(Cell::new(1)),
+            completion_revision: Cell::new(0),
+            plain_mode: std::rc::Rc::new(Cell::new(false)),
+            page: std::rc::Rc::new(RefCell::new(PageSettings::default())),
+            map_cache: Arc::new(Mutex::new(None)),
+            format_cache: RefCell::new(None),
+            plain_style: std::rc::Rc::new(RefCell::new(FormatState {
                 font: crate::fonts::default_plain_font().into(),
                 size: 12.,
                 foreground: 0,
                 background: 0xffffff,
                 ..Default::default()
-            }),
+            })),
             pasted: Cell::new(false),
             completion: RefCell::new(None),
             completion_seen: Cell::new(None),
         })
+    }
+    /// Another native viewport over the same document; selection and scrolling stay local.
+    pub fn split_view(&self) -> Result<std::rc::Rc<Self>> {
+        let state = self.session.state();
+        let session = EditorSession::new(state, NodeViews::new());
+        let member = self.group.join(session.clone());
+        let changes = self.changes.clone();
+        session.on(
+            SessionEventKind::Update,
+            Arc::new(move |_| {
+                if !changes.loading.load(Ordering::Relaxed) {
+                    changes.modified.store(true, Ordering::Relaxed);
+                    changes.buffered.store(true, Ordering::Relaxed);
+                    changes.text.store(true, Ordering::Relaxed);
+                    changes.revision.fetch_add(1, Ordering::Relaxed);
+                }
+            }),
+        );
+        let mut display = self.display.borrow().clone();
+        display.visible = true;
+        Ok(std::rc::Rc::new(Self {
+            session,
+            manager: self.manager.clone(),
+            group: self.group.clone(),
+            _member: member,
+            changes: self.changes.clone(),
+            overlays: self.overlays.clone(),
+            display: RefCell::new(display),
+            display_revision: self.display_revision.clone(),
+            completion_revision: Cell::new(0),
+            plain_mode: self.plain_mode.clone(),
+            page: self.page.clone(),
+            map_cache: self.map_cache.clone(),
+            format_cache: RefCell::new(None),
+            plain_style: self.plain_style.clone(),
+            pasted: Cell::new(false),
+            completion: RefCell::new(None),
+            completion_seen: Cell::new(None),
+        }))
+    }
+    pub fn same_document(&self, other: &Editor) -> bool {
+        Arc::ptr_eq(&self.group, &other.group)
+    }
+    pub fn copy_selection_from(&self, other: &Editor) -> Result<()> {
+        let state = self.session.state();
+        let other = other.session.state();
+        ensure!(
+            state.doc() == other.doc(),
+            "Split views must show the same document"
+        );
+        let mut transaction = state.tr();
+        transaction.set_selection(other.selection().map(
+            state.doc(),
+            &nsh_base::rich_editor::transform::Mapping::new(),
+        ));
+        self.session.dispatch(transaction)?;
+        Ok(())
+    }
+    pub fn set_line_numbers(&self, show: bool, font: &str, size: f32, width: f32) {
+        let mut display = self.display.borrow_mut();
+        if display.show_line_numbers == show
+            && display.line_number_font == font
+            && display.line_number_size == size
+            && display.line_number_width == width
+        {
+            return;
+        }
+        display.show_line_numbers = show;
+        display.line_number_font = font.into();
+        display.line_number_size = size;
+        display.line_number_width = width;
+        drop(display);
+        self.invalidate_display();
     }
     pub fn report_error(&self, error: String) {
         self.overlays
@@ -240,10 +346,14 @@ impl Editor {
     }
     /// Converts only at an import/export or printing boundary.
     pub fn document_snapshot(&self) -> Result<Document> {
-        let mut doc = wordcraft_formats::html::import_page(&self.html()?, &|_| None);
-        doc.ensure_nonempty();
-        printing::apply_page_settings(&mut doc, &self.page.borrow())?;
-        Ok(doc)
+        snapshot_document(
+            self.session.state().doc(),
+            self.page_settings(),
+            self.output_plain_style(),
+        )
+    }
+    pub(crate) fn output_plain_style(&self) -> Option<FormatState> {
+        self.is_plain().then(|| self.plain_style.borrow().clone())
     }
     pub fn html(&self) -> Result<String> {
         Ok(doc_to_html(self.session.state().doc()))
@@ -257,19 +367,37 @@ impl Editor {
             .revision()
             .wrapping_mul(1_000_003)
             .wrapping_add(self.display_revision.get())
+            .wrapping_add(self.completion_revision.get())
     }
     fn invalidate_display(&self) {
         self.display_revision
             .set(self.display_revision.get().wrapping_add(1));
     }
-    fn map(&self) -> core_positions::TextMap {
-        core_positions::TextMap::new(self.session.state().doc())
+    fn map(&self) -> Arc<core_positions::TextMap> {
+        let doc = self.session.state().doc().clone();
+        let mut cache = self.map_cache.lock().expect("text map cache poisoned");
+        if let Some((cached, map)) = &*cache {
+            if cached.ptr_eq(&doc) || cached == &doc {
+                let map = map.clone();
+                *cache = Some((doc, map.clone()));
+                return map;
+            }
+        }
+        let map = Arc::new(core_positions::TextMap::new(&doc));
+        *cache = Some((doc, map.clone()));
+        map
+    }
+    pub(super) fn logical_line_positions(&self) -> Arc<Vec<usize>> {
+        self.map().line_starts.clone()
+    }
+    pub(super) fn style_revision(&self) -> (u64, u64) {
+        (self.document_revision(), self.display_revision.get())
     }
     pub fn text(&self) -> Result<String> {
-        Ok(self.map().text)
+        Ok(self.map().text.clone())
     }
     pub fn plain_text_snapshot(&self) -> String {
-        self.map().text
+        self.map().text.clone()
     }
     #[cfg(test)]
     pub fn text_length(&self) -> usize {
@@ -322,16 +450,17 @@ impl Editor {
         let state = EditorState::create(
             EditorStateConfig::new(manager.schema().clone())
                 .doc(doc)
-                .plugins(plugins(
+                .plugins(self.group.wrap_plugins(plugins(
                     &manager,
                     self.overlays.clone(),
                     self.is_plain(),
                     self.display.borrow().auto_links,
-                )),
+                ))),
         )?;
         self.changes.loading.store(true, Ordering::Relaxed);
-        self.session.update_state(state);
+        let result = self.group.replace_state(state);
         self.changes.loading.store(false, Ordering::Relaxed);
+        result?;
         self.changes.revision.fetch_add(1, Ordering::Relaxed);
         self.mark_saved();
         self.changes.text.store(true, Ordering::Relaxed);
@@ -341,18 +470,10 @@ impl Editor {
         Ok(())
     }
     pub fn set_document(&self, document: Document) -> Result<()> {
-        let section = &document.last_section;
-        *self.page.borrow_mut() = PageSettings {
-            width_twips: (section.page_w * 20.).round() as i32,
-            height_twips: (section.page_h * 20.).round() as i32,
-            margin_left: (section.margin_left * 20.).round() as i32,
-            margin_right: (section.margin_right * 20.).round() as i32,
-            margin_top: (section.margin_top * 20.).round() as i32,
-            margin_bottom: (section.margin_bottom * 20.).round() as i32,
-        };
-        let html = wordcraft_formats::html::export(&document);
+        printing::validate_page_settings(&document.page)?;
+        *self.page.borrow_mut() = document.page;
         let doc = DomParser::from_schema(self.manager.borrow().schema())
-            .parse(&html, &ParseOptions::default());
+            .parse(&document.html, &ParseOptions::default());
         self.load(doc)
     }
     pub fn set_text(&self, text: &str) -> Result<()> {
@@ -362,13 +483,11 @@ impl Editor {
         self.load(doc)
     }
     pub fn rtf(&self) -> Result<Vec<u8>> {
-        Ok(wordcraft_formats::rtf::export(&self.document_snapshot()?).into_bytes())
+        crate::formats::export_rtf(&self.document_snapshot()?)
     }
     pub fn set_rtf(&self, bytes: &[u8]) -> Result<()> {
         validate_rtf(bytes)?;
-        self.set_document(
-            wordcraft_formats::rtf::import(bytes.trim_ascii_start()).map_err(anyhow::Error::msg)?,
-        )
+        self.set_document(crate::formats::import_rtf(bytes.trim_ascii_start())?)
     }
     pub fn is_modified(&self) -> bool {
         self.changes.modified.load(Ordering::Relaxed)
@@ -400,12 +519,15 @@ impl Editor {
         self.display.borrow().read_only
     }
     pub fn is_plain(&self) -> bool {
-        self.display.borrow().plain
+        self.plain_mode.get()
     }
     pub fn is_composing(&self) -> bool {
         self.session.composing()
     }
     pub fn set_read_only(&self, value: bool) {
+        if self.is_read_only() == value {
+            return;
+        }
         self.overlays
             .lock()
             .expect("editor overlay lock poisoned")
@@ -425,6 +547,7 @@ impl Editor {
         let doc = PlainTextFormat::default().parse(manager.schema(), &text)?;
         *self.manager.borrow_mut() = manager;
         self.display.borrow_mut().plain = plain;
+        self.plain_mode.set(plain);
         self.load(doc)?;
         self.changes.modified.store(modified, Ordering::Relaxed);
         self.changes.buffered.store(buffered, Ordering::Relaxed);
@@ -474,9 +597,7 @@ impl Editor {
     }
     pub fn insert_rtf(&self, bytes: &[u8]) -> Result<()> {
         validate_rtf(bytes)?;
-        self.paste_document(
-            wordcraft_formats::rtf::import(bytes.trim_ascii_start()).map_err(anyhow::Error::msg)?,
-        )
+        self.paste_document(crate::formats::import_rtf(bytes.trim_ascii_start())?)
     }
     pub fn insert_html(&self, html: &str) -> Result<()> {
         self.editable()?;
@@ -493,7 +614,7 @@ impl Editor {
         Ok(())
     }
     pub fn paste_document(&self, document: Document) -> Result<()> {
-        self.insert_html(&wordcraft_formats::html::export(&document))
+        self.insert_html(&document.html)
     }
     pub fn paste_html(&self) -> Result<()> {
         clipboard::paste_html(self)
@@ -888,6 +1009,17 @@ impl Editor {
         self.run(&tiptap::set_mark(ty, attrs))
     }
     pub fn formatting(&self) -> FormatState {
+        let key = (self.session.state().revision(), self.display_revision.get());
+        if let Some((cached, value)) = &*self.format_cache.borrow() {
+            if *cached == key {
+                return value.clone();
+            }
+        }
+        let value = self.read_formatting();
+        *self.format_cache.borrow_mut() = Some((key, value.clone()));
+        value
+    }
+    fn read_formatting(&self) -> FormatState {
         if self.is_plain() {
             return self.plain_style.borrow().clone();
         }
@@ -942,7 +1074,7 @@ impl Editor {
         self.editable()?;
         ensure!(!self.is_plain(), "formatted links require rich-text mode");
         ensure!(
-            !url.is_empty() && wordcraft_doc::link::is_safe_href(url),
+            !url.is_empty() && crate::formats::is_safe_href(url),
             "Use a web, email, bookmark or relative link."
         );
         validate_text(label)?;
@@ -1005,9 +1137,6 @@ impl Editor {
         self.invalidate_display();
         Ok(())
     }
-    pub fn export_pdf(&self, path: &Path, page: &PageSettings) -> Result<()> {
-        printing::export_pdf(&self.document_snapshot()?, path, page)
-    }
     /// Opens the offline word-completion popup without changing the document.
     pub fn complete(&self) -> Result<()> {
         self.editable()?;
@@ -1043,7 +1172,8 @@ impl Editor {
             key,
         });
         self.completion_seen.set(Some(key));
-        self.invalidate_display();
+        self.completion_revision
+            .set(self.completion_revision.get().wrapping_add(1));
         Some(())
     }
     pub(super) fn refresh_completion(&self) {
@@ -1065,7 +1195,8 @@ impl Editor {
             return;
         }
         if self.completion.borrow_mut().take().is_some() {
-            self.invalidate_display();
+            self.completion_revision
+                .set(self.completion_revision.get().wrapping_add(1));
         }
         if !self.display.borrow().autocomplete_enabled
             || !self.session.is_focused()
@@ -1088,13 +1219,15 @@ impl Editor {
             popup.selected = (popup.selected as i32 + delta)
                 .rem_euclid(popup.result.candidates.len() as i32)
                 as usize;
-            self.invalidate_display();
+            self.completion_revision
+                .set(self.completion_revision.get().wrapping_add(1));
         }
     }
     pub(super) fn dismiss_completion(&self) {
         if self.completion.borrow_mut().take().is_some() {
             self.completion_seen.set(Some(self.completion_key()));
-            self.invalidate_display();
+            self.completion_revision
+                .set(self.completion_revision.get().wrapping_add(1));
         }
     }
     pub(super) fn accept_completion(&self, index: Option<usize>) -> Result<()> {
@@ -1103,7 +1236,8 @@ impl Editor {
             .borrow_mut()
             .take()
             .context("No completion is selected.")?;
-        self.invalidate_display();
+        self.completion_revision
+            .set(self.completion_revision.get().wrapping_add(1));
         ensure!(
             popup.key == self.completion_key(),
             "The word changed before the completion was chosen."
@@ -1141,6 +1275,7 @@ impl Editor {
     pub fn display_state(&self) -> EditorDisplayState {
         let mut s = self.display.borrow().clone();
         s.revision = self.revision();
+        s.plain = self.is_plain();
         s
     }
     pub fn set_zoom(&self, percent: u16) {
@@ -1171,8 +1306,11 @@ impl Editor {
         }
     }
     pub fn set_text_override(&self, color: Option<u32>) -> Result<()> {
-        self.display.borrow_mut().text_override = color.map(|c| c & 0xffffff);
-        self.invalidate_display();
+        let color = color.map(|c| c & 0xffffff);
+        if self.display.borrow().text_override != color {
+            self.display.borrow_mut().text_override = color;
+            self.invalidate_display();
+        }
         Ok(())
     }
     pub fn set_auto_links(&self, enabled: bool) {
@@ -1180,14 +1318,13 @@ impl Editor {
             return;
         }
         self.display.borrow_mut().auto_links = enabled;
-        let state = self.session.state();
-        match state.reconfigure(plugins(
+        match self.group.reconfigure(plugins(
             &self.manager.borrow(),
             self.overlays.clone(),
             self.is_plain(),
             enabled,
         )) {
-            Ok(state) => self.session.update_state(state),
+            Ok(()) => {}
             Err(error) => self.report_error(error.to_string()),
         }
         self.invalidate_display();
@@ -1199,8 +1336,11 @@ impl Editor {
         }
     }
     pub fn set_completion_language(&self, value: Option<String>) {
-        self.display.borrow_mut().completion_language = value.unwrap_or_default();
-        self.invalidate_display();
+        let value = value.unwrap_or_default();
+        if self.display.borrow().completion_language != value {
+            self.display.borrow_mut().completion_language = value;
+            self.invalidate_display();
+        }
     }
     pub fn apply_spans(&self, spans: &[crate::syntax::Span]) -> Result<()> {
         ensure!(
@@ -1230,6 +1370,7 @@ impl Editor {
             let mut overlays = self.overlays.lock().expect("editor overlay lock poisoned");
             overlays.doc = Some(self.session.state().doc().clone());
             overlays.syntax = spans.to_vec();
+            overlays.cache = None;
             drop(overlays);
             self.session.update_state(self.session.state());
             self.invalidate_display();
@@ -1257,6 +1398,7 @@ impl Editor {
             let mut overlays = self.overlays.lock().expect("editor overlay lock poisoned");
             overlays.doc = Some(self.session.state().doc().clone());
             overlays.proofing = ranges.to_vec();
+            overlays.cache = None;
             drop(overlays);
             self.session.update_state(self.session.state());
             self.invalidate_display();

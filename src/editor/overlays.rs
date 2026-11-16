@@ -17,10 +17,16 @@ pub(super) struct Overlays {
     pub proofing: Vec<Range<usize>>,
     pub error: Option<String>,
     pub read_only: bool,
+    pub cache: Option<DecorationSet>,
 }
 pub(super) struct OverlayPlugin(pub Arc<Mutex<Overlays>>);
 impl PluginSpec for OverlayPlugin {
     fn filter_transaction(&self, tr: &Transaction, _state: &EditorState) -> bool {
+        if !tr.doc_changed()
+            || tr.get_meta("exeditor.splitViewMirror") == Some(&serde_json::Value::Bool(true))
+        {
+            return true;
+        }
         if let Err(error) = validate_native_resources(tr.doc()) {
             self.0.lock().expect("editor overlay lock poisoned").error = Some(error.to_string());
             false
@@ -77,8 +83,14 @@ impl PluginSpec for OverlayPlugin {
         }
     }
     fn decorations(&self, state: &EditorState) -> Option<DecorationSet> {
-        let overlay = self.0.lock().expect("editor overlay lock poisoned");
+        let mut overlay = self.0.lock().expect("editor overlay lock poisoned");
         if overlay.doc.as_ref() != Some(state.doc()) {
+            return None;
+        }
+        if let Some(cache) = &overlay.cache {
+            return Some(cache.clone());
+        }
+        if overlay.syntax.is_empty() && overlay.proofing.is_empty() {
             return None;
         }
         let map = TextMap::new(state.doc());
@@ -110,6 +122,8 @@ impl PluginSpec for OverlayPlugin {
                 "underline decoration-red-500 decoration-wavy".into(),
             );
         }
-        Some(DecorationSet::create(state.doc(), decorations))
+        let decorations = DecorationSet::create(state.doc(), decorations);
+        overlay.cache = Some(decorations.clone());
+        Some(decorations)
     }
 }

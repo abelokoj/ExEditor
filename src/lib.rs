@@ -17,6 +17,7 @@ mod keyboard;
 mod language_tools;
 mod names;
 mod palette;
+mod panes;
 mod preferences;
 mod proofing;
 mod services;

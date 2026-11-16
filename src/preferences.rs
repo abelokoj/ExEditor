@@ -44,6 +44,12 @@ pub struct Preferences {
     pub plain_size: f32,
     pub wrap_to_page: bool,
     pub show_ruler: bool,
+    /// Show a separately styled line-number gutter beside document text.
+    pub show_line_numbers: bool,
+    pub line_number_font: String,
+    pub line_number_size: f32,
+    /// Gutter width in logical pixels, independent of document margins.
+    pub line_number_width: f32,
     pub spellcheck: bool,
     pub proofing: crate::proofing::ProofingOptions,
     pub smart_quotes: bool,
@@ -79,6 +85,10 @@ impl Default for Preferences {
             plain_size: 12.0,
             wrap_to_page: false,
             show_ruler: true,
+            show_line_numbers: false,
+            line_number_font: crate::fonts::default_plain_font().into(),
+            line_number_size: 12.0,
+            line_number_width: 48.0,
             spellcheck: true,
             proofing: crate::proofing::ProofingOptions::default(),
             smart_quotes: true,
@@ -150,8 +160,27 @@ impl Preferences {
         self.recent_files.clear();
     }
 
+    pub(crate) fn validate_line_numbers(&self) -> Result<()> {
+        ensure!(
+            !self.line_number_font.trim().is_empty()
+                && self.line_number_font.len() <= 256
+                && !self.line_number_font.chars().any(char::is_control),
+            "Choose a valid line-number font name."
+        );
+        ensure!(
+            self.line_number_size.is_finite() && (1.0..=1638.0).contains(&self.line_number_size),
+            "The line-number font size must be between 1 and 1638 points."
+        );
+        ensure!(
+            self.line_number_width.is_finite() && (16.0..=2048.0).contains(&self.line_number_width),
+            "The line-number gutter width must be between 16 and 2048 pixels."
+        );
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         self.proofing.validate()?;
+        self.validate_line_numbers()?;
         ensure!(
             self.window_controls_percent <= 100,
             "Window control position must be between 0% and 100%."
@@ -205,6 +234,13 @@ mod tests {
         assert_eq!(preferences.plain_size, 12.);
         assert_eq!(preferences.window_controls, WindowControls::default());
         assert_eq!(preferences.window_controls_percent, 50);
+        assert!(!preferences.show_line_numbers);
+        assert_eq!(
+            preferences.line_number_font,
+            crate::fonts::default_plain_font()
+        );
+        assert_eq!(preferences.line_number_size, 12.);
+        assert_eq!(preferences.line_number_width, 48.);
         assert_eq!(preferences.autosave_seconds, 30);
     }
 
@@ -223,6 +259,42 @@ mod tests {
         preferences.window_controls_percent = 101;
         assert!(preferences.validate().is_err());
     }
+    #[test]
+    fn line_number_preferences_round_trip_and_reject_invalid_values() {
+        let mut preferences = Preferences {
+            show_line_numbers: true,
+            line_number_font: "Inter".into(),
+            line_number_size: 15.,
+            line_number_width: 72.,
+            ..Preferences::default()
+        };
+        let restored: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&preferences).unwrap()).unwrap();
+        assert!(restored.show_line_numbers);
+        assert_eq!(restored.line_number_font, "Inter");
+        assert_eq!(restored.line_number_size, 15.);
+        assert_eq!(restored.line_number_width, 72.);
+        assert!(restored.validate().is_ok());
+        for font in [" ".to_owned(), "a\0b".to_owned(), "x".repeat(257)] {
+            preferences.line_number_font = font;
+            assert!(preferences.validate().is_err());
+        }
+        preferences.line_number_font = "Inter".into();
+        for size in [f32::NAN, f32::INFINITY, 0., 1639.] {
+            preferences.line_number_size = size;
+            assert!(preferences.validate().is_err());
+        }
+        preferences.line_number_size = 12.;
+        for width in [f32::NAN, f32::INFINITY, 15., 2049.] {
+            preferences.line_number_width = width;
+            assert!(preferences.validate().is_err());
+        }
+        for width in [16., 2048.] {
+            preferences.line_number_width = width;
+            assert!(preferences.validate().is_ok());
+        }
+    }
+
     #[test]
     fn recents_deduplicate_and_remain_bounded() {
         let mut preferences = Preferences::default();

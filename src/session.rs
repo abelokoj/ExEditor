@@ -148,7 +148,23 @@ pub fn queue_recovery(
     snapshot: RecoveryDocument,
     lease: std::sync::Arc<BufferLease>,
 ) -> std::sync::mpsc::Receiver<Result<()>> {
-    recovery_job(move || document::write_recovery(&snapshot), lease)
+    queue_recovery_with(move || Ok(snapshot), lease)
+}
+
+/// Builds and writes one recovery snapshot on the existing background worker.
+/// The exclusive lease covers both operations, including a failed builder; callers
+/// keep the same one-outstanding-job limit and drain the completion before closing.
+pub fn queue_recovery_with(
+    builder: impl FnOnce() -> Result<RecoveryDocument> + Send + 'static,
+    lease: std::sync::Arc<BufferLease>,
+) -> std::sync::mpsc::Receiver<Result<()>> {
+    recovery_job(
+        move || {
+            let snapshot = builder().context("Preparing the unsaved-buffer snapshot")?;
+            document::write_recovery(&snapshot)
+        },
+        lease,
+    )
 }
 fn recovery_job(
     work: impl FnOnce() -> Result<()> + Send + 'static,
@@ -415,6 +431,57 @@ mod unix_lease_tests {
 mod native_recovery_tests {
     use super::*;
     use crate::document::{DocumentContent, DocumentFormat, LineEnding, TextEncoding};
+    #[test]
+    fn snapshot_builder_runs_off_thread_and_retains_its_lease_through_failure() {
+        use std::{
+            sync::{Arc, mpsc},
+            time::Duration,
+        };
+        let folder = tempfile::tempdir().expect("temporary builder lease folder");
+        let lease = Arc::new(
+            lease_buffer_in(folder.path(), "builder")
+                .expect("claim builder lease")
+                .expect("unowned buffer"),
+        );
+        let caller = std::thread::current().id();
+        let (started, waiting) = mpsc::channel();
+        let (release, finish) = mpsc::channel();
+        let completion = queue_recovery_with(
+            move || {
+                started
+                    .send(std::thread::current().id())
+                    .context("starting snapshot builder")?;
+                finish.recv().context("releasing snapshot builder")?;
+                anyhow::bail!("snapshot construction failed")
+            },
+            lease,
+        );
+        let worker = waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("builder started");
+        assert_ne!(
+            worker, caller,
+            "snapshot construction must leave the caller thread"
+        );
+        assert!(
+            lease_buffer_in(folder.path(), "builder")
+                .expect("checking builder lease")
+                .is_none(),
+            "the worker must retain ownership throughout snapshot construction"
+        );
+        release.send(()).expect("finish builder");
+        let error = completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("builder completion")
+            .expect_err("builder failure must reach the caller");
+        assert!(format!("{error:#}").contains("snapshot construction failed"));
+        assert!(
+            lease_buffer_in(folder.path(), "builder")
+                .expect("released builder lease")
+                .is_some()
+        );
+        assert!(!folder.path().join("builder.json").exists());
+    }
     #[test]
     fn native_rich_snapshot_round_trips_with_legacy_fallback_and_exclusive_lease() {
         let folder = tempfile::tempdir().expect("temporary recovery folder");

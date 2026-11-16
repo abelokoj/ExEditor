@@ -33,6 +33,9 @@ struct Settings {
     rich_size: Signal<String>,
     plain_font: Signal<String>,
     plain_size: Signal<String>,
+    line_number_font: Signal<String>,
+    line_number_size: Signal<String>,
+    line_number_width: Signal<String>,
     recovery: Signal<String>,
     tab: Signal<Tab>,
     accessories: Signal<Vec<DownloadStatus>>,
@@ -55,6 +58,9 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette) {
                 rich_size: signal(preferences.rich_size.to_string()),
                 plain_font: signal(preferences.plain_font.clone()),
                 plain_size: signal(preferences.plain_size.to_string()),
+                line_number_font: signal(preferences.line_number_font.clone()),
+                line_number_size: signal(preferences.line_number_size.to_string()),
+                line_number_width: signal(preferences.line_number_width.to_string()),
                 recovery: signal(preferences.autosave_seconds.to_string()),
                 draft: signal_with(preferences.clone(), SignalEquals::Never),
                 tab: signal(Tab::NewDocument),
@@ -223,6 +229,29 @@ impl Settings {
             .child(ui::row(
                 "Rich text size (pt):",
                 ui::input("Rich text font size", self.rich_size, self.colors),
+            ))
+            .child(ui::heading("Line Numbers"))
+            .child(self.checkbox(
+                "default-line-numbers",
+                "Show line numbers",
+                |p| p.show_line_numbers,
+                |p, v| p.show_line_numbers = v,
+            ))
+            .child(ui::row(
+                "Line number font:",
+                ui::input("Line number font", self.line_number_font, self.colors),
+            ))
+            .child(ui::row(
+                "Line number size (pt):",
+                ui::input("Line number font size", self.line_number_size, self.colors),
+            ))
+            .child(ui::row(
+                "Gutter width (px):",
+                ui::input(
+                    "Line number gutter width",
+                    self.line_number_width,
+                    self.colors,
+                ),
             ))
             .child(ui::heading("Options"))
             .child(self.checkbox(
@@ -407,13 +436,22 @@ impl Settings {
         self.rich_size.set(defaults.rich_size.to_string());
         self.plain_font.set(defaults.plain_font.clone());
         self.plain_size.set(defaults.plain_size.to_string());
+        self.line_number_font.set(defaults.line_number_font.clone());
+        self.line_number_size
+            .set(defaults.line_number_size.to_string());
+        self.line_number_width
+            .set(defaults.line_number_width.to_string());
         self.recovery.set(defaults.autosave_seconds.to_string());
         self.draft.set(defaults);
         self.error.set(String::new());
     }
     fn values(&self) -> Result<Vec<String>, String> {
+        let mut draft = self.draft.get_untracked();
+        draft.line_number_font = self.line_number_font.get_untracked().trim().to_owned();
+        draft.line_number_size = font_size(&self.line_number_size.get_untracked())?;
+        draft.line_number_width = gutter_width(&self.line_number_width.get_untracked())?;
         settings_values(
-            &self.draft.get_untracked(),
+            &draft,
             &self.prefix.get_untracked(),
             &self.rich_font.get_untracked(),
             &self.rich_size.get_untracked(),
@@ -448,6 +486,9 @@ fn settings_values(
     recovery: &str,
 ) -> Result<Vec<String>, String> {
     let prefix = validated_prefix(prefix)?;
+    draft
+        .validate_line_numbers()
+        .map_err(|error| error.to_string())?;
     for font in [rich_font, plain_font] {
         if font.trim().is_empty() || font.contains('\0') || font.encode_utf16().count() >= 32 {
             return Err("Choose a font name containing 1–31 characters.".into());
@@ -498,6 +539,10 @@ fn settings_values(
         }
         .into(),
         draft.window_controls_percent.to_string(),
+        draft.show_line_numbers.to_string(),
+        draft.line_number_font.trim().into(),
+        draft.line_number_size.to_string(),
+        draft.line_number_width.to_string(),
     ])
 }
 fn validated_prefix(value: &str) -> Result<String, String> {
@@ -515,6 +560,17 @@ fn name_examples(value: &str) -> String {
     format!("Examples: {prefix} 1, {prefix} 2")
 }
 
+fn gutter_width(value: &str) -> Result<f32, String> {
+    let width = value
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| "Enter a numeric gutter width.".to_owned())?;
+    if !width.is_finite() || !(16.0..=2048.0).contains(&width) {
+        return Err("The line-number gutter width must be between 16 and 2048 pixels.".into());
+    }
+    Ok(width)
+}
+
 fn font_size(value: &str) -> Result<f32, String> {
     let size = value
         .trim()
@@ -528,13 +584,21 @@ fn font_size(value: &str) -> Result<f32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{font_size, name_examples, validated_prefix};
+    use super::{font_size, gutter_width, name_examples, validated_prefix};
     #[test]
     fn font_size_validation_accepts_boundaries_and_rejects_non_finite_input() {
         assert_eq!(font_size("1"), Ok(1.));
         assert_eq!(font_size("1638"), Ok(1638.));
         for invalid in ["NaN", "inf", "0", "1639", "twelve"] {
             assert!(font_size(invalid).is_err(), "invalid size {invalid}");
+        }
+    }
+    #[test]
+    fn gutter_width_accepts_boundaries_and_rejects_non_finite_or_out_of_range_input() {
+        assert_eq!(gutter_width("16"), Ok(16.));
+        assert_eq!(gutter_width(" 2048 "), Ok(2048.));
+        for invalid in ["NaN", "inf", "15.9", "2048.1", "wide"] {
+            assert!(gutter_width(invalid).is_err(), "invalid width {invalid}");
         }
     }
     #[test]
@@ -551,7 +615,13 @@ mod serialization_tests {
     use super::*;
     #[test]
     fn native_preferences_keep_the_existing_submit_field_order() {
-        let preferences = Preferences::default();
+        let preferences = Preferences {
+            show_line_numbers: true,
+            line_number_font: "JetBrains Mono".into(),
+            line_number_size: 14.,
+            line_number_width: 64.,
+            ..Preferences::default()
+        };
         let values = settings_values(
             &preferences,
             " Notes ",
@@ -562,11 +632,15 @@ mod serialization_tests {
             "30",
         )
         .expect("valid settings");
-        assert_eq!(values.len(), 18);
+        assert_eq!(values.len(), 22);
         assert_eq!(&values[1..5], ["Inter", "12", "Consolas", "11"]);
         assert_eq!(values[11], "30");
         assert_eq!(values[14], "Notes");
         assert_eq!(values[15], preferences.autocomplete.to_string());
         assert_eq!(values[17], "50");
+        assert_eq!(&values[18..22], ["true", "JetBrains Mono", "14", "64"]);
+        let mut invalid = preferences;
+        invalid.line_number_font = " ".into();
+        assert!(settings_values(&invalid, "Notes", "Inter", "12", "Consolas", "11", "30").is_err());
     }
 }

@@ -87,6 +87,10 @@ impl Default for PageSettings {
 #[derive(Clone, Debug)]
 pub struct EditorDisplayState {
     pub revision: u64,
+    pub show_line_numbers: bool,
+    pub line_number_font: String,
+    pub line_number_size: f32,
+    pub line_number_width: f32,
     pub zoom: u16,
     pub wrap: bool,
     pub wrap_to_page: bool,
@@ -105,6 +109,10 @@ impl Default for EditorDisplayState {
     fn default() -> Self {
         Self {
             revision: 0,
+            show_line_numbers: false,
+            line_number_font: crate::fonts::default_plain_font().into(),
+            line_number_size: 12.,
+            line_number_width: 48.,
             zoom: 100,
             wrap: true,
             wrap_to_page: false,

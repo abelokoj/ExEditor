@@ -1,11 +1,16 @@
-//! Native PDF export and system printer submission share the document's page geometry.
+//! Independent PDF export and native printer submission share one physical page layout.
 
 use super::types::PageSettings;
+use crate::formats::RichDocument;
 use anyhow::{Context as _, Result, ensure};
-use std::{io::Write as _, path::Path, sync::Arc};
-use wordcraft_doc::{Block, Document, SectionProps};
+use cosmic_text::FontSystem;
+use std::{io::Write as _, path::Path};
 
-/// One configured native system print queue.
+mod layout;
+mod markup;
+mod render;
+
+/// One configured native system print queue, including virtual PDF printers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Printer {
     pub name: String,
@@ -34,11 +39,14 @@ impl Default for PrintOptions {
     }
 }
 
-/// Lists spooler queues without querying slow printer drivers.
+/// Lists native spooler queues without invoking printer configuration dialogs.
+///
+/// # Errors
+/// Returns an error when this platform has no native print backend.
 pub fn printers() -> Result<Vec<Printer>> {
     ensure!(
         craft_print::backend().is_some(),
-        "Native printing is unavailable on this platform."
+        "Native printing is unavailable on this platform; Export PDF remains available."
     );
     Ok(craft_print::printer_queues()
         .into_iter()
@@ -50,7 +58,7 @@ pub fn printers() -> Result<Vec<Printer>> {
 }
 
 pub(super) fn validate_page_settings(page: &PageSettings) -> Result<()> {
-    const MAX_TWIPS: i32 = 288_000; // PDF's conventional 200-inch physical page limit.
+    const MAX_TWIPS: i32 = 288_000;
     ensure!(
         (1..=MAX_TWIPS).contains(&page.width_twips) && (1..=MAX_TWIPS).contains(&page.height_twips),
         "Page dimensions must be positive and no larger than 200 inches."
@@ -74,62 +82,22 @@ pub(super) fn validate_page_settings(page: &PageSettings) -> Result<()> {
     Ok(())
 }
 
-/// Sets physical page geometry before layout; twips are exactly one twentieth of a point.
-/// Rejects invalid dimensions without changing any document properties.
-pub fn apply_page_settings(doc: &mut Document, page: &PageSettings) -> Result<()> {
+/// Applies validated physical page geometry to an interchange snapshot.
+///
+/// # Errors
+/// Invalid dimensions or margins leave the document unchanged.
+pub fn apply_page_settings(doc: &mut RichDocument, page: &PageSettings) -> Result<()> {
     validate_page_settings(page)?;
-    let apply = |section: &mut SectionProps| {
-        section.page_w = page.width_twips as f32 / 20.;
-        section.page_h = page.height_twips as f32 / 20.;
-        section.landscape = page.width_twips > page.height_twips;
-        section.margin_left = page.margin_left as f32 / 20.;
-        section.margin_right = page.margin_right as f32 / 20.;
-        section.margin_top = page.margin_top as f32 / 20.;
-        section.margin_bottom = page.margin_bottom as f32 / 20.;
-    };
-    apply(&mut doc.last_section);
-    for block in &mut doc.body {
-        if matches!(&**block, Block::Para(paragraph) if paragraph.section.is_some())
-            && let Block::Para(paragraph) = Arc::make_mut(block)
-            && let Some(section) = &mut paragraph.section
-        {
-            apply(section);
-        }
-    }
+    doc.page = page.clone();
     Ok(())
-}
-
-fn output_document(doc: &Document, page: &PageSettings) -> Result<Document> {
-    validate_page_settings(page)?;
-    let section = &doc.last_section;
-    let matches = [
-        section.page_w,
-        section.page_h,
-        section.margin_left,
-        section.margin_right,
-        section.margin_top,
-        section.margin_bottom,
-    ]
-    .into_iter()
-    .map(|points| (points * 20.).round() as i32)
-    .eq([
-        page.width_twips,
-        page.height_twips,
-        page.margin_left,
-        page.margin_right,
-        page.margin_top,
-        page.margin_bottom,
-    ]);
-    let mut snapshot = doc.clone();
-    // Loaded documents may deliberately mix section sizes; Page Setup already updates all sections.
-    if !matches {
-        apply_page_settings(&mut snapshot, page)?;
-    }
-    Ok(snapshot)
 }
 
 fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>> {
     ensure!(total > 0, "The document has no printable pages.");
+    ensure!(
+        spec.len() <= 16_384,
+        "The page range exceeds its size limit."
+    );
     let mut pages = std::collections::BTreeSet::new();
     for item in spec.split(',').map(str::trim) {
         let number = |text: &str| -> Result<usize> {
@@ -172,54 +140,62 @@ fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>> {
 }
 
 fn pdf(
-    doc: &Document,
+    doc: &RichDocument,
     page: &PageSettings,
     links: bool,
     page_range: Option<&str>,
 ) -> Result<Vec<u8>> {
-    crate::fonts::register_export_fonts().context("Loading PDF output fonts")?;
-    let snapshot = output_document(doc, page)?;
-    let mut options = wordcraft_pdf::PdfOptions {
-        links,
-        ..Default::default()
+    validate_page_settings(page)?;
+    let blocks = markup::parse(&doc.html).context("Preparing the native document for printing")?;
+    let font_data = crate::fonts::export_font_data().context("Loading output fonts")?;
+    let sources = font_data
+        .into_iter()
+        .map(|data| cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(data)));
+    let mut fonts = FontSystem::new_with_fonts(sources);
+    fonts.db_mut().set_sans_serif_family("Inter");
+    fonts
+        .db_mut()
+        .set_monospace_family(crate::fonts::default_plain_font());
+    let width = (page.width_twips - page.margin_left - page.margin_right) as f32 / 20.;
+    let height = (page.height_twips - page.margin_top - page.margin_bottom) as f32 / 20.;
+    let bands =
+        layout::typeset(&blocks, width, height, &mut fonts).context("Laying out print pages")?;
+    let pages = layout::paginate(&bands, width, height)?;
+    let selected = match page_range.filter(|spec| !spec.trim().is_empty()) {
+        Some(spec) => parse_page_range(spec, pages.len())?,
+        None => (0..pages.len()).collect(),
     };
-    if let Some(spec) = page_range.filter(|spec| !spec.trim().is_empty()) {
-        let layout = wordcraft_layout::layout(
-            &snapshot,
-            &mut wordcraft_layout::LayoutCache::new(),
-            &wordcraft_layout::LayoutOptions {
-                hide_deleted: true,
-                ..Default::default()
-            },
-        );
-        options.pages = Some(parse_page_range(spec, layout.pages.len())?);
-        wordcraft_pdf::export_layout(&snapshot, &layout, &options)
-            .context("rendering the selected PDF pages")
-    } else {
-        wordcraft_pdf::export(&snapshot, &options).context("rendering the document as PDF")
-    }
+    render::draw(&pages, &selected, page, &fonts, links)
 }
 
-/// Writes the fully rendered PDF atomically, preserving an existing file on failure.
-pub fn export_pdf(doc: &Document, path: &Path, page: &PageSettings) -> Result<()> {
+/// Writes an independent, font-embedded PDF atomically without requiring any printer.
+/// Call this blocking font discovery and rendering operation from a worker.
+///
+/// # Errors
+/// Reports invalid geometry, unavailable glyphs, image/layout errors and output failures.
+/// An existing output file is preserved unless the complete PDF is successfully saved.
+pub fn export_pdf(doc: &RichDocument, path: &Path, page: &PageSettings) -> Result<()> {
     let bytes = pdf(doc, page, true, None)?;
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut output = tempfile::NamedTempFile::new_in(parent).context("creating the PDF output")?;
-    output.write_all(&bytes).context("writing the PDF")?;
-    output.as_file().sync_all().context("saving the PDF")?;
+    let mut output = tempfile::NamedTempFile::new_in(parent).context("Creating the PDF output")?;
+    output.write_all(&bytes).context("Writing the PDF")?;
+    output.as_file().sync_all().context("Saving the PDF")?;
     output
         .persist(path)
         .map_err(|error| error.error)
-        .context("replacing the PDF output")?;
+        .context("Replacing the PDF output")?;
     Ok(())
 }
 
-/// Sends a PDF to the native spooler using the settings confirmed in the print form.
-/// The caller runs this blocking operation on a worker, keeping the native event loop responsive.
-pub fn submit(doc: &Document, page: &PageSettings, options: &PrintOptions) -> Result<()> {
+/// Sends the paginated PDF to a system printer using the confirmed print settings.
+/// Call this blocking operation from a worker to keep the native event loop responsive.
+///
+/// # Errors
+/// Rejects invalid printer names, copy counts, page ranges and rendering/spooler errors.
+pub fn submit(doc: &RichDocument, page: &PageSettings, options: &PrintOptions) -> Result<()> {
     ensure!(
         !options.printer.trim().is_empty()
             && options.printer.len() <= 4096
@@ -245,79 +221,46 @@ pub fn submit(doc: &Document, page: &PageSettings, options: &PrintOptions) -> Re
         title: "ExEditor document".into(),
         ..Default::default()
     };
-    craft_print::submit(&bytes, &job).context("submitting the native print job")?;
+    craft_print::submit(&bytes, &job).context("Submitting the native print job")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn page_ranges_are_bounded_deduplicated_and_zero_based() {
         assert_eq!(parse_page_range("1-3,2,5", 5).unwrap(), vec![0, 1, 2, 4]);
         assert_eq!(parse_page_range("even", 5).unwrap(), vec![1, 3]);
+        assert_eq!(parse_page_range("odd,5", 5).unwrap(), vec![0, 2, 4]);
         assert_eq!(parse_page_range("3-", 5).unwrap(), vec![2, 3, 4]);
-        for invalid in ["0", "6", "3-1", "1-2-3", ""] {
+        assert_eq!(parse_page_range("-2", 5).unwrap(), vec![0, 1]);
+        for invalid in [
+            "0",
+            "6",
+            "3-1",
+            "1-2-3",
+            "",
+            "1,",
+            "999999999999999999999999999",
+        ] {
             assert!(parse_page_range(invalid, 5).is_err(), "{invalid}");
         }
-    }
-    #[test]
-    fn printing_preserves_mixed_sections_when_canonical_page_setup_matches() {
-        let mut doc = Document::default();
-        let first = SectionProps {
-            page_w: 595.,
-            page_h: 842.,
-            margin_left: 40.,
-            ..Default::default()
-        };
-        doc.body[0] = Arc::new(Block::Para(wordcraft_doc::Paragraph {
-            section: Some(Box::new(first)),
-            ..Default::default()
-        }));
-        let canonical = PageSettings {
-            width_twips: 12240,
-            height_twips: 15840,
-            margin_left: 1440,
-            margin_right: 1440,
-            margin_top: 1440,
-            margin_bottom: 1440,
-        };
-        assert_eq!(
-            output_document(&doc, &canonical).expect("canonical page setup"),
-            doc,
-            "PDF export must retain imported section geometry"
-        );
-        let changed = PageSettings {
-            width_twips: 16840,
-            height_twips: 11900,
-            ..canonical
-        };
-        let output = output_document(&doc, &changed).expect("changed page setup");
-        assert!(
-            output
-                .sections()
-                .iter()
-                .all(|(_, section)| section.page_w == 842. && section.page_h == 595.)
-        );
-        assert_eq!(
-            doc.body[0]
-                .as_para()
-                .and_then(|paragraph| paragraph.section.as_ref())
-                .map(|section| section.page_w),
-            Some(595.),
-            "export must not change the live document"
-        );
+        assert!(parse_page_range("even", 1).is_err());
     }
 
     #[test]
-    fn page_setup_reflows_every_section_with_twips_converted_once() {
-        let mut doc = Document::default();
-        let paragraph = wordcraft_doc::Paragraph {
-            section: Some(Box::new(SectionProps::default())),
+    fn page_setup_rejects_invalid_geometry_without_changing_the_snapshot() {
+        let mut doc = RichDocument::from_text("retained text");
+        let before = serde_json::to_value(&doc).unwrap();
+        let invalid = PageSettings {
+            margin_left: i32::MAX,
             ..Default::default()
         };
-        doc.body.push(Arc::new(Block::Para(paragraph)));
-        let page = PageSettings {
+        assert!(apply_page_settings(&mut doc, &invalid).is_err());
+        assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+        let valid = PageSettings {
             width_twips: 16840,
             height_twips: 11900,
             margin_left: 1200,
@@ -325,26 +268,46 @@ mod tests {
             margin_top: 1600,
             margin_bottom: 1800,
         };
-        apply_page_settings(&mut doc, &page).expect("valid page setup");
-        for (_, section) in doc.sections() {
-            assert_eq!((section.page_w, section.page_h), (842., 595.));
-            assert_eq!(
-                (
-                    section.margin_left,
-                    section.margin_right,
-                    section.margin_top,
-                    section.margin_bottom
-                ),
-                (60., 70., 80., 90.)
-            );
-            assert!(section.landscape);
-        }
-        let before = doc.clone();
+        apply_page_settings(&mut doc, &valid).unwrap();
+        assert_eq!(doc.page.width_twips, 16840);
+        assert_eq!(doc.page.margin_bottom, 1800);
+        assert!(doc.html.contains("retained text"));
+    }
+
+    #[test]
+    fn failed_export_never_replaces_existing_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("existing.pdf");
+        std::fs::write(&path, b"original").unwrap();
         let invalid = PageSettings {
-            margin_left: i32::MAX,
-            ..page
+            width_twips: 0,
+            ..Default::default()
         };
-        assert!(apply_page_settings(&mut doc, &invalid).is_err());
-        assert_eq!(doc, before, "invalid geometry must not modify any section");
+        assert!(export_pdf(&RichDocument::from_text("new text"), &path, &invalid).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn invalid_job_options_fail_before_any_printer_is_contacted() {
+        let doc = RichDocument::from_text("text");
+        for options in [
+            PrintOptions::default(),
+            PrintOptions {
+                printer: "bad\nprinter".into(),
+                ..Default::default()
+            },
+            PrintOptions {
+                printer: "queue".into(),
+                copies: 0,
+                ..Default::default()
+            },
+            PrintOptions {
+                printer: "queue".into(),
+                copies: 1000,
+                ..Default::default()
+            },
+        ] {
+            assert!(submit(&doc, &PageSettings::default(), &options).is_err());
+        }
     }
 }

@@ -64,6 +64,11 @@ const fn binding(
 /// Supported shortcuts, including aliases; each action has exactly one canonical label.
 pub const BINDINGS: &[Binding] = &[
     binding(0x4b, CTRL, false, "chord", "Ctrl+K"),
+    binding(0xdc, CTRL, false, "split-editor", "Ctrl+\\"),
+    binding(0x31, CTRL, true, "single-editor", "Ctrl+K Ctrl+1"),
+    binding(0x34, CTRL, true, "four-columns", "Ctrl+K Ctrl+4"),
+    binding(0x47, CTRL, true, "grid-editors", "Ctrl+K Ctrl+G"),
+    binding(0x4c, NONE, true, "line-numbers", "Ctrl+K L"),
     binding(0x4e, CTRL, false, "new-tab", "Ctrl+N"),
     binding(0x4e, CTRL_SHIFT, false, "new", "Ctrl+Shift+N"),
     binding(0x4f, CTRL, false, "open", "Ctrl+O"),

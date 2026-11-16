@@ -53,6 +53,8 @@ pub enum MenuKind {
     Versions,
     InterfaceSize,
     CodeTheme,
+    SplitView,
+    PaneTabs(usize),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferScope {
@@ -61,6 +63,10 @@ pub enum TransferScope {
 }
 #[derive(Clone, Debug)]
 pub enum Command {
+    SetSplit(crate::panes::Layout, bool),
+    FocusPane(usize),
+    PaneDocument(usize, usize),
+    ToggleLineNumbers,
     New,
     NewTab,
     SwitchTab(usize),
@@ -76,6 +82,7 @@ pub enum Command {
     Open,
     OpenBundle,
     OpenPath(PathBuf),
+    OpenResult(std::result::Result<Box<document::LoadedDocument>, String>),
     Save,
     SaveAs,
     Duplicate,
@@ -88,12 +95,12 @@ pub enum Command {
     Print,
     ChoosePrinter {
         printers: Vec<(String, bool)>,
-        document: std::sync::Arc<wordcraft_doc::Document>,
+        document: std::sync::Arc<crate::formats::RichDocument>,
         page: PageSettings,
     },
     PrintTo {
         printer: String,
-        document: std::sync::Arc<wordcraft_doc::Document>,
+        document: std::sync::Arc<crate::formats::RichDocument>,
         page: PageSettings,
     },
     ReportError(String),
@@ -253,6 +260,11 @@ pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
         "go-to-line" => Command::GoToLine,
         "page-setup" => Command::PageSetup,
         "new-tab" => Command::NewTab,
+        "split-editor" => Command::SetSplit(crate::panes::Layout::Columns2, true),
+        "single-editor" => Command::SetSplit(crate::panes::Layout::Single, true),
+        "grid-editors" => Command::SetSplit(crate::panes::Layout::Grid4, false),
+        "four-columns" => Command::SetSplit(crate::panes::Layout::Columns4, false),
+        "line-numbers" => Command::ToggleLineNumbers,
         "next-tab" => Command::NextTab(false),
         "previous-tab" => Command::NextTab(true),
         "bold" => Command::Edit(EditCommand::Bold),
@@ -858,14 +870,17 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
     let key_model = model.clone();
     set_interval(Duration::from_millis(40), move || {
         let model = key_model.borrow();
+        let editor = model
+            .panes
+            .iter()
+            .find(|p| p.editor.native_session().is_focused())
+            .map(|p| p.editor.clone())
+            .or_else(|| model.editor().ok());
         focused_session.set(
-            model
-                .doc
-                .editor
-                .as_ref()
+            editor
                 .map(|editor| {
                     (
-                        Rc::as_ptr(editor) as usize,
+                        Rc::as_ptr(&editor) as usize,
                         editor.native_session().is_focused(),
                     )
                 })
@@ -907,26 +922,67 @@ fn editor_view(entry: Entry, workspace: Rc<Workspace>) -> AnyElement {
     });
     let body_model = model.clone();
     let surface_model = model.clone();
+    let pane_window = window.clone();
     let body = each(
         move || {
             entry.revision.get();
-            body_model
-                .borrow()
-                .doc
-                .editor
-                .as_ref()
-                .map(|editor| vec![Rc::as_ptr(editor) as usize])
-                .unwrap_or_default()
+            let current = body_model.borrow();
+            if current.split_layout == crate::panes::Layout::Single {
+                current
+                    .doc
+                    .editor
+                    .as_ref()
+                    .map(|e| vec![Rc::as_ptr(e) as usize])
+                    .unwrap_or_default()
+            } else {
+                vec![usize::MAX - current.split_layout as usize]
+            }
         },
         |id| *id,
         move |_, _| {
-            let editor = surface_model
-                .borrow()
-                .doc
-                .editor
-                .clone()
-                .expect("a live document surface");
-            crate::editor::surface::surface(editor)
+            let layout = surface_model.borrow().split_layout;
+            if layout == crate::panes::Layout::Single {
+                return crate::editor::surface::surface(
+                    surface_model
+                        .borrow()
+                        .doc
+                        .editor
+                        .clone()
+                        .expect("a live document surface"),
+                )
+                .into_element();
+            }
+            let read_model = surface_model.clone();
+            let read: Rc<dyn Fn(usize) -> Option<(String, Rc<Editor>, bool)>> =
+                Rc::new(move |index| {
+                    let current = read_model.borrow();
+                    let pane = current.panes.get(index)?;
+                    let name = current.tab_by_id(&pane.document_id).map(|tab| {
+                        tab.path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| tab.untitled_name.clone())
+                    })?;
+                    Some((name, pane.editor.clone(), current.active_pane == index))
+                });
+            let colors = signal_with(
+                surface_model.borrow().colors(&pane_window),
+                nsh_core::element::SignalEquals::Never,
+            );
+            let color_model = surface_model.clone();
+            let color_window = pane_window.clone();
+            effect(move || {
+                entry.revision.get();
+                colors.set(color_model.borrow().colors(&color_window));
+            });
+            crate::panes::render(
+                layout,
+                read,
+                entry.revision,
+                surface_model.borrow().queue.clone(),
+                colors,
+            )
         },
     );
     let wheel_model = model.clone();
@@ -1008,11 +1064,23 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
         .gap(px(6.))
         .w(px(86.))
         .px(px(12.));
-    for (label, color, command) in [
-        ("Close", 0xff5f57, 0),
-        ("Minimize", 0xffbd2e, 1),
-        ("Zoom", 0x28c840, 2),
-    ] {
+    let controls = if current.prefs.window_controls == WindowControls::Right
+        || (current.prefs.window_controls == WindowControls::Custom
+            && current.prefs.window_controls_percent >= 50)
+    {
+        [
+            ("Minimize", 0xffbd2e, 1),
+            ("Zoom", 0x28c840, 2),
+            ("Close", 0xff5f57, 0),
+        ]
+    } else {
+        [
+            ("Close", 0xff5f57, 0),
+            ("Minimize", 0xffbd2e, 1),
+            ("Zoom", 0x28c840, 2),
+        ]
+    };
+    for (label, color, command) in controls {
         let queue = queue.clone();
         let window = window.clone();
         lights = lights.child(
@@ -1045,9 +1113,17 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             .justify_center()
             .overflow_hidden()
             .child(
-                text(format!("{name}{}", if dirty { " (Edited)" } else { "" }))
-                    .text_size(px(13.))
-                    .text_color(ui::rgb(colors.ink)),
+                text(format!(
+                    "{name}{}{}",
+                    if dirty { " (Edited)" } else { "" },
+                    if current.pending_opens > 0 {
+                        " (Opening…)"
+                    } else {
+                        ""
+                    }
+                ))
+                .text_size(px(13.))
+                .text_color(ui::rgb(colors.ink)),
             )
     };
     title = match current.prefs.window_controls {
@@ -1393,6 +1469,10 @@ struct EditorWindow {
     preview_theme: Option<String>,
     chord: crate::keyboard::State,
     ui_stamp: String,
+    split_layout: crate::panes::Layout,
+    panes: Vec<crate::panes::Pane>,
+    active_pane: usize,
+    pending_opens: usize,
 }
 
 impl EditorWindow {
@@ -1415,11 +1495,13 @@ impl EditorWindow {
             preview_theme: None,
             chord: crate::keyboard::State::default(),
             ui_stamp: String::new(),
+            split_layout: crate::panes::Layout::Single,
+            panes: Vec::new(),
+            active_pane: 0,
+            pending_opens: 0,
         };
-        if let Some(path) = path
-            && let Err(error) = this.read_file(&path)
-        {
-            show_error(&error);
+        if let Some(path) = path {
+            enqueue(&this.queue, Command::OpenPath(path));
         }
         this
     }
@@ -1431,10 +1513,203 @@ impl EditorWindow {
         Ok(())
     }
     fn editor(&self) -> Result<Rc<Editor>> {
+        if self.split_layout != crate::panes::Layout::Single {
+            if let Some(pane) = self.panes.get(self.active_pane) {
+                if pane.document_id == self.doc.recovery_id
+                    && self
+                        .doc
+                        .editor
+                        .as_ref()
+                        .is_some_and(|e| e.same_document(&pane.editor))
+                {
+                    return Ok(pane.editor.clone());
+                }
+            }
+        }
         self.doc
             .editor
             .clone()
             .context("The document editor could not be created")
+    }
+    fn tab_by_id(&self, id: &str) -> Option<&DocumentTab> {
+        std::iter::once(&self.doc)
+            .chain(self.tabs.iter().flatten())
+            .find(|tab| tab.recovery_id == id)
+    }
+    fn swap_current_tab(&mut self, index: usize) -> Result<()> {
+        if index == self.active_tab {
+            return Ok(());
+        }
+        ensure!(
+            index < self.tabs.len(),
+            "That document tab is no longer open"
+        );
+        self.doc.queue_buffer()?;
+        let next = self.tabs[index]
+            .take()
+            .context("The document tab is unavailable")?;
+        if let Some(editor) = &self.doc.editor {
+            editor.set_visible(false);
+        }
+        let old = std::mem::replace(&mut self.doc, next);
+        self.tabs[self.active_tab] = Some(old);
+        self.active_tab = index;
+        Ok(())
+    }
+    fn focus_pane(&mut self, index: usize) -> Result<()> {
+        if self.split_layout == crate::panes::Layout::Single {
+            return Ok(());
+        }
+        let id = self
+            .panes
+            .get(index)
+            .context("This split pane is no longer open")?
+            .document_id
+            .clone();
+        let tab = if id == self.doc.recovery_id {
+            self.active_tab
+        } else {
+            self.tabs
+                .iter()
+                .position(|t| t.as_ref().is_some_and(|t| t.recovery_id == id))
+                .context("This document tab is no longer open")?
+        };
+        self.swap_current_tab(tab)?;
+        self.active_pane = index;
+        Ok(())
+    }
+    fn sync_focused_pane(&mut self) -> Result<()> {
+        if let Some(index) = self
+            .panes
+            .iter()
+            .position(|p| p.editor.native_session().is_focused())
+        {
+            if self.active_pane != index || self.panes[index].document_id != self.doc.recovery_id {
+                self.focus_pane(index)?;
+            }
+        }
+        Ok(())
+    }
+    fn set_split(&mut self, layout: crate::panes::Layout, same_document: bool) -> Result<()> {
+        self.sync_focused_pane()?;
+        if let (Ok(active), Some(canonical)) = (self.editor(), self.doc.editor.as_ref()) {
+            canonical.copy_selection_from(&active)?;
+        }
+        if layout == crate::panes::Layout::Single {
+            self.panes.clear();
+            self.active_pane = 0;
+            self.split_layout = layout;
+            if let Some(editor) = &self.doc.editor {
+                editor.set_visible(true);
+                editor.focus();
+            }
+            return Ok(());
+        }
+        let choices: Vec<_> = std::iter::once(&self.doc)
+            .chain(self.tabs.iter().flatten())
+            .filter_map(|t| {
+                t.editor
+                    .as_ref()
+                    .map(|e| (t.recovery_id.clone(), e.clone()))
+            })
+            .collect();
+        ensure!(!choices.is_empty(), "The document editor is unavailable");
+        let mut panes = Vec::with_capacity(layout.count());
+        for i in 0..layout.count() {
+            let choice = if same_document {
+                &choices[0]
+            } else {
+                &choices[i % choices.len()]
+            };
+            panes.push(crate::panes::Pane {
+                document_id: choice.0.clone(),
+                editor: choice.1.split_view()?,
+            });
+        }
+        if let Some(editor) = &self.doc.editor {
+            editor.set_visible(false);
+        }
+        self.panes = panes;
+        self.active_pane = 0;
+        self.split_layout = layout;
+        self.configure_panes();
+        Ok(())
+    }
+    fn assign_pane(&mut self, pane: usize, tab: usize) -> Result<()> {
+        let target = if tab == self.active_tab {
+            &self.doc
+        } else {
+            self.tabs
+                .get(tab)
+                .and_then(Option::as_ref)
+                .context("This document tab is no longer open")?
+        };
+        let replacement = crate::panes::Pane {
+            document_id: target.recovery_id.clone(),
+            editor: target
+                .editor
+                .as_ref()
+                .context("This editor is unavailable")?
+                .split_view()?,
+        };
+        *self
+            .panes
+            .get_mut(pane)
+            .context("This split pane is no longer open")? = replacement;
+        self.focus_pane(pane)?;
+        self.configure_panes();
+        Ok(())
+    }
+    fn reconcile_panes(&mut self) -> Result<()> {
+        let mut replacements = Vec::new();
+        for (index, pane) in self.panes.iter().enumerate() {
+            if let Some(canonical) = self
+                .tab_by_id(&pane.document_id)
+                .and_then(|tab| tab.editor.as_ref())
+            {
+                if !canonical.same_document(&pane.editor) {
+                    replacements.push((index, canonical.split_view()?));
+                }
+            }
+        }
+        for (index, editor) in replacements {
+            self.panes[index].editor = editor;
+        }
+        Ok(())
+    }
+    fn configure_panes(&self) {
+        for pane in &self.panes {
+            if let Some(tab) = self.tab_by_id(&pane.document_id) {
+                pane.editor.set_visible(true);
+                pane.editor
+                    .set_autocomplete_enabled(self.prefs.autocomplete);
+                let language = tab
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor.display_state().completion_language)
+                    .unwrap_or_default();
+                pane.editor.set_completion_language(Some(language));
+                pane.editor.set_auto_links(self.prefs.automatic_links);
+                pane.editor.set_wrap(tab.word_wrap);
+                pane.editor.set_wrap_to_page(tab.wrap_page);
+                pane.editor.set_zoom(tab.zoom);
+                pane.editor.set_background(tab.paper);
+                let ink = tab
+                    .highlighter
+                    .as_ref()
+                    .map(|h| h.colors().1)
+                    .or_else(|| (tab.paper != 0xffffff).then_some(DARK_TEXT));
+                let _ = pane.editor.set_text_override(ink);
+                pane.editor
+                    .set_read_only(tab.read_only || tab.markdown_source.is_some());
+                pane.editor.set_line_numbers(
+                    self.prefs.show_line_numbers,
+                    &self.prefs.line_number_font,
+                    self.prefs.line_number_size,
+                    self.prefs.line_number_width,
+                );
+            }
+        }
     }
     fn is_dark(&self, _window: &Window) -> bool {
         match self.prefs.appearance {
@@ -1449,35 +1724,59 @@ impl EditorWindow {
     /// Applies the document background, text color, and code coloring when the
     /// appearance, the dark-document preference, or the code theme changed.
     fn refresh_look(&mut self, window: &Window) -> Result<()> {
-        let editor = self.editor()?;
-        editor.set_autocomplete_enabled(self.prefs.autocomplete);
         let dark_paper = self.is_dark(window) && self.prefs.dark_documents;
         let theme = self
             .preview_theme
             .as_ref()
             .unwrap_or(&self.prefs.code_theme)
             .clone();
-        let key = (dark_paper, theme.clone());
-        if self.doc.look.as_ref() == Some(&key) {
+        Self::apply_document_look(&mut self.doc, self.prefs.autocomplete, dark_paper, &theme)?;
+        for tab in self.tabs.iter_mut().flatten() {
+            if self
+                .panes
+                .iter()
+                .any(|pane| pane.document_id == tab.recovery_id)
+            {
+                Self::apply_document_look(
+                    tab,
+                    self.prefs.autocomplete,
+                    dark_paper,
+                    &self.prefs.code_theme,
+                )?;
+            }
+        }
+        self.configure_panes();
+        Ok(())
+    }
+    fn apply_document_look(
+        tab: &mut DocumentTab,
+        autocomplete: bool,
+        dark_paper: bool,
+        theme: &str,
+    ) -> Result<()> {
+        let editor = tab
+            .editor
+            .as_ref()
+            .context("The document editor is unavailable")?;
+        editor.set_autocomplete_enabled(autocomplete);
+        let key = (dark_paper, theme.to_owned());
+        if tab.look.as_ref() == Some(&key) {
             return Ok(());
         }
-        // Set first so a failure is reported once, not on every tick.
-        self.doc.look = Some(key);
-        let editor = self.editor()?;
-        let syntax = if self.doc.rich || self.doc.markdown_source.is_some() {
+        tab.look = Some(key);
+        let syntax = if tab.rich || tab.markdown_source.is_some() {
             None
         } else {
-            self.doc.path.as_deref().and_then(|path| {
-                syntax::detect(path, self.doc.last_text.lines().next().unwrap_or(""))
-            })
+            tab.path
+                .as_deref()
+                .and_then(|path| syntax::detect(path, tab.last_text.lines().next().unwrap_or("")))
         };
-        if self.doc.highlighter.take().is_some() {
+        if tab.highlighter.take().is_some() {
             editor.clear_spans()?;
         }
         editor.set_completion_language(syntax.clone());
-        self.doc.highlighter =
-            syntax.map(|syntax| CodeHighlighter::new(syntax, &theme, dark_paper));
-        let (paper, text) = match &self.doc.highlighter {
+        tab.highlighter = syntax.map(|syntax| CodeHighlighter::new(syntax, theme, dark_paper));
+        let (paper, text) = match &tab.highlighter {
             Some(highlighter) => {
                 let (background, foreground) = highlighter.colors();
                 (background, Some(foreground))
@@ -1489,8 +1788,13 @@ impl EditorWindow {
         };
         editor.set_background(paper);
         editor.set_text_override(text)?;
-        self.doc.paper = paper;
-        self.highlight(&editor)
+        tab.paper = paper;
+        if let Some(highlighter) = &mut tab.highlighter {
+            if tab.last_text.len() <= syntax::MAX_BYTES {
+                editor.apply_spans(&highlighter.all_spans(&tab.last_text))?;
+            }
+        }
+        Ok(())
     }
     /// Colors the lines that changed since the last call.
     fn highlight(&mut self, editor: &Editor) -> Result<()> {
@@ -1618,7 +1922,7 @@ impl EditorWindow {
         self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
-        self.doc.codec_import = false;
+        self.doc.codec_import = !loaded.format.is_plain();
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
@@ -1637,13 +1941,23 @@ impl EditorWindow {
         while let Some(command) = { self.queue.borrow_mut().pop_front() } {
             self.command(command, window, cx);
         }
-        let Some(editor) = self.doc.editor.clone() else {
+        if let Err(error) = self.sync_focused_pane() {
+            show_error(&error);
+        }
+        self.configure_panes();
+        let Ok(editor) = self.editor() else {
             return;
         };
+        editor.set_line_numbers(
+            self.prefs.show_line_numbers,
+            &self.prefs.line_number_font,
+            self.prefs.line_number_size,
+            self.prefs.line_number_width,
+        );
         while let Some(error) = editor.take_error() {
             show_error(&anyhow::anyhow!(error));
         }
-        let Some(editor) = self.doc.editor.clone() else {
+        let Ok(editor) = self.editor() else {
             return;
         };
         editor.set_wrap(self.doc.word_wrap);
@@ -1778,6 +2092,7 @@ impl EditorWindow {
             self.doc.ruler,
             self.doc.zoom
         );
+        let stamp = format!("{stamp}:{}", self.pending_opens);
         if self.ui_stamp != stamp {
             let mut attributes = WindowAttributes::default();
             attributes.title = Some(format!(
@@ -2068,24 +2383,10 @@ impl EditorWindow {
         }
     }
     fn switch_tab(&mut self, index: usize) -> Result<()> {
-        ensure!(
-            index < self.tabs.len(),
-            "That document tab is no longer open"
-        );
-        if index == self.active_tab {
-            return Ok(());
-        }
-        self.doc.queue_buffer()?;
-        let next = self.tabs[index]
-            .take()
-            .context("The document tab is unavailable")?;
-        if let Some(editor) = &self.doc.editor {
-            editor.set_visible(false);
-        }
-        let previous = std::mem::replace(&mut self.doc, next);
-        self.tabs[self.active_tab] = Some(previous);
-        self.active_tab = index;
-        if let Some(editor) = &self.doc.editor {
+        self.swap_current_tab(index)?;
+        if self.split_layout != crate::panes::Layout::Single {
+            self.assign_pane(self.active_pane, index)?;
+        } else if let Some(editor) = &self.doc.editor {
             editor.set_visible(true);
             editor.focus();
         }
@@ -2119,18 +2420,35 @@ impl EditorWindow {
     fn open_file_tab(
         &mut self,
         path: &Path,
-        window: &mut Window,
-        cx: &mut AppContext,
+        _window: &mut Window,
+        _cx: &mut AppContext,
     ) -> Result<()> {
-        if let Some(index) = self.tab_for_path(path) {
-            return self.switch_tab(index);
-        }
-        // Verify that the path can be read before creating a new tab or touching existing text.
-        let loaded = self.load_file(path)?;
-        if !self.can_reuse_empty_tab()? {
-            self.new_tab(window, cx)?;
-        }
-        self.load_document(loaded)
+        let path = path.to_owned();
+        let encoding = self.prefs.default_encoding;
+        let queue = self.queue.clone();
+        self.pending_opens += 1;
+        spawn(async move {
+            let result = smol::unblock(move || {
+                let format = DocumentFormat::from_path(&path)?;
+                ensure!(
+                    document::supports_format(format),
+                    "This document format is unsupported."
+                );
+                document::load(&path).or_else(|error| {
+                    if format.is_plain() && encoding != TextEncoding::Utf8 {
+                        document::load_with_encoding(&path, encoding)
+                    } else {
+                        Err(error)
+                    }
+                })
+            })
+            .await;
+            enqueue(
+                &queue,
+                Command::OpenResult(result.map(Box::new).map_err(|e| format!("{e:#}"))),
+            );
+        });
+        Ok(())
     }
     fn can_reuse_empty_tab(&self) -> Result<bool> {
         if self.tabs.len() != 1
@@ -2146,6 +2464,12 @@ impl EditorWindow {
         Ok(!editor.is_modified() && editor.text()?.is_empty())
     }
     fn take_transfer(&mut self, scope: TransferScope) -> (Vec<DocumentTab>, usize) {
+        if let (Ok(active), Some(canonical)) = (self.editor(), self.doc.editor.as_ref()) {
+            let _ = canonical.copy_selection_from(&active);
+        }
+        self.panes.clear();
+        self.split_layout = crate::panes::Layout::Single;
+        self.active_pane = 0;
         if scope == TransferScope::AllTabs || self.tabs.len() == 1 {
             let current = std::mem::replace(&mut self.doc, DocumentTab::vacant(&self.prefs));
             let active = self.active_tab;
@@ -2232,6 +2556,7 @@ impl EditorWindow {
         if !self.confirm_current()? {
             return Ok(());
         }
+        self.set_split(crate::panes::Layout::Single, true)?;
         if let Some(path) = self.doc.path.clone() {
             let mut closed = cx.workspace.closed.borrow_mut();
             closed.push(path);
@@ -2283,7 +2608,11 @@ impl EditorWindow {
         if let Err(error) = self.try_command(command, window, cx) {
             show_error(&error);
         }
-        if let Some(editor) = &self.doc.editor {
+        if let Err(error) = self.reconcile_panes() {
+            show_error(&error);
+        }
+        self.configure_panes();
+        if let Ok(editor) = self.editor() {
             editor.restore_focus();
         }
         cx.notify();
@@ -2294,7 +2623,24 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut AppContext,
     ) -> Result<()> {
+        if !matches!(command, Command::FocusPane(_)) {
+            self.sync_focused_pane()?;
+        }
         match command {
+            Command::SetSplit(layout, same) => self.set_split(layout, same)?,
+            Command::FocusPane(index) => self.focus_pane(index)?,
+            Command::PaneDocument(pane, tab) => self.assign_pane(pane, tab)?,
+            Command::ToggleLineNumbers => {
+                self.prefs.show_line_numbers = !self.prefs.show_line_numbers;
+                self.prefs.save()?;
+                self.configure_panes();
+                self.editor()?.set_line_numbers(
+                    self.prefs.show_line_numbers,
+                    &self.prefs.line_number_font,
+                    self.prefs.line_number_size,
+                    self.prefs.line_number_width,
+                );
+            }
             Command::ReopenClosed => {
                 let path = cx.workspace.closed.borrow_mut().pop();
                 if let Some(path) = path {
@@ -2648,6 +2994,21 @@ impl EditorWindow {
                 }
             }
             Command::OpenPath(path) => self.open_file_tab(&path, window, cx)?,
+            Command::OpenResult(result) => {
+                self.pending_opens = self.pending_opens.saturating_sub(1);
+                let loaded = result.map_err(anyhow::Error::msg)?;
+                if let Some(index) = self.tab_for_path(&loaded.path) {
+                    self.switch_tab(index)?;
+                } else {
+                    if !self.can_reuse_empty_tab()? {
+                        self.new_tab(window, cx)?;
+                    }
+                    self.load_document(*loaded)?;
+                    if self.split_layout != crate::panes::Layout::Single {
+                        self.assign_pane(self.active_pane, self.active_tab)?;
+                    }
+                }
+            }
             Command::Save => {
                 self.save(false)?;
             }
@@ -2733,12 +3094,23 @@ impl EditorWindow {
                 }
             }
             Command::Print => {
-                let document = std::sync::Arc::new(self.editor()?.document_snapshot()?);
+                let state = self.editor()?.native_session().state();
+                let plain = self.editor()?.output_plain_style();
                 let page = self.doc.page.clone();
                 let queue = self.queue.clone();
                 spawn(async move {
-                    let command = match smol::unblock(crate::editor::printing::printers).await {
-                        Ok(printers) if !printers.is_empty() => Command::ChoosePrinter {
+                    let result = smol::unblock(move || {
+                        let printers = crate::editor::printing::printers()?;
+                        let document = std::sync::Arc::new(crate::editor::snapshot_document(
+                            state.doc(),
+                            page.clone(),
+                            plain,
+                        )?);
+                        Ok::<_, anyhow::Error>((printers, document, page))
+                    })
+                    .await;
+                    let command = match result {
+                        Ok((printers, document, page)) if !printers.is_empty() => Command::ChoosePrinter {
                             printers: printers.into_iter().map(|printer| (printer.name, printer.is_default)).collect(),
                             document, page,
                         },
@@ -2803,7 +3175,24 @@ impl EditorWindow {
                     .add_filter("PDF Document", &["pdf"])
                     .save_file()
                 {
-                    self.editor()?.export_pdf(&path, &self.doc.page)?;
+                    let state = self.editor()?.native_session().state();
+                    let plain = self.editor()?.output_plain_style();
+                    let page = self.doc.page.clone();
+                    let queue = self.queue.clone();
+                    spawn(async move {
+                        let result = smol::unblock(move || {
+                            let snapshot =
+                                crate::editor::snapshot_document(state.doc(), page.clone(), plain)?;
+                            crate::editor::printing::export_pdf(&snapshot, &path, &page)
+                        })
+                        .await;
+                        if let Err(error) = result {
+                            enqueue(
+                                &queue,
+                                Command::ReportError(format!("Exporting PDF: {error:#}")),
+                            );
+                        }
+                    });
                 }
             }
             Command::PageSetup => self.show_form(
@@ -3466,6 +3855,19 @@ impl EditorWindow {
                         "Window control position must be between 0% and 100%"
                     );
                 }
+                if let Some(show) = values.get(18) {
+                    prefs.show_line_numbers = show == "true";
+                }
+                if let Some(font) = values.get(19) {
+                    prefs.line_number_font = font.trim().into();
+                }
+                if let Some(size) = values.get(20) {
+                    prefs.line_number_size = size.parse()?;
+                }
+                if let Some(width) = values.get(21) {
+                    prefs.line_number_width = width.parse()?;
+                }
+                prefs.validate_line_numbers()?;
                 prefs.save()?;
                 // Apply the same persisted appearance and title-bar layout to existing windows.
                 for entry in cx
@@ -3476,6 +3878,10 @@ impl EditorWindow {
                     .filter(|entry| entry.id != cx.id)
                 {
                     let mut other = entry.model.borrow_mut();
+                    other.prefs.show_line_numbers = prefs.show_line_numbers;
+                    other.prefs.line_number_font = prefs.line_number_font.clone();
+                    other.prefs.line_number_size = prefs.line_number_size;
+                    other.prefs.line_number_width = prefs.line_number_width;
                     other.prefs.appearance = prefs.appearance;
                     other.prefs.window_controls = prefs.window_controls;
                     other.prefs.window_controls_percent = prefs.window_controls_percent;
@@ -3899,9 +4305,69 @@ impl EditorWindow {
                 item("Zoom In", crate::keyboard::label("zoom-in"), C::Zoom(10)),
                 item("Zoom Out", crate::keyboard::label("zoom-out"), C::Zoom(-10)),
                 sep(),
+                item("Show Line Numbers", "", C::ToggleLineNumbers)
+                    .checked(self.prefs.show_line_numbers),
+                item("Split View", "›", C::Menu(M::SplitView)),
                 item("Interface Size", "›", C::Menu(M::InterfaceSize)),
             ])
             .collect(),
+            M::SplitView => {
+                let mut entries = vec![
+                    item(
+                        "Single View",
+                        "",
+                        C::SetSplit(crate::panes::Layout::Single, true),
+                    )
+                    .checked(self.split_layout == crate::panes::Layout::Single),
+                    sep(),
+                ];
+                for same in [true, false] {
+                    for layout in [
+                        crate::panes::Layout::Columns2,
+                        crate::panes::Layout::Rows2,
+                        crate::panes::Layout::Columns3,
+                        crate::panes::Layout::Rows3,
+                        crate::panes::Layout::Grid4,
+                        crate::panes::Layout::Columns4,
+                        crate::panes::Layout::Rows4,
+                    ] {
+                        entries.push(item(
+                            &format!(
+                                "{}: {}",
+                                if same { "Same Document" } else { "Open Tabs" },
+                                layout.label()
+                            ),
+                            "",
+                            C::SetSplit(layout, same),
+                        ));
+                    }
+                    entries.push(sep());
+                }
+                entries
+            }
+            M::PaneTabs(pane) => self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| {
+                    let tab = if index == self.active_tab {
+                        &self.doc
+                    } else {
+                        tab.as_ref().expect("inactive document")
+                    };
+                    let label = tab
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| tab.untitled_name.clone());
+                    item(&label, "", C::PaneDocument(pane, index)).checked(
+                        self.panes
+                            .get(pane)
+                            .is_some_and(|p| p.document_id == tab.recovery_id),
+                    )
+                })
+                .collect(),
             M::CodeTheme => std::iter::once(syntax::AUTOMATIC)
                 .chain(syntax::THEMES.iter().map(|&(name, _)| name))
                 .map(|name| {
@@ -4211,7 +4677,9 @@ impl DocumentTab {
     fn canonical_editor(&self) -> Option<&Rc<Editor>> {
         self.markdown_source.as_ref().or(self.editor.as_ref())
     }
-    fn snapshot(&mut self) -> Result<Option<RecoveryDocument>> {
+    fn snapshot_builder(
+        &mut self,
+    ) -> Result<Option<Box<dyn FnOnce() -> Result<RecoveryDocument> + Send>>> {
         if !self.retain_buffer {
             return Ok(None);
         }
@@ -4229,26 +4697,39 @@ impl DocumentTab {
             self.buffer_lease.is_some(),
             "Another ExEditor instance owns this unsaved buffer; save a copy before closing."
         );
-        let content = if self.markdown_source.is_some() || !self.rich {
-            DocumentContent::Plain(editor.text()?)
-        } else {
-            DocumentContent::Rich(editor.rtf()?)
-        };
-        Ok(Some(RecoveryDocument {
-            id: self.recovery_id.clone(),
-            untitled_name: Some(self.untitled_name.clone()),
-            original_path: self.path.clone(),
-            format: self.format,
-            content,
-            editor_snapshot: None,
-            nsh_snapshot: editor
-                .snapshot()
-                .map(|bytes| serde_json::from_slice(&bytes))
-                .transpose()?,
-            encoding: self.encoding,
-            line_ending: self.line_ending,
-            saved_at: chrono::Local::now().to_rfc3339(),
-        }))
+        let native = editor.native_session().state().doc().clone();
+        let page = editor.page_settings();
+        let plain = self.markdown_source.is_some() || !self.rich;
+        let id = self.recovery_id.clone();
+        let untitled_name = self.untitled_name.clone();
+        let path = self.path.clone();
+        let format = self.format;
+        let encoding = self.encoding;
+        let line_ending = self.line_ending;
+        Ok(Some(Box::new(move || {
+            let content = if plain {
+                use nsh_base::rich_editor::formats::{DocFormat, PlainTextFormat};
+                DocumentContent::Plain(PlainTextFormat::default().serialize(&native)?)
+            } else {
+                let doc = crate::formats::RichDocument {
+                    html: nsh_base::rich_editor::formats::doc_to_html(&native),
+                    page: page.clone(),
+                };
+                DocumentContent::Rich(crate::formats::export_rtf(&doc)?)
+            };
+            Ok(RecoveryDocument {
+                id,
+                untitled_name: Some(untitled_name),
+                original_path: path,
+                format,
+                content,
+                editor_snapshot: None,
+                nsh_snapshot: Some(serde_json::json!({"doc":native.to_json(),"page":page})),
+                encoding,
+                line_ending,
+                saved_at: chrono::Local::now().to_rfc3339(),
+            })
+        })))
     }
     fn poll_buffer(&mut self) -> Result<()> {
         use std::sync::mpsc::TryRecvError;
@@ -4283,13 +4764,13 @@ impl DocumentTab {
         if self.pending_buffer.is_some() {
             return Ok(());
         }
-        if let Some(snapshot) = self.snapshot()? {
+        if let Some(builder) = self.snapshot_builder()? {
             let lease = self
                 .buffer_lease
                 .as_ref()
                 .context("The buffer lease is missing")?
                 .clone();
-            self.pending_buffer = Some(session::queue_recovery(snapshot, lease));
+            self.pending_buffer = Some(session::queue_recovery_with(builder, lease));
             if let Some(editor) = self.canonical_editor() {
                 editor.acknowledge_buffered_changes();
             }
@@ -4303,16 +4784,10 @@ impl DocumentTab {
         document::remove_recovery(&self.recovery_id)
     }
     fn persist_buffer(&mut self) -> Result<()> {
-        let _ = self.finish_buffer();
-        if let Some(snapshot) = self.snapshot()? {
-            document::write_recovery(&snapshot)?;
-            if let Some(editor) = self.canonical_editor() {
-                editor.acknowledge_buffered_changes();
-            }
-            self.buffered = true;
-            self.buffer_error_reported = false;
-            self.last_recovery = Instant::now();
-        }
+        self.finish_buffer()?;
+        self.queue_buffer()?;
+        self.finish_buffer()?;
+        self.buffer_error_reported = false;
         Ok(())
     }
     fn name(&self) -> String {
@@ -4327,7 +4802,8 @@ impl DocumentTab {
 #[cfg(test)]
 mod window_tests {
     use super::{DocumentTab, EditorWindow, TransferScope};
-    use crate::{preferences::Preferences, services::Speech};
+    use crate::{editor::Editor, preferences::Preferences, services::Speech};
+    use std::rc::Rc;
 
     fn window_with_tabs(names: &[&str], active: usize) -> EditorWindow {
         let prefs = Preferences::default();
@@ -4355,6 +4831,10 @@ mod window_tests {
             preview_theme: None,
             chord: crate::keyboard::State::default(),
             ui_stamp: String::new(),
+            split_layout: crate::panes::Layout::Single,
+            panes: Vec::new(),
+            active_pane: 0,
+            pending_opens: 0,
         }
     }
     fn names(window: &EditorWindow) -> Vec<String> {
@@ -4374,6 +4854,40 @@ mod window_tests {
             })
             .collect()
     }
+    #[test]
+    fn split_routing_keeps_tab_identity_and_independent_views() {
+        use crate::panes::Layout;
+        let mut window = window_with_tabs(&["one", "two", "three", "four"], 0);
+        for tab in std::iter::once(&mut window.doc).chain(window.tabs.iter_mut().flatten()) {
+            let editor = Rc::new(Editor::new().unwrap());
+            editor.set_text(&tab.last_text).unwrap();
+            tab.editor = Some(editor);
+        }
+        window.set_split(Layout::Columns2, true).unwrap();
+        assert_eq!(window.panes.len(), 2);
+        assert!(window.panes.iter().all(|pane| pane.document_id == "one"));
+        assert!(!Rc::ptr_eq(
+            &window.panes[0].editor,
+            &window.panes[1].editor
+        ));
+        window.assign_pane(1, 1).unwrap();
+        assert_eq!(window.doc.recovery_id, "two");
+        assert_eq!(window.active_pane, 1);
+        assert_eq!(window.panes[0].document_id, "one");
+        window.editor().unwrap().select_range(0..7).unwrap();
+        window.set_split(Layout::Single, true).unwrap();
+        assert!(window.panes.is_empty());
+        assert_eq!(window.editor().unwrap().selected_text().unwrap(), "unsaved");
+        window.set_split(Layout::Grid4, false).unwrap();
+        let ids: std::collections::HashSet<_> = window
+            .panes
+            .iter()
+            .map(|pane| pane.document_id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(names(&window), ["one", "two", "three", "four"]);
+    }
+
     #[test]
     fn only_a_single_pristine_empty_tab_can_be_reused_for_open() {
         let mut window = window_with_tabs(&["empty"], 0);

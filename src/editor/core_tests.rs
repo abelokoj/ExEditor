@@ -313,3 +313,70 @@ fn font_attributes_accept_numeric_sizes_and_strip_css_family_quotes() {
     editor.set_plain_text_mode(true).unwrap();
     assert_eq!(editor.formatting().size, 12.);
 }
+
+#[test]
+fn selections_reuse_the_document_text_map_and_preserve_snapshots() {
+    let editor = Editor::new().unwrap();
+    editor.set_text(&"A😀 café\n".repeat(1000)).unwrap();
+    editor.mark_saved();
+    let first = editor.map();
+    let snapshot = editor.snapshot();
+    for range in [0..1, 1..3, 4..8, 0..8000] {
+        editor.select_range(range).unwrap();
+        assert!(Arc::ptr_eq(&first, &editor.map()));
+    }
+    assert_eq!(snapshot, editor.snapshot());
+    assert!(!editor.is_modified());
+    editor.select_range(0..1).unwrap();
+    editor.replace_current("B").unwrap();
+    assert!(!Arc::ptr_eq(&first, &editor.map()));
+}
+
+#[test]
+fn native_split_views_share_edits_format_and_history_but_keep_selections() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("A😀 café").unwrap();
+    editor.mark_saved();
+    let peer = editor.split_view().unwrap();
+    assert!(editor.same_document(&peer));
+    editor.select_range(0..1).unwrap();
+    peer.select_range(4..8).unwrap();
+    assert_eq!(editor.selected_text().unwrap(), "A");
+    assert_eq!(peer.selected_text().unwrap(), "café");
+    peer.replace_current("tea").unwrap();
+    assert_eq!(editor.text().unwrap(), "A😀 tea");
+    assert_eq!(peer.text().unwrap(), editor.text().unwrap());
+    editor.execute(EditCommand::Undo).unwrap();
+    assert_eq!(peer.text().unwrap(), "A😀 café");
+    peer.set_plain_text_mode(true).unwrap();
+    assert!(editor.is_plain());
+    peer.execute(EditCommand::FontSize(18.)).unwrap();
+    assert_eq!(editor.formatting().size, 18.);
+    assert_eq!(peer.snapshot(), editor.snapshot());
+}
+
+#[test]
+fn line_number_settings_never_change_document_or_undo_content() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("one\ntwo\n").unwrap();
+    editor.mark_saved();
+    let snapshot = editor.snapshot();
+    let lines = editor.logical_line_positions();
+    assert_eq!(lines.len(), 3);
+    editor.set_line_numbers(true, "Inter", 16., 72.);
+    assert_eq!(snapshot, editor.snapshot());
+    assert!(!editor.is_modified());
+    assert!(Arc::ptr_eq(&lines, &editor.logical_line_positions()));
+}
+
+#[test]
+fn plain_output_preserves_spaces_tabs_and_chosen_font_size() {
+    let editor = Editor::new().unwrap();
+    editor.set_plain_text_mode(true).unwrap();
+    editor.set_text("  indented\tvalue\nnext").unwrap();
+    editor.execute(EditCommand::FontSize(14.)).unwrap();
+    let snapshot = editor.document_snapshot().unwrap();
+    assert!(snapshot.html.contains("white-space:pre-wrap"));
+    assert!(snapshot.html.contains("font-size:14pt"));
+    assert!(snapshot.html.contains("  indented\tvalue"));
+}

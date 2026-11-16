@@ -110,7 +110,7 @@ pub struct FileFingerprint {
 pub struct LoadedDocument {
     pub content: DocumentContent,
     pub path: PathBuf,
-    pub editor_snapshot: Option<wordcraft_doc::Document>,
+    pub editor_snapshot: Option<crate::formats::RichDocument>,
     pub format: DocumentFormat,
     pub encoding: TextEncoding,
     pub line_ending: LineEnding,
@@ -165,7 +165,7 @@ fn load_using_encoding(
         ),
         _ => {
             let imported = crate::formats::import(&path, format)?;
-            let converted = wordcraft_formats::rtf::export(&imported).into_bytes();
+            let converted = crate::formats::export_rtf(&imported)?;
             editor_snapshot = Some(imported);
             validate_rtf(&converted)?;
             (
@@ -206,7 +206,7 @@ pub fn save_with_document(
     content: &DocumentContent,
     encoding: TextEncoding,
     line_ending: LineEnding,
-    editor_snapshot: Option<&wordcraft_doc::Document>,
+    editor_snapshot: Option<&crate::formats::RichDocument>,
 ) -> Result<FileFingerprint> {
     let existed = path.try_exists()?;
     let before = existed.then(|| fingerprint(path)).transpose()?;
@@ -589,9 +589,13 @@ pub struct RecoveryDocument {
     pub original_path: Option<PathBuf>,
     pub format: DocumentFormat,
     pub content: DocumentContent,
-    /// Complete WordCraft model; older recovery snapshots fall back to their text/RTF.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub editor_snapshot: Option<wordcraft_doc::Document>,
+    /// Earlier snapshots also carry text/RTF; obsolete model payloads use that safe fallback.
+    #[serde(
+        default,
+        deserialize_with = "read_interchange_snapshot",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub editor_snapshot: Option<crate::formats::RichDocument>,
     /// Native nsh model; a separate field preserves recovery of older WordCraft buffers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nsh_snapshot: Option<serde_json::Value>,
@@ -600,6 +604,18 @@ pub struct RecoveryDocument {
     pub saved_at: String,
     #[serde(default)]
     pub untitled_name: Option<String>,
+}
+
+fn read_interchange_snapshot<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<crate::formats::RichDocument>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() || value.get("html").is_none() {
+        return Ok(None);
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 pub(crate) fn validate_recovery_id(id: &str) -> Result<()> {

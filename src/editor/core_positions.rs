@@ -1,12 +1,15 @@
 //! UTF-16 application coordinates mapped to NSH's structural document positions.
 use anyhow::{Result, ensure};
 use nsh_base::rich_editor::model::Node;
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 pub(super) struct TextMap {
     pub text: String,
     positions: Vec<Option<usize>>,
     started: bool,
+    by_position: Vec<(usize, usize)>,
+    bytes: Vec<Option<usize>>,
+    pub line_starts: Arc<Vec<usize>>,
 }
 impl TextMap {
     pub fn new(doc: &Node) -> Self {
@@ -14,8 +17,34 @@ impl TextMap {
             text: String::new(),
             positions: vec![Some(1)],
             started: false,
+            by_position: Vec::new(),
+            bytes: Vec::new(),
+            line_starts: Arc::new(Vec::new()),
         };
         map.blocks(doc, 0, false);
+        map.by_position = map
+            .positions
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, pos)| pos.map(|pos| (pos, offset)))
+            .collect();
+        map.by_position.sort_unstable();
+        map.bytes.push(Some(0));
+        let mut lines = vec![map.position(0).unwrap_or(1)];
+        let mut units = 0;
+        for (byte, ch) in map.text.char_indices() {
+            if ch.len_utf16() == 2 {
+                map.bytes.push(None);
+            }
+            map.bytes.push(Some(byte + ch.len_utf8()));
+            units += ch.len_utf16();
+            if ch == '\n' {
+                if let Ok(pos) = map.position(units) {
+                    lines.push(pos);
+                }
+            }
+        }
+        map.line_starts = Arc::new(lines);
         map
     }
     fn separator(&mut self, separator: char) {
@@ -92,34 +121,37 @@ impl TextMap {
             })
     }
     pub fn offset(&self, pos: usize) -> usize {
-        self.positions
-            .iter()
-            .enumerate()
-            .filter_map(|(offset, p)| p.map(|p| (offset, p.abs_diff(pos))))
-            .min_by_key(|(_, distance)| *distance)
-            .map_or(0, |(offset, _)| offset)
+        let index = self.by_position.partition_point(|&(p, _)| p < pos);
+        let right = self.by_position.get(index).copied();
+        let left = index.checked_sub(1).map(|previous| {
+            let p = self.by_position[previous].0;
+            self.by_position[self
+                .by_position
+                .partition_point(|&(candidate, _)| candidate < p)]
+        });
+        left.into_iter()
+            .chain(right)
+            .min_by_key(|&(p, offset)| (p.abs_diff(pos), offset))
+            .map_or(0, |(_, offset)| offset)
     }
     pub fn slice(&self, range: Range<usize>) -> Result<&str> {
         ensure!(range.start <= range.end, "the selection is reversed");
-        let start = utf16_to_byte(&self.text, range.start).ok_or_else(|| {
-            anyhow::anyhow!("the selection starts inside a character or outside the document")
-        })?;
-        let end = utf16_to_byte(&self.text, range.end).ok_or_else(|| {
-            anyhow::anyhow!("the selection ends inside a character or outside the document")
-        })?;
+        let start = self
+            .bytes
+            .get(range.start)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                anyhow::anyhow!("the selection starts inside a character or outside the document")
+            })?;
+        let end = self
+            .bytes
+            .get(range.end)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                anyhow::anyhow!("the selection ends inside a character or outside the document")
+            })?;
         Ok(&self.text[start..end])
     }
-}
-pub(super) fn utf16_to_byte(text: &str, offset: usize) -> Option<usize> {
-    let mut units = 0;
-    for (byte, ch) in text.char_indices() {
-        if units == offset {
-            return Some(byte);
-        }
-        units += ch.len_utf16();
-        if units > offset {
-            return None;
-        }
-    }
-    (units == offset).then_some(text.len())
 }

@@ -101,6 +101,7 @@ jobs:
         run: |
           cargo update --workspace 2>&1 | Tee-Object -FilePath logs/lockfile.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -Path Cargo.lock -Pattern 'name = "wordcraft|github.com/storytold/wordcraft' -Quiet) { throw 'WordCraft must not appear in the resolved dependency graph.' }
 
       - name: Check formatting
         run: |
@@ -342,7 +343,10 @@ jobs:
           cache-on-failure: true
       - name: Resolve source dependency changes
         shell: bash
-        run: set -o pipefail; cargo update --workspace 2>&1 | tee logs/lockfile.log
+        run: |
+          set -o pipefail
+          cargo update --workspace 2>&1 | tee logs/lockfile.log
+          if rg -q 'name = "wordcraft|github.com/storytold/wordcraft' Cargo.lock; then echo 'WordCraft remains in the resolved dependency graph'; exit 1; fi
       - name: Check formatting
         shell: bash
         run: set -o pipefail; cargo fmt --all -- --check 2>&1 | tee logs/format.log

@@ -2,10 +2,7 @@
 use crate::accessories::{FontFiles, FontPack};
 use anyhow::{Context as _, Result};
 use nsh_core::element::Root;
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, AtomicU8, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 pub const RICH_FONT: &str = "Pretendard Std";
 pub const PLAIN_FONT: &str = "Maple Mono NF";
@@ -18,8 +15,6 @@ pub const SYSTEM_PLAIN_FONT: &str = "Menlo";
 pub const SYSTEM_PLAIN_FONT: &str = "DejaVu Sans Mono";
 static AVAILABLE: AtomicU8 = AtomicU8::new(0);
 static ACCESSORIES_REGISTERED: AtomicBool = AtomicBool::new(false);
-static EXPORT_REGISTERED: Mutex<u8> = Mutex::new(0);
-const EXPORT_INTER: u8 = 8;
 const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/inter/Inter-Regular.ttf"),
     include_bytes!("../assets/fonts/inter/Inter-Italic.ttf"),
@@ -33,14 +28,6 @@ fn pack_bit(id: &str) -> u8 {
         "maple-mono-nf" => 2,
         "noto-color-emoji" => 4,
         _ => 0,
-    }
-}
-fn pack_family(id: &str) -> Option<&'static str> {
-    match id {
-        "pretendard-std" => Some(RICH_FONT),
-        "maple-mono-nf" => Some(PLAIN_FONT),
-        "noto-color-emoji" => Some("Noto Color Emoji"),
-        _ => None,
     }
 }
 pub fn accessory_available(id: &str) -> bool {
@@ -100,43 +87,15 @@ pub async fn register_accessory(pack: &FontPack, files: FontFiles) -> Result<()>
     Ok(())
 }
 
-/// Loads codec fonts only when PDF layout/export is requested. These process-private
-/// faces never replace the native editor, and no system font installation occurs.
-pub fn register_export_fonts() -> Result<()> {
-    let mut registered = EXPORT_REGISTERED
-        .lock()
-        .map_err(|_| anyhow::anyhow!("PDF font registration was interrupted."))?;
-    let database = wordcraft_fonts::FontDb::global();
-    if *registered & EXPORT_INTER == 0 {
-        database.add_document_fonts(
-            FONTS
-                .iter()
-                .map(|bytes| (bytes.to_vec(), INTER_FONT.to_owned()))
-                .collect(),
-        );
-        *registered |= EXPORT_INTER;
-    }
+/// Provides verified, process-private fonts to the independent print worker.
+pub fn export_font_data() -> Result<Vec<Vec<u8>>> {
+    let mut fonts: Vec<Vec<u8>> = FONTS.iter().map(|bytes| bytes.to_vec()).collect();
     for pack in &crate::accessories::manifest().packs {
-        let bit = pack_bit(&pack.id);
-        if bit == 0 || *registered & bit != 0 {
-            continue;
-        }
         if let Some(files) = crate::accessories::read_pack(pack)
             .with_context(|| format!("Verifying {} for PDF output", pack.name))?
         {
-            let family = pack_family(&pack.id).context("Unknown PDF font accessory")?;
-            // The codec treats the second tuple member as a family alias, not a
-            // file name. Keep the same family names as the native document marks.
-            database.add_document_fonts(
-                files
-                    .into_iter()
-                    .map(|(bytes, _)| (bytes, family.to_owned()))
-                    .collect(),
-            );
-            *registered |= bit;
+            fonts.extend(files.into_iter().map(|(bytes, _)| bytes));
         }
-        // Missing packs remain unmarked: a later user download can be loaded by
-        // the next export without restarting or touching the native session.
     }
-    Ok(())
+    Ok(fonts)
 }

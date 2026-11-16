@@ -4,7 +4,7 @@
 use super::Editor;
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
-#[cfg(target_os = "windows")]
+#[cfg(any(windows, test))]
 use std::io::Cursor;
 use std::{cell::RefCell, io::Read as _, path::PathBuf};
 
@@ -44,6 +44,81 @@ fn utf8(bytes: Vec<u8>) -> Result<String> {
         "Clipboard text contains an embedded NUL."
     );
     Ok(text.to_owned())
+}
+
+#[cfg(any(windows, test))]
+fn dib_png(dib: &[u8]) -> Result<Vec<u8>> {
+    ensure!(
+        dib.len() >= 12 && dib.len() <= MAX_IMAGE_BYTES,
+        "The clipboard bitmap is truncated or too large."
+    );
+    let header = u32::from_le_bytes(dib[0..4].try_into()?) as usize;
+    ensure!(
+        header == 12 || (40..=124).contains(&header),
+        "The clipboard bitmap header is unsupported."
+    );
+    ensure!(
+        dib.len() >= header,
+        "The clipboard bitmap header is truncated."
+    );
+    let (bits, colors, masks, entry) = if header == 12 {
+        let bits = u16::from_le_bytes(dib[10..12].try_into()?);
+        (bits, if bits <= 8 { 1usize << bits } else { 0 }, 0, 3)
+    } else {
+        let bits = u16::from_le_bytes(dib[14..16].try_into()?);
+        let compression = u32::from_le_bytes(dib[16..20].try_into()?);
+        let used = u32::from_le_bytes(dib[32..36].try_into()?) as usize;
+        let colors = if used != 0 {
+            used
+        } else if bits <= 8 {
+            1usize << bits
+        } else {
+            0
+        };
+        let masks = if header == 40 {
+            match compression {
+                3 => 12,
+                6 => 16,
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        (bits, colors, masks, 4)
+    };
+    ensure!(
+        matches!(bits, 1 | 4 | 8 | 16 | 24 | 32) && colors <= 256,
+        "The clipboard bitmap depth or palette is invalid."
+    );
+    let offset = 14usize
+        .checked_add(header)
+        .and_then(|n| n.checked_add(masks))
+        .and_then(|n| n.checked_add(colors * entry))
+        .context("The clipboard bitmap size overflows")?;
+    ensure!(
+        offset <= dib.len() + 14,
+        "The clipboard bitmap palette is truncated."
+    );
+    let mut bitmap = Vec::with_capacity(dib.len() + 14);
+    bitmap.extend_from_slice(b"BM");
+    bitmap.extend_from_slice(&u32::try_from(dib.len() + 14)?.to_le_bytes());
+    bitmap.extend_from_slice(&[0; 4]);
+    bitmap.extend_from_slice(&u32::try_from(offset)?.to_le_bytes());
+    bitmap.extend_from_slice(dib);
+    let mut reader = image::ImageReader::with_format(Cursor::new(bitmap), image::ImageFormat::Bmp);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_IMAGE_PIXELS * 4);
+    reader.limits(limits);
+    let image = reader.decode().context("Decoding the clipboard bitmap")?;
+    ensure!(
+        u64::from(image.width()) * u64::from(image.height()) <= MAX_IMAGE_PIXELS,
+        "The clipboard bitmap is too large."
+    );
+    let mut png = Vec::new();
+    image.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)?;
+    Ok(png)
 }
 
 /// Reads supported formats from the native clipboard with bounded payloads.
@@ -90,8 +165,11 @@ pub(super) fn selection_content(
         .slice(state.selection().from(), state.selection().to(), false)?;
     let html = fragment_to_html(&slice.content, state.schema());
     let text = slice_to_text(&slice);
-    let doc = wordcraft_formats::html::import_page(&html, &|_| None);
-    let rtf = wordcraft_formats::rtf::export(&doc).into_bytes();
+    let doc = crate::formats::RichDocument {
+        html: html.clone(),
+        page: super::PageSettings::default(),
+    };
+    let rtf = crate::formats::export_rtf(&doc)?;
     Ok((text, html, rtf, slice))
 }
 pub(super) fn copy_state(
@@ -401,22 +479,7 @@ mod platform {
             checked_image(&png)?;
             content.image = Some(png);
         } else if let Some(dib) = bytes(17, MAX_IMAGE_BYTES)?.or(bytes(8, MAX_IMAGE_BYTES)?) {
-            let probe =
-                wordcraft_geom::picture::probe_dib(dib).context("reading the clipboard bitmap")?;
-            ensure!(
-                probe.width <= MAX_IMAGE_SIDE
-                    && probe.height <= MAX_IMAGE_SIDE
-                    && u64::from(probe.width) * u64::from(probe.height) <= MAX_IMAGE_PIXELS,
-                "The clipboard bitmap is too large to paste safely."
-            );
-            let image = probe
-                .decode(wordcraft_geom::MAX_DECODED_BYTES)
-                .context("decoding the clipboard bitmap")?;
-            let mut png = Vec::new();
-            image
-                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-                .context("encoding the clipboard bitmap")?;
-            content.image = Some(png);
+            content.image = Some(dib_png(&dib)?);
         }
         if raw::is_format_avail(15) {
             ensure!(
@@ -812,5 +875,26 @@ mod tests {
         bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
         bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
         assert!(checked_image(&bmp).is_err());
+    }
+}
+
+#[cfg(test)]
+mod bitmap_tests {
+    use super::*;
+    #[test]
+    fn clipboard_dib_decodes_without_a_document_engine() {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([15, 50, 120, 255]),
+        ));
+        let mut bmp = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+            .unwrap();
+        let png = dib_png(&bmp[14..]).unwrap();
+        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(decoded.get_pixel(0, 0), &image::Rgba([15, 50, 120, 255]));
+        assert!(dib_png(&[0; 11]).is_err());
     }
 }

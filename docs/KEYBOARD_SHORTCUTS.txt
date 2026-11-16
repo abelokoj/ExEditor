@@ -151,3 +151,12 @@ cursors, column selection, folding, symbol navigation/refactoring, language
 server actions, editor groups, workspaces, project-wide search, source control,
 debugging, extensions, and an integrated terminal are unavailable. Their
 VS Code shortcuts are not assigned to placeholder commands.
+
+Split views and line numbers
+Ctrl+\        Split the same document into two columns
+Ctrl+K Ctrl+1 Return to a single editor
+Ctrl+K Ctrl+4 Arrange open tabs in four columns
+Ctrl+K Ctrl+G Arrange open tabs in a four-pane grid
+Ctrl+K L      Show/hide line numbers
+Use View > Split View for rows, columns, or grids, and each pane header to choose its document.
+Settings > New Document > Line Numbers controls gutter font, size, and width.

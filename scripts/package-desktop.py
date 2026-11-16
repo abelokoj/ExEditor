@@ -82,7 +82,6 @@ def package(target, commit):
         info = {"application":"ExEditor", **release, "source_commit":commit,
                 "target":target, "architecture":platform.machine(), "editor_engine":"NSH RichEditor", "interface":"Native Shell",
                 "nsh_commit":"f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
-                "wordcraft_commit":"729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b",
                 "rust_toolchain":toolchain, "workflow_run":os.getenv("GITHUB_RUN_ID"),
                 "built_at_utc":datetime.now(timezone.utc).isoformat()}
         (resources/"build-info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")

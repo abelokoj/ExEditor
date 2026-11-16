@@ -18,7 +18,7 @@ pub enum FormKind {
     PageSetup,
     Print {
         printer: String,
-        document: std::sync::Arc<wordcraft_doc::Document>,
+        document: std::sync::Arc<crate::formats::RichDocument>,
         page: crate::editor::PageSettings,
     },
     Preferences,

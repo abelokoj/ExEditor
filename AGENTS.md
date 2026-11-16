@@ -19,7 +19,7 @@
 
 ## Project boundaries
 
-- The application is ExEditor. Use Rust, the native nsh interface and nsh RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. WordCraft remains only for document/print codecs.
+- The application is ExEditor. Use Rust, the native nsh interface and nsh RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. Do not restore WordCraft dependencies. App-owned offline codecs handle file interchange; Cosmic Text/Krilla handle independent PDF output, and craft-print submits to native queues. Retain the MIT notice for the historical clipboard-adapter source.
 - `dev_notes/` contains personal notes and backups. Never stage, commit or push it; keep downloaded `dist/` artifacts excluded from Git too.
 - Update root `CHANGELOG.md` with every user-visible feature, fix, configuration change or meaningful documentation change, before committing/pushing. Use the actual America/New_York ISO timestamp with UTC offset, newest first. Record validation actually performed and material limitations; preserve historical entries and distinguish pending source from released builds.
 

@@ -94,7 +94,11 @@ fn node_styles(node: &Node, styles: &mut BTreeMap<String, Style>) {
 fn styles(editor: &Editor) -> RichEditorStyles {
     let display = editor.display_state();
     let zoom = f32::from(display.zoom) / 100.;
-    let format = editor.formatting();
+    let format = if display.plain {
+        editor.formatting()
+    } else {
+        super::FormatState::default()
+    };
     let mut styles = RichEditorStyles::default();
     let mut content = StyleRefinement::default()
         .p(px(20. * zoom))
@@ -296,17 +300,34 @@ fn completion_popup(editor: Rc<Editor>, revision: Signal<u64>) -> impl IntoEleme
 
 /// Binds a native RichEditor to the document's existing session.
 pub fn surface(editor: Rc<Editor>) -> impl IntoElement {
+    build_surface(editor, || {}, || true)
+}
+pub fn pane_surface(
+    editor: Rc<Editor>,
+    on_focus: impl Fn() + 'static,
+    active: impl Fn() -> bool + 'static,
+) -> impl IntoElement {
+    build_surface(editor, on_focus, active)
+}
+fn build_surface(
+    editor: Rc<Editor>,
+    on_focus: impl Fn() + 'static,
+    active: impl Fn() -> bool + 'static,
+) -> AnyElement {
     let revision = signal(editor.revision());
+    let style_revision = signal(editor.style_revision());
     let tick = editor.clone();
-    set_interval(Duration::from_millis(40), move || {
+    set_interval(Duration::from_millis(16), move || {
         tick.refresh_completion();
         revision.set(tick.revision());
+        style_revision.set(tick.style_revision());
     });
     let editable = editor.clone();
     let styled = editor.clone();
     let files = editor.clone();
-    rich_editor()
-        .auto_focus(true)
+    let content = rich_editor()
+        .auto_focus(active)
+        .on_focus(on_focus)
         .editor(editor.native_session())
         .size_full()
         .bubble_menu(completion_popup(editor.clone(), revision))
@@ -314,11 +335,11 @@ pub fn surface(editor: Rc<Editor>) -> impl IntoElement {
         .bubble_menu_offset(px(4.))
         .accessibility_label("Document editor")
         .editable(move || {
-            revision.get();
+            style_revision.get();
             !editable.is_read_only()
         })
         .styles(move || {
-            revision.get();
+            style_revision.get();
             styles(&styled)
         })
         .classes({
@@ -353,6 +374,8 @@ pub fn surface(editor: Rc<Editor>) -> impl IntoElement {
                 }
             },
         )
+        .into_element();
+    super::gutter::wrap(editor, content, style_revision)
 }
 
 #[cfg(test)]
