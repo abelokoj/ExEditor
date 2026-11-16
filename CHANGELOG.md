@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-15T23:33:26-05:00 - Capture the owned Windows app above runner terminals (local CI correction)
+
+- Source2a2d11e/run43801214049 passed strict diagnostics on all platforms, both desktop release packages,203 ordinary Windows Rust regressions,five naming regressions and both accessory download checks. The light native check also passed caption geometry/order/colors,gutter toggling,two columns,four-grid,collapse,Settings and zoom.
+- The dark initial screenshot shows a runner terminal covering the native window; UI Automation still reports the correct underlying controls. Raise only the verified app-owned window for screen capture and restore its ordinary stacking afterward. Keep the exact color/geometry assertions; do not accept an occluded screenshot. No application source changes.
+- Retry Windows only and retain the successful macOS/Linux packages with their original source provenance. Release18 remains pending. No local builds, source tests, installation or app launch; downloaded evidence was inspected only.
+
 ## 2026-11-15T22:56:10-05:00 - Clear strict diagnostics for new native paths (local correction)
 
 - GitHub run43800325579/source31190d6 cleared the native API type errors and reached strict Rust linting. Remove the obsolete recovery wrapper, scope snapshot/interchange helpers used only by tests accordingly, name repeated callback/cache types, and simplify the reported condition/iterator/RTF-writing forms without relaxing diagnostics or validation.

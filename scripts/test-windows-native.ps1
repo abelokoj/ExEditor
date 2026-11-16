@@ -58,6 +58,7 @@ function Measure-NativeMemory([Diagnostics.Process]$Process) {
     }
 }
 function Save-NativeScreenshot([Diagnostics.Process]$Process, [string]$Name, [IntPtr]$Window = [IntPtr]::Zero) {
+    $raised = [IntPtr]::Zero
     try {
         Add-Type -AssemblyName System.Drawing
         if (-not ('ExEditorStartupCapture' -as [type])) {
@@ -129,8 +130,11 @@ public static class ExEditorStartupCapture {
         }
         $width = [Math]::Min($rect.Right - $rect.Left, [ExEditorStartupCapture]::GetSystemMetrics(0) - 32)
         $height = [Math]::Min($rect.Bottom - $rect.Top, [ExEditorStartupCapture]::GetSystemMetrics(1) - 64)
-        # Keep the whole native window visible on the runner's small desktop.
-        [ExEditorStartupCapture]::SetWindowPos($Window, [IntPtr]::Zero, 16, 16, $width, $height, 0x14) | Out-Null
+        # Keep only the owned test window above runner terminals during screen capture.
+        if (-not [ExEditorStartupCapture]::SetWindowPos($Window, [IntPtr]::new(-1), 16, 16, $width, $height, 0x50)) {
+            throw 'The test window could not be raised for capture.'
+        }
+        $raised = $Window
         Start-Sleep -Milliseconds 400
         [ExEditorStartupCapture]::GetWindowRect($Window, [ref]$rect) | Out-Null
         $width = $rect.Right - $rect.Left
@@ -147,6 +151,10 @@ public static class ExEditorStartupCapture {
     } catch {
         $results['capture_warning_' + $Name] = $_.Exception.Message
         Write-Warning "Native screenshot capture unavailable: $_"
+    } finally {
+        if ($raised -ne [IntPtr]::Zero) {
+            [ExEditorStartupCapture]::SetWindowPos($raised, [IntPtr]::new(-2), 0, 0, 0, 0, 0x13) | Out-Null
+        }
     }
 }
 function Get-NativeNamedElements([Diagnostics.Process]$Process, [string]$Name) {
