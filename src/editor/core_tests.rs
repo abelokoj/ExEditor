@@ -418,3 +418,54 @@ fn formatting_across_large_selection_is_fast_and_accurate() {
     assert!(!format.bold);
     assert!(!format.italic);
 }
+
+#[test]
+fn block_styles_line_numbers_replace_one_and_pt_indents_roundtrip_cleanly() {
+    let editor = Editor::new().unwrap();
+    editor
+        .set_text("First heading\n😀 alpha\nalpha end")
+        .unwrap();
+
+    editor.select_range(0..13).unwrap();
+    assert_eq!(editor.line_at_selection(), 1);
+    editor
+        .execute(EditCommand::BlockStyle(BlockStyle::Heading(2)))
+        .unwrap();
+    assert_eq!(editor.formatting().block_style, BlockStyle::Heading(2));
+
+    editor
+        .execute(EditCommand::BlockStyle(BlockStyle::Blockquote))
+        .unwrap();
+    assert_eq!(editor.formatting().block_style, BlockStyle::Blockquote);
+
+    editor
+        .execute(EditCommand::BlockStyle(BlockStyle::CodeBlock))
+        .unwrap();
+    assert_eq!(editor.formatting().block_style, BlockStyle::CodeBlock);
+
+    editor
+        .execute(EditCommand::BlockStyle(BlockStyle::Body))
+        .unwrap();
+    assert_eq!(editor.formatting().block_style, BlockStyle::Body);
+
+    editor.select_range(14..14).unwrap();
+    assert_eq!(editor.line_at_selection(), 2);
+    assert!(editor.replace_one("alpha", "beta", true, true).unwrap());
+    assert_eq!(editor.text().unwrap(), "First heading\n😀 beta\nalpha end");
+    assert_eq!(editor.selected_text().unwrap(), "alpha");
+    assert_eq!(editor.line_at_selection(), 3);
+    assert!(editor.replace_one("alpha", "omega", true, true).unwrap());
+    assert_eq!(editor.text().unwrap(), "First heading\n😀 beta\nomega end");
+    assert!(!editor.replace_one("alpha", "none", true, true).unwrap());
+
+    editor
+        .set_html("<p style=\"margin-left:18pt\">Indented</p>")
+        .unwrap();
+    editor.select_range(0..0).unwrap();
+    editor.execute(EditCommand::Indent(360)).unwrap();
+    let html = editor.html().unwrap();
+    assert!(
+        html.contains("margin-left:42px") || html.contains("margin-left: 42px"),
+        "unexpected html after pt+twip indent: {html}"
+    );
+}

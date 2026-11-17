@@ -57,6 +57,7 @@ jobs:
         shell: pwsh
     env:
       CARGO_TERM_COLOR: always
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       RUST_BACKTRACE: 1
       EXEDITOR_RELEASE_DATE: ${{ needs.release.outputs.release_date }}
       EXEDITOR_RELEASE_NUMBER: ${{ needs.release.outputs.release_number }}

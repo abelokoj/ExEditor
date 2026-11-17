@@ -45,12 +45,13 @@ struct Settings {
 }
 
 pub fn open(preferences: Preferences, commands: Commands, colors: Palette) {
-    ui::show_panel(
+    ui::show_panel_with_colors(
         "settings",
         "ExEditor Settings",
         620.,
         610.,
         WindowKind::Dialog,
+        colors,
         move || {
             let state = Rc::new(Settings {
                 prefix: signal(preferences.untitled_prefix.clone()),
@@ -88,31 +89,16 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette) {
             let apply = state.clone();
             let save = state.clone();
             ui::surface(colors)
-                .child(ui::heading("Settings"))
-                .child(
-                    ui::radio_group("Settings sections")
-                        .flex_row()
-                        .gap(px(12.))
-                        .children(
-                            [
-                                (Tab::NewDocument, "New Document"),
-                                (Tab::OpenAndSave, "Open and Save"),
-                                (Tab::Accessories, "Accessories"),
-                            ]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (tab, label))| {
-                                let selected = state.tab;
-                                ui::radio(
-                                    format!("settings-tab-{index}"),
-                                    label,
-                                    move || selected.get() == tab,
-                                    colors,
-                                    move |_| selected.set(tab),
-                                )
-                            }),
-                        ),
-                )
+                .child(ui::segmented_tabs(
+                    "Settings sections",
+                    &[
+                        (Tab::NewDocument, "New Document"),
+                        (Tab::OpenAndSave, "Open and Save"),
+                        (Tab::Accessories, "Accessories"),
+                    ],
+                    state.tab,
+                    colors,
+                ))
                 .child(scroll().flex_1().min_h(px(0.)).child(dynamic(
                     move || match content.tab.get() {
                         Tab::NewDocument => content.new_document(),
@@ -124,26 +110,38 @@ pub fn open(preferences: Preferences, commands: Commands, colors: Palette) {
                 .child(
                     view()
                         .flex_row()
+                        .items_center()
                         .justify_between()
+                        .pt(px(8.))
+                        .border_t_1()
+                        .border_color(ui::rgb(colors.border))
                         .gap(px(8.))
                         .child(
-                            ui::button("restore-settings", "Restore All Defaults", 12.)
-                                .on_press(move || restore.restore()),
+                            ui::button_styled(
+                                "restore-settings",
+                                "Restore All Defaults",
+                                12.,
+                                colors,
+                            )
+                            .on_press(move || restore.restore()),
                         )
                         .child(
                             view()
                                 .flex_row()
                                 .gap(px(8.))
                                 .child(
-                                    ui::control("cancel-settings", "Cancel", 66., false, colors)
+                                    ui::control("cancel-settings", "Cancel", 74., false, colors)
+                                        .h(px(28.))
                                         .on_press(|| ui::close_panel("settings")),
                                 )
                                 .child(
-                                    ui::control("apply-settings", "Apply", 66., false, colors)
+                                    ui::control("apply-settings", "Apply", 74., false, colors)
+                                        .h(px(28.))
                                         .on_press(move || apply.submit(false)),
                                 )
                                 .child(
-                                    ui::control("save-settings", "OK", 66., true, colors)
+                                    ui::control("save-settings", "OK", 74., true, colors)
+                                        .h(px(28.))
                                         .on_press(move || save.submit(true)),
                                 ),
                         ),
@@ -179,8 +177,11 @@ impl Settings {
         let plain = self.draft;
         let prefix = self.prefix;
         let queue = self.commands.clone();
+        let colors = self.colors;
         view()
             .gap(px(14.))
+            .pr(px(14.))
+            .pb(px(6.))
             .child(ui::heading("Document Name"))
             .child(ui::row(
                 "New document name prefix:",
@@ -261,7 +262,7 @@ impl Settings {
                 |p, v| p.spellcheck = v,
             ))
             .child(
-                ui::button("language-tools-settings", "Language Tools…", 12.)
+                ui::button_styled("language-tools-settings", "Language Tools…", 12., colors)
                     .on_press(move || queue.borrow_mut().push_back(Command::LanguageTools)),
             )
             .child(self.checkbox(
@@ -303,7 +304,7 @@ impl Settings {
     fn open_and_save(self: &Rc<Self>) -> AnyElement {
         let draft = self.draft;
         let appearance = self.draft;
-        view().gap(px(14.))
+        view().gap(px(14.)).pr(px(14.)).pb(px(6.))
             .child(ui::heading("Plain Text File Encoding"))
             .child(ui::hint("Use this encoding when saving new plain-text documents:", self.colors))
             .child(ui::radio_group("Default plain text encoding")
@@ -344,6 +345,8 @@ impl Settings {
     fn accessories(self: &Rc<Self>) -> AnyElement {
         let mut panel = view()
             .gap(px(16.))
+            .pr(px(14.))
+            .pb(px(6.))
             .child(ui::heading("Font Accessories"))
             .child(ui::hint(
                 "Download the font families you want. Inter is included with ExEditor.",
@@ -380,9 +383,14 @@ impl Settings {
                         view()
                             .gap(px(5.))
                             .child(
-                                ui::button(format!("download-{}", pack.id), label, 12.)
-                                    .disabled(available || downloading)
-                                    .on_press(move || state.download(index)),
+                                ui::button_styled(
+                                    format!("download-{}", pack.id),
+                                    label,
+                                    12.,
+                                    colors,
+                                )
+                                .disabled(available || downloading)
+                                .on_press(move || state.download(index)),
                             )
                             .child(ui::hint(
                                 match current {

@@ -10,12 +10,12 @@ ExEditor is a macOS TextEdit-style desktop document editor written in Rust with 
 
 | What | Where |
 | --- | --- |
-| NSH tool and runtime (`nsh 0.5.1`) | `C:\dev\nsh` (`C:\dev\nsh\bin\nsh.exe`) |
-| NSH source and docs at v0.5.1 | `C:\dev\nsh-src` (`AGENTS.md`, `website/docs/`, `docs/dev/`) and <https://nsh.dev> |
+| NSH tool and runtime (`nsh` nightly `00cfb08` / 2026-11-17) | `C:\dev\nsh` (`C:\dev\nsh\bin\nsh.exe`) |
+| NSH source and docs (`main` `6442c86be`) | `C:\dev\nsh-src` (`AGENTS.md`, `website/docs/`, `docs/dev/`) and <https://nsh.dev> |
 
 - Use the NSH tool and runtime in `C:\dev\nsh` and the source/documentation in `C:\dev\nsh-src`.
-- Use only NSH APIs and components that exist in v0.5.1. Always inspect `C:\dev\nsh-src` before calling or citing NSH APIs.
-- UI dependencies pin to `"=0.5.1"`, matching the installed NSH version.
+- Use only NSH APIs and components that exist in `C:\dev\nsh-src`. Always inspect `C:\dev\nsh-src` before calling or citing NSH APIs.
+- UI dependencies pin to `rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba"` in `longbridge/nsh`, matching `C:\dev\nsh-src`.
 
 ---
 
@@ -56,7 +56,7 @@ Local builds use [huacnlee/cargo](https://github.com/huacnlee/cargo), a drop-in 
 
 ## 4. Project boundaries
 
-- The application is ExEditor. Use Rust, the native NSH 0.5.1 interface and NSH RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. Do not restore WordCraft dependencies. App-owned offline codecs handle file interchange; Cosmic Text/Krilla handle independent PDF output, and craft-print submits to native queues.
+- The application is ExEditor. Use Rust, the native NSH interface (`longbridge/nsh` `6442c86be`) and NSH RichEditor across desktop platforms. Do not reintroduce GPUI or a web editor. Do not restore WordCraft dependencies. App-owned offline codecs handle file interchange; Cosmic Text/Krilla handle independent PDF output, and craft-print submits to native queues.
 - `dev_notes/` contains personal notes and backups. Never stage, commit or push it; keep downloaded `dist/` artifacts excluded from Git too.
 - Update root `CHANGELOG.md` with every user-visible feature, fix, configuration change or meaningful documentation change, before committing/pushing. Use the actual America/New_York ISO timestamp with UTC offset, newest first. Record validation actually performed and material limitations; preserve historical entries and distinguish pending source from released builds.
 

@@ -32,7 +32,8 @@ mod session_group;
 pub mod surface;
 mod types;
 pub use types::{
-    Alignment, Case, EditCommand, EditorDisplayState, FormatState, ListKind, PageSettings,
+    Alignment, BlockStyle, Case, EditCommand, EditorDisplayState, FormatState, ListKind,
+    PageSettings,
 };
 const MAX_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 thread_local! { static COPIED_STYLE: RefCell<Option<FormatState>> = const { RefCell::new(None) }; }
@@ -80,6 +81,12 @@ fn font_family(value: &str) -> &str {
 }
 
 type CachedTextMap = Arc<Mutex<Option<(Node, Arc<core_positions::TextMap>)>>>;
+type CachedPartStyles = (
+    (u64, u16, Option<u32>, u32),
+    nsh_base::rich_editor::view::PartStyles,
+    nsh_base::rich_editor::view::PartStyles,
+    usize,
+);
 
 /// A stable native session survives tab switches and retains its selection and undo history.
 pub struct Editor {
@@ -97,6 +104,7 @@ pub struct Editor {
     page: std::rc::Rc<RefCell<PageSettings>>,
     map_cache: CachedTextMap,
     format_cache: RefCell<Option<((u64, u64), FormatState)>>,
+    style_cache: RefCell<Option<CachedPartStyles>>,
     plain_style: std::rc::Rc<RefCell<FormatState>>,
     pasted: Cell<bool>,
     completion: RefCell<Option<CompletionPopup>>,
@@ -217,6 +225,7 @@ impl Editor {
             page: std::rc::Rc::new(RefCell::new(PageSettings::default())),
             map_cache: Arc::new(Mutex::new(None)),
             format_cache: RefCell::new(None),
+            style_cache: RefCell::new(None),
             plain_style: std::rc::Rc::new(RefCell::new(FormatState {
                 font: crate::fonts::default_plain_font().into(),
                 size: 12.,
@@ -263,6 +272,7 @@ impl Editor {
             page: self.page.clone(),
             map_cache: self.map_cache.clone(),
             format_cache: RefCell::new(None),
+            style_cache: RefCell::new(None),
             plain_style: self.plain_style.clone(),
             pasted: Cell::new(false),
             completion: RefCell::new(None),
@@ -400,6 +410,45 @@ impl Editor {
     }
     pub(super) fn logical_line_positions(&self) -> Arc<Vec<usize>> {
         self.map().line_starts.clone()
+    }
+    pub fn line_at_selection(&self) -> usize {
+        let state = self.session.state();
+        let pos = state.selection().from();
+        self.map()
+            .line_starts
+            .partition_point(|&start| start <= pos)
+            .max(1)
+    }
+    pub(super) fn cached_part_styles(
+        &self,
+        key: (u64, u16, Option<u32>, u32),
+        build: impl FnOnce(
+            &Node,
+        ) -> (
+            nsh_base::rich_editor::view::PartStyles,
+            nsh_base::rich_editor::view::PartStyles,
+        ),
+    ) -> (
+        nsh_base::rich_editor::view::PartStyles,
+        nsh_base::rich_editor::view::PartStyles,
+        usize,
+    ) {
+        if let Some((cached, nodes, marks, max_chars)) = &*self.style_cache.borrow()
+            && *cached == key
+        {
+            return (nodes.clone(), marks.clone(), *max_chars);
+        }
+        let state = self.session.state();
+        let (nodes, marks) = build(state.doc());
+        let max_chars = self
+            .map()
+            .text
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
+        *self.style_cache.borrow_mut() = Some((key, nodes.clone(), marks.clone(), max_chars));
+        (nodes, marks, max_chars)
     }
     pub(super) fn style_revision(&self) -> (u64, u64) {
         (self.document_revision(), self.display_revision.get())
@@ -786,6 +835,47 @@ impl Editor {
             Ok(false)
         }
     }
+    pub fn replace_one(
+        &self,
+        needle: &str,
+        replacement: &str,
+        match_case: bool,
+        whole_word: bool,
+    ) -> Result<bool> {
+        self.editable()?;
+        validate_text(replacement)?;
+        let ranges = self.matches(needle, match_case, whole_word)?;
+        if ranges.is_empty() {
+            return Ok(false);
+        }
+        let current = self.selection();
+        let index = ranges
+            .iter()
+            .position(|range| *range == current)
+            .or_else(|| ranges.iter().position(|range| range.start >= current.start))
+            .unwrap_or(0);
+        let target = ranges[index].clone();
+        self.select_range(target.clone())?;
+        let replacement = normalize_newlines(replacement);
+        let inserted_utf16 = replacement.encode_utf16().count();
+        self.replace_current(&replacement)?;
+        let delta = inserted_utf16 as isize - (target.end as isize - target.start as isize);
+        if let Some(next) = ranges
+            .get(index + 1)
+            .or_else(|| (index > 0).then(|| &ranges[0]))
+        {
+            let shifted = if next.start >= target.end {
+                (next.start as isize + delta) as usize..(next.end as isize + delta) as usize
+            } else {
+                next.clone()
+            };
+            let _ = self.select_range(shifted);
+        } else {
+            let _ = self.select_range(target.start..target.start + inserted_utf16);
+        }
+        self.scroll_to_selection();
+        Ok(true)
+    }
     pub fn replace_all(
         &self,
         needle: &str,
@@ -855,13 +945,14 @@ impl Editor {
                 ] {
                     self.execute(c)?;
                 }
-                for (mark, on) in [
-                    ("bold", s.bold),
-                    ("italic", s.italic),
-                    ("underline", s.underline),
-                    ("strike", s.strikethrough),
+                let current = self.formatting();
+                for (mark, actual, on) in [
+                    ("bold", current.bold, s.bold),
+                    ("italic", current.italic, s.italic),
+                    ("underline", current.underline, s.underline),
+                    ("strike", current.strikethrough, s.strikethrough),
                 ] {
-                    if self.session.is_active(Some(mark), None) != on {
+                    if actual != on {
                         self.toggle_mark(mark)?;
                     }
                 }
@@ -917,9 +1008,55 @@ impl Editor {
                 "setTextAlign",
                 json!({"alignment":match a{Alignment::Left=>"left",Alignment::Center=>"center",Alignment::Right=>"right",Alignment::Justify=>"justify"}}),
             ),
+            E::BlockStyle(style) => {
+                ensure!(
+                    !self.is_plain(),
+                    "paragraph styles require a rich-text document"
+                );
+                let current = self.formatting().block_style;
+                if current == style {
+                    return Ok(());
+                }
+                if current == BlockStyle::Blockquote {
+                    self.run_command("unsetBlockquote", &json!({}))?;
+                } else if current == BlockStyle::CodeBlock {
+                    self.run_command("setParagraph", &json!({}))?;
+                }
+                match style {
+                    BlockStyle::Body => {
+                        if self.formatting().block_style != BlockStyle::Body {
+                            self.run_command("setParagraph", &json!({}))?;
+                        }
+                        return Ok(());
+                    }
+                    BlockStyle::Heading(level) => {
+                        ("setHeading", json!({ "level": level.clamp(1, 6) }))
+                    }
+                    BlockStyle::Blockquote => {
+                        if matches!(self.formatting().block_style, BlockStyle::Heading(_)) {
+                            self.run_command("setParagraph", &json!({}))?;
+                        }
+                        ("setBlockquote", json!({}))
+                    }
+                    BlockStyle::CodeBlock => ("setCodeBlock", json!({})),
+                }
+            }
             E::List(ListKind::Bullet) => ("toggleBulletList", json!({})),
             E::List(ListKind::Number) => ("toggleOrderedList", json!({})),
             E::List(ListKind::None) => ("clearNodes", json!({})),
+            E::HorizontalRule => {
+                ensure!(
+                    !self.is_plain(),
+                    "horizontal dividers require a rich-text document"
+                );
+                ("setHorizontalRule", json!({}))
+            }
+            E::LineBreak => {
+                if self.is_plain() {
+                    return self.replace_current("\n");
+                }
+                ("setHardBreak", json!({}))
+            }
             E::ConvertCase(case) => {
                 let selected = self.selected_text()?;
                 let text = match case {
@@ -951,13 +1088,28 @@ impl Editor {
                 return self.paragraph_style("lineHeight", json!(lines));
             }
             E::Indent(twips) => {
-                let current = self
-                    .session
-                    .get_attributes("paragraph")
-                    .get("indent")
-                    .and_then(Value::as_str)
-                    .and_then(|v| v.trim_end_matches("px").parse::<f32>().ok())
-                    .unwrap_or(0.);
+                let current = {
+                    let state = self.session.state();
+                    let resolved = state.selection().resolved_from();
+                    (0..=resolved.depth)
+                        .rev()
+                        .find_map(|depth| {
+                            let node = resolved.node(depth);
+                            node.is_textblock()
+                                .then(|| node.attrs().get("indent"))
+                                .flatten()
+                        })
+                        .and_then(Value::as_str)
+                        .and_then(|v| {
+                            let v = v.trim();
+                            if let Some(pt) = v.strip_suffix("pt") {
+                                pt.trim().parse::<f32>().ok().map(|n| n * 96. / 72.)
+                            } else {
+                                v.trim_end_matches("px").trim().parse::<f32>().ok()
+                            }
+                        })
+                        .unwrap_or(0.)
+                };
                 return self.paragraph_style(
                     "indent",
                     json!(format!(
@@ -1024,18 +1176,15 @@ impl Editor {
             .schema()
             .mark_type("textStyle")
             .context("the native schema has no text styles")?;
-        let mut attrs = if self.session.state().selection().empty() {
-            self.session.get_attributes("textStyle")
-        } else {
-            let state = self.session.state();
-            let resolved = state.selection().resolved_from();
-            resolved
-                .marks()
-                .into_iter()
-                .find(|m| m.ty().name() == "textStyle")
-                .map(|m| m.attrs().clone())
-                .unwrap_or_default()
+        let marks = match state.stored_marks() {
+            Some(stored) if state.selection().empty() => stored.to_vec(),
+            _ => state.selection().resolved_from().marks(),
         };
+        let mut attrs = marks
+            .into_iter()
+            .find(|m| m.ty().name() == "textStyle")
+            .map(|m| m.attrs().clone())
+            .unwrap_or_default();
         attrs.insert(key.into(), value);
         self.run(&tiptap::set_mark(ty, attrs))
     }
@@ -1089,6 +1238,24 @@ impl Editor {
                 _ => Alignment::Left,
             })
             .unwrap_or(Alignment::Left);
+        let block_style = (1..=resolved.depth)
+            .rev()
+            .find_map(|d| {
+                let node = resolved.node(d);
+                match node.ty().name() {
+                    "heading" => Some(BlockStyle::Heading(
+                        node.attrs()
+                            .get("level")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(1)
+                            .clamp(1, 6) as u8,
+                    )),
+                    "codeBlock" => Some(BlockStyle::CodeBlock),
+                    "blockquote" => Some(BlockStyle::Blockquote),
+                    _ => None,
+                }
+            })
+            .unwrap_or(BlockStyle::Body);
         FormatState {
             font: text_style
                 .and_then(|m| m.attrs().get("fontFamily"))
@@ -1107,6 +1274,7 @@ impl Editor {
             foreground: color("color", 0),
             background: color("backgroundColor", 0xffffff),
             alignment,
+            block_style,
         }
     }
     pub fn insert_table(&self, rows: u16, columns: u16) -> Result<()> {

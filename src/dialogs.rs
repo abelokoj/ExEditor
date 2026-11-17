@@ -24,6 +24,8 @@ pub enum FormKind {
     Preferences,
     Find,
     Replace,
+    ReplaceFind,
+    ReplaceOne,
     GoToLine,
 }
 #[derive(Clone)]
@@ -87,12 +89,13 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
         .sum::<f32>()
         + 12.)
         .min(500.);
-    ui::show_panel(
+    ui::show_panel_with_colors(
         "menu",
         "ExEditor menu",
         width,
         height,
         WindowKind::Popup,
+        colors,
         move || {
             let queue = commands.clone();
             if entries.iter().any(|entry| entry.preview.is_some()) {
@@ -223,13 +226,16 @@ impl Field {
 }
 pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands, colors: Palette) {
     let title = title.to_owned();
-    let height = (fields.len() as f32 * 43. + 145.).clamp(250., 780.);
-    ui::show_panel(
+    let is_replace = matches!(kind, FormKind::Replace);
+    let width = if is_replace { 530. } else { 490. };
+    let height = (fields.len() as f32 * 44. + 132.).clamp(235., 780.);
+    ui::show_panel_with_colors(
         "form",
-        &title.clone(),
-        490.,
+        &title,
+        width,
         height,
         WindowKind::Dialog,
+        colors,
         move || {
             let error = signal(String::new());
             let values: Vec<_> = fields
@@ -240,17 +246,26 @@ pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands,
             let kind = kind.clone();
             let submit_kind = kind.clone();
             let queue = commands.clone();
-            let submit = Rc::new(move || {
-                let values: Vec<_> = submit_values.iter().map(Signal::get_untracked).collect();
-                if !valid_form(&submit_kind, &values) {
+            let run_action = Rc::new(move |action_kind: FormKind, close_after: bool| {
+                let collected: Vec<_> = submit_values.iter().map(Signal::get_untracked).collect();
+                if !valid_form(&action_kind, &collected) {
                     error.set("Enter valid values before continuing.".into());
                     return;
                 }
+                error.set(String::new());
                 queue
                     .borrow_mut()
-                    .push_back(Command::Submit(submit_kind.clone(), values));
-                ui::close_panel("form");
+                    .push_back(Command::Submit(action_kind, collected));
+                if close_after {
+                    ui::close_panel("form");
+                }
             });
+            let default_close = !matches!(kind, FormKind::Find);
+            let submit = {
+                let run_action = run_action.clone();
+                let submit_kind = submit_kind.clone();
+                Rc::new(move || run_action(submit_kind.clone(), default_close))
+            };
             let key_submit = submit.clone();
             on_key("mod+enter", move |_| key_submit());
             let fields: Vec<_> = fields
@@ -268,50 +283,76 @@ pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands,
                         )
                         .into_element()
                     } else {
+                        let enter_submit = submit.clone();
                         ui::row(
                             field.label.clone(),
-                            ui::input(field.label.clone(), value, colors).auto_focus(
-                                index == fields.iter().position(|field| !field.toggle).unwrap_or(0),
-                            ),
+                            ui::input(field.label.clone(), value, colors)
+                                .auto_focus(
+                                    index
+                                        == fields
+                                            .iter()
+                                            .position(|field| !field.toggle)
+                                            .unwrap_or(0),
+                                )
+                                .on_submit(move |_: &str| enter_submit()),
                         )
                         .into_element()
                     }
                 })
                 .collect();
+            let mut footer = view()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .pt(px(8.))
+                .border_t_1()
+                .border_color(rgb(colors.border))
+                .gap(px(8.))
+                .child(
+                    ui::control("cancel-form", "Cancel", 80., false, colors)
+                        .h(px(28.))
+                        .on_press(|| ui::close_panel("form")),
+                );
+            if matches!(kind, FormKind::Replace) {
+                let find_next = run_action.clone();
+                let replace_one = run_action.clone();
+                footer = footer
+                    .child(
+                        ui::control("find-next-form", "Find Next", 88., false, colors)
+                            .h(px(28.))
+                            .on_press(move || find_next(FormKind::ReplaceFind, false)),
+                    )
+                    .child(
+                        ui::control("replace-one-form", "Replace", 84., false, colors)
+                            .h(px(28.))
+                            .on_press(move || replace_one(FormKind::ReplaceOne, false)),
+                    );
+            }
+            footer = footer.child(
+                ui::control(
+                    "submit-form",
+                    match kind {
+                        FormKind::Find => "Find Next",
+                        FormKind::Replace | FormKind::ReplaceOne => "Replace All",
+                        FormKind::Print { .. } => "Print",
+                        _ => "OK",
+                    },
+                    100.,
+                    true,
+                    colors,
+                )
+                .h(px(28.))
+                .on_press(move || submit()),
+            );
             ui::surface(colors)
-                .child(ui::heading(title.clone()))
                 .child(
                     scroll()
                         .flex_1()
                         .min_h(px(0.))
-                        .child(view().gap(px(12.)).children(fields)),
+                        .child(view().gap(px(12.)).pr(px(14.)).pb(px(4.)).children(fields)),
                 )
                 .child(ui::error(error, colors))
-                .child(
-                    view()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(
-                            ui::control("cancel-form", "Cancel", 80., false, colors)
-                                .on_press(|| ui::close_panel("form")),
-                        )
-                        .child(
-                            ui::control(
-                                "submit-form",
-                                match kind {
-                                    FormKind::Find => "Find Next",
-                                    FormKind::Replace => "Replace All",
-                                    FormKind::Print { .. } => "Print",
-                                    _ => "OK",
-                                },
-                                100.,
-                                true,
-                                colors,
-                            )
-                            .on_press(move || submit()),
-                        ),
-                )
+                .child(footer)
                 .into_element()
         },
     );
@@ -320,7 +361,9 @@ pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands,
 fn valid_form(kind: &FormKind, values: &[String]) -> bool {
     let number = |value: Option<&String>| value.and_then(|s| s.trim().parse::<f32>().ok());
     match kind {
-        FormKind::Find | FormKind::Replace => values.first().is_some_and(|s| !s.is_empty()),
+        FormKind::Find | FormKind::Replace | FormKind::ReplaceFind | FormKind::ReplaceOne => {
+            values.first().is_some_and(|s| !s.is_empty())
+        }
         FormKind::Font => {
             values.first().is_some_and(|s| !s.trim().is_empty())
                 && number(values.get(1)).is_some_and(|n| n.is_finite() && n > 0. && n <= 1000.)

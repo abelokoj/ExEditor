@@ -81,7 +81,7 @@ def package(target, commit):
         toolchain = tomllib.loads((project/"rust-toolchain.toml").read_text())["toolchain"]["channel"]
         info = {"application":"ExEditor", **release, "source_commit":commit,
                 "target":target, "architecture":platform.machine(), "editor_engine":"NSH RichEditor", "interface":"Native Shell",
-                "nsh_commit":"f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
+                "nsh_commit":"6442c86be0a46f64dc1a11d8672fb746f64d96ba",
                 "rust_toolchain":toolchain, "workflow_run":os.getenv("GITHUB_RUN_ID"),
                 "built_at_utc":datetime.now(timezone.utc).isoformat()}
         (resources/"build-info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")

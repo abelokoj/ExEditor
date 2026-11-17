@@ -74,14 +74,15 @@ struct ColorsPanel {
     error: Signal<String>,
     colors: Palette,
 }
-pub fn open(initial: Rgba, target: ColorTarget, commands: Commands) {
-    open_with_code(initial, target, commands, None);
+pub fn open(initial: Rgba, target: ColorTarget, commands: Commands, colors: Palette) {
+    open_with_code(initial, target, commands, None, colors);
 }
 pub fn open_with_code(
     initial: Rgba,
     target: ColorTarget,
     commands: Commands,
     initial_code: Option<String>,
+    colors: Palette,
 ) {
     if let Some((panel, window)) = global::<ActiveColors>()
         .with_untracked(|active| active.panel.upgrade().zip(active.window.clone()))
@@ -100,12 +101,13 @@ pub fn open_with_code(
             return;
         }
     };
-    ui::show_panel(
+    ui::show_panel_with_colors(
         "colors",
         "Colors",
         450.,
-        770.,
+        760.,
         WindowKind::Panel,
+        colors,
         move || {
             let state = Rc::new(ColorsPanel {
                 color: signal(initial),
@@ -128,7 +130,7 @@ pub fn open_with_code(
                 pixel_y: signal("0".into()),
                 sampling: signal(false),
                 error: signal(String::new()),
-                colors: Palette::current(),
+                colors,
             });
             state.initial_color(initial, initial_code.as_deref());
             global::<ActiveColors>().update(|active| {
@@ -252,11 +254,12 @@ impl ColorsPanel {
         on_key("mod+enter", move |_| shortcut.apply());
         ui::surface(c)
             .p(px(12.))
-            .child(ui::heading("Colors"))
             .child(
                 scroll().flex_1().min_h(px(0.)).child(
                     view()
                         .gap(px(12.))
+                        .pr(px(14.))
+                        .pb(px(6.))
                         .child(ui::select(
                             "Color picker mode",
                             Mode::ALL
@@ -376,17 +379,19 @@ impl ColorsPanel {
                                 .items_center()
                                 .gap(px(8.))
                                 .child(
-                                    ui::button("apply-color", "Apply", 12.)
+                                    ui::control("apply-color", "Apply", 120., true, c)
                                         .flex_1()
+                                        .h(px(28.))
                                         .on_press(move || apply.apply()),
                                 )
-                                .child(ui::button("copy-color-code", "Copy Code", 12.).on_press(
-                                    move || {
-                                        if copy.parse_code() {
-                                            set_clipboard(copy.code.get_untracked());
-                                        }
-                                    },
-                                )),
+                                .child(
+                                    ui::button_styled("copy-color-code", "Copy Code", 12., c)
+                                        .on_press(move || {
+                                            if copy.parse_code() {
+                                                set_clipboard(copy.code.get_untracked());
+                                            }
+                                        }),
+                                ),
                         )
                         .child(when(
                             {
@@ -406,25 +411,31 @@ impl ColorsPanel {
                                 .flex_row()
                                 .gap(px(8.))
                                 .child(
-                                    ui::button(
+                                    ui::button_styled(
                                         "save-current-color",
                                         "Save to Selected Swatch",
                                         12.,
+                                        c,
                                     )
                                     .flex_1()
                                     .on_press(move || save.save_swatch()),
                                 )
                                 .child(
-                                    ui::button("screen-color-sampler", "Pick from Screen", 12.)
-                                        .disabled({
-                                            let sampling = self.sampling;
-                                            move || {
-                                                sampling.get()
-                                                    || !(cfg!(target_os = "windows")
-                                                        || can_pick_screen_color())
-                                            }
-                                        })
-                                        .on_press(move || sample.sample_screen()),
+                                    ui::button_styled(
+                                        "screen-color-sampler",
+                                        "Pick from Screen",
+                                        12.,
+                                        c,
+                                    )
+                                    .disabled({
+                                        let sampling = self.sampling;
+                                        move || {
+                                            sampling.get()
+                                                || !(cfg!(target_os = "windows")
+                                                    || can_pick_screen_color())
+                                        }
+                                    })
+                                    .on_press(move || sample.sample_screen()),
                                 ),
                         ),
                 ),
@@ -629,7 +640,7 @@ impl ColorsPanel {
                         let state = state.clone();
                         let select = state.clone();
                         let query = state.query;
-                        ui::button("named-color", "", 12.)
+                        ui::button_styled("named-color", "", 12., colors)
                             .h(px(28.))
                             .justify_start()
                             .accessibility_label(move || {
@@ -675,7 +686,7 @@ impl ColorsPanel {
         self.image_version.get();
         let state = self.clone();
         let mut panel = view().gap(px(8.)).child(
-            ui::button("load-palette-image", "Open Image…", 12.)
+            ui::button_styled("load-palette-image", "Open Image…", 12., self.colors)
                 .on_press(move || state.load_image()),
         );
         let sample = self.image.with(|image| {
@@ -723,8 +734,13 @@ impl ColorsPanel {
                         .child(text("Y:").text_size(px(12.)))
                         .child(ui::input("Image pixel Y", self.pixel_y, self.colors).w(px(64.)))
                         .child(
-                            ui::button("sample-image-pixel", "Sample Pixel", 12.)
-                                .on_press(move || choose.choose_pixel()),
+                            ui::button_styled(
+                                "sample-image-pixel",
+                                "Sample Pixel",
+                                12.,
+                                self.colors,
+                            )
+                            .on_press(move || choose.choose_pixel()),
                         ),
                 );
         } else {
@@ -812,7 +828,8 @@ impl ColorsPanel {
                         let index = row * 12 + column;
                         let color = pencil_color(index);
                         let state = self.clone();
-                        ui::button(format!("pencil-{index}"), "", 12.)
+                        let colors = self.colors;
+                        ui::button_styled(format!("pencil-{index}"), "", 12., colors)
                             .accessibility_label(format!(
                                 "Pencil color {}: {}",
                                 index + 1,
@@ -851,7 +868,7 @@ impl ColorsPanel {
                     .children((0..12).map(|column| {
                         let index = row * 12 + column;
                         let state = self.clone();
-                        ui::button(format!("saved-color-{index}"), "", 12.)
+                        ui::button_styled(format!("saved-color-{index}"), "", 12., colors)
                             .w(px(25.))
                             .h(px(25.))
                             .px(px(0.))

@@ -14,6 +14,42 @@ pub enum ListKind {
     Bullet,
     Number,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlockStyle {
+    #[default]
+    Body,
+    Heading(u8),
+    Blockquote,
+    CodeBlock,
+}
+impl BlockStyle {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Body => "Body",
+            Self::Heading(1) => "Heading 1",
+            Self::Heading(2) => "Heading 2",
+            Self::Heading(3) => "Heading 3",
+            Self::Heading(4) => "Heading 4",
+            Self::Heading(5) => "Heading 5",
+            Self::Heading(_) => "Heading 6",
+            Self::Blockquote => "Blockquote",
+            Self::CodeBlock => "Code Block",
+        }
+    }
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Body => "¶",
+            Self::Heading(1) => "H1",
+            Self::Heading(2) => "H2",
+            Self::Heading(3) => "H3",
+            Self::Heading(4) => "H4",
+            Self::Heading(5) => "H5",
+            Self::Heading(_) => "H6",
+            Self::Blockquote => "❝",
+            Self::CodeBlock => "<>",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Case {
     Upper,
@@ -41,11 +77,14 @@ pub enum EditCommand {
     Foreground(u32),
     Background(u32),
     Align(Alignment),
+    BlockStyle(BlockStyle),
     LineSpacing(f32),
     Indent(i32),
     FirstLineIndent(i32),
     Direction(bool),
     List(ListKind),
+    HorizontalRule,
+    LineBreak,
     ConvertCase(Case),
     CopyStyle,
     PasteStyle,
@@ -61,6 +100,7 @@ pub struct FormatState {
     pub foreground: u32,
     pub background: u32,
     pub alignment: Alignment,
+    pub block_style: BlockStyle,
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageSettings {

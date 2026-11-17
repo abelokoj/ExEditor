@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-17T15:05:30-05:00 - Upgrade NSH to 6442c86be, enable SVG toolbar rendering, unify frameless panel chrome, and complete editor UX & performance overhaul
+
+- **NSH Upstream Upgrade & SVG Rendering (`Cargo.toml`, `scripts/package.ps1`, `scripts/package-desktop.py`, `AGENTS.md`):**
+  - Updated `nsh-core`, `nsh-base`, `nsh-platform-windows`, `nsh-platform-macos`, `nsh-platform-linux`, `nsh-engine`, and `nsh-testing` to `longbridge/nsh` commit `6442c86be0a46f64dc1a11d8672fb746f64d96ba` (bringing `#2276` per-block selection/edit invalidation for 38.5x faster large-document selection, `#2197` keeping built-in scrollbars off the caret sink, `#2195` pointer pass-through when content fits, and `#2302` multiline overflow reporting).
+  - Enabled the missing `"svg"` feature on `nsh-core` and `nsh-platform-{windows,macos,linux}` so inline SVG icons in the rich-text toolbar (`Align left`, `Align center`, `Align right`, `Justify`, `Line spacing`, and `Lists`) render crisply instead of appearing blank.
+- **Editor Performance & Rich-Text Capabilities (`src/editor/types.rs`, `src/editor/mod.rs`, `src/editor/surface.rs`, `src/editor/core_tests.rs`):**
+  - Added `CachedPartStyles` in `Editor` so `surface::styles` reuses cached `(nodes, marks, max_line_chars)` across display/gutter/selection updates instead of re-walking the document tree and cloning `plain_text_snapshot()` on non-document changes.
+  - Replaced remaining $O(N)$ `session.is_active` / `session.get_attributes` calls in `EditCommand::PasteStyle`, `EditCommand::Indent` (adding `"pt"` margin parsing alongside `"px"` for imported RTF/DOCX/ODT paragraphs), and `Editor::text_style` with $O(1)$ resolved-mark and ancestor lookups.
+  - Added `BlockStyle` (`Body`, `Heading 1`..`Heading 6`, `Blockquote`, `Code Block`), `EditCommand::HorizontalRule`, `EditCommand::LineBreak`, `Editor::line_at_selection()`, and `Editor::replace_one(...)`, plus Light/Dark surface styling for `blockquote` and `codeBlock` nodes and expanded unit tests in `core_tests.rs`.
+- **Cohesive Native Chrome, Toolbar, Scrollbars, & Dialogs (`src/window_style.rs`, `src/ui.rs`, `src/app.rs`, `src/settings.rs`, `src/dialogs.rs`, `src/color_picker.rs`, `src/language_tools.rs`, `src/palette.rs`):**
+  - Updated `window_style::refresh` on Windows to verify active DWM corner rounding via `DwmGetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE)` and fall back to GDI `SetWindowRgn` only on frameless surfaces when DWM rounding is inactive (preserving native anti-aliased DWM corners on Windows 11 desktops and deterministic rounded geometry on headless CI runners without stripping native `WS_CAPTION` chrome).
+  - Converted all secondary `Dialog`, `Panel`, and `Popup` windows (`Settings`, `Colors`, `Spelling and Grammar`, `Find`, `Find and Replace`, `Go to Line`, `Page Setup`, `Font`, `Table`, `Link`, `Command Palette`, and menus) to frameless `WindowFrameStyle::None` + `TitleBarStyle::Hidden` surfaces with ExEditor's theme-matched header, `Escape` dismissal, right-inset scroll regions (`pr(14px)`) that never collide with the `12px` pill scrollbar, and `Enter` submission on form inputs.
+  - Rebuilt the rich-text toolbar and tab bar with full-width `w_full()` backgrounds and borders (eliminating the unstyled black/white gap at the right edge), dropdown chevrons (`Paragraph style`, `Font family`, `Font weight`, `Font size`), live foreground/background color swatches, visual group dividers, and ruler tick alignment accounting for the line-number gutter inset.
+  - Upgraded `Settings` with segmented tabs (`New Document`, `Open and Save`, `Accessories`) and full multi-window preference synchronization; enhanced `Find and Replace` with interactive `Find Next`, single-step `Replace`, and `Replace All`; fixed `Go to Line` to pre-fill the active caret line and scroll the viewport to the target line; and closed secondary panels cleanly on app exit.
+
 ## 2026-11-16T22:43:00-05:00 - Align release native check fixture size and synchronize editor zoom state
 
 - **Release Native Document Controls Check (`.github/workflows/build.yml`):**

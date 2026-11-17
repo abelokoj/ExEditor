@@ -41,19 +41,21 @@ fn open_with_title(
     placeholder: &'static str,
 ) {
     let entries = Rc::new(entries);
-    ui::show_panel(
+    ui::show_panel_with_colors(
         "command-palette",
         &format!("ExEditor {title}"),
-        470.,
+        480.,
         450.,
         WindowKind::Popup,
+        colors,
         move || {
             let query = signal(String::new());
             let filter_entries = entries.clone();
             let run_entries = entries.clone();
             let queue = commands.clone();
             ui::surface(colors)
-                .p(px(6.))
+                .p(px(10.))
+                .gap(px(8.))
                 .child(ui::heading(title))
                 .child(
                     ui::command_list(

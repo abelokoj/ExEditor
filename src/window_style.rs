@@ -20,14 +20,15 @@ mod windows {
     use windows_sys::Win32::{
         Foundation::{HWND, LPARAM, RECT},
         Graphics::{
-            Dwm::DwmSetWindowAttribute,
+            Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute},
             Gdi::{CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetWindowRgn, SetWindowRgn},
         },
         System::Threading::GetCurrentProcessId,
         UI::{
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
-                EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsZoomed,
+                EnumWindows, GWL_STYLE, GetClassNameW, GetWindowLongW, GetWindowRect,
+                GetWindowThreadProcessId, IsZoomed, WS_CAPTION,
             },
         },
     };
@@ -78,14 +79,29 @@ mod windows {
                     continue;
                 }
                 // NSH can reset DWM corners when it applies its frame after first layout.
-                // Only reuse a shape while its real native region still exists.
+                // Only reuse a shape while its native DWM corner preference or GDI region persists.
+                let mut current_corner = 0_u32;
+                // SAFETY: DWMWA_WINDOW_CORNER_PREFERENCE (33) writes one DWORD into a live local.
+                let dwm_query = unsafe {
+                    DwmGetWindowAttribute(
+                        hwnd,
+                        33,
+                        (&mut current_corner as *mut u32).cast::<c_void>(),
+                        4,
+                    )
+                };
                 if shapes.get(&(hwnd as usize)) == Some(&shape) {
+                    if maximized || (dwm_query >= 0 && current_corner == 2) {
+                        continue;
+                    }
+                    // SAFETY: creates a temporary empty GDI region to query the window's region kind.
                     let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
                     if !region.is_null() {
                         // SAFETY: region is an owned query buffer; hwnd is a live app window.
                         let present = unsafe { GetWindowRgn(hwnd, region) } == 3;
+                        // SAFETY: region is released immediately after GetWindowRgn inspects it.
                         unsafe { DeleteObject(region) };
-                        if present || maximized {
+                        if present {
                             continue;
                         }
                     }
@@ -95,13 +111,29 @@ mod windows {
                 let rounded = unsafe {
                     DwmSetWindowAttribute(hwnd, 33, (&preference as *const u32).cast::<c_void>(), 4)
                 } >= 0;
+                let mut verified_corner = 0_u32;
+                // SAFETY: verifies whether DWM actually retained the requested corner preference (false on headless/older displays).
+                let dwm_active = rounded
+                    && unsafe {
+                        DwmGetWindowAttribute(
+                            hwnd,
+                            33,
+                            (&mut verified_corner as *mut u32).cast::<c_void>(),
+                            4,
+                        )
+                    } >= 0
+                    && verified_corner == preference;
                 if std::env::var_os("EXEDITOR_NATIVE_DIAGNOSTICS").is_some() {
-                    eprintln!("Native corner preference set: {rounded}");
+                    eprintln!("Native corner preference set: {rounded} (active={dwm_active})");
                 }
-                if maximized {
-                    // SAFETY: a null region restores the full rectangular window.
+                // SAFETY: reads standard window style flags from a live HWND of this process.
+                let has_native_caption =
+                    (unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32 & WS_CAPTION) != 0;
+                if maximized || dwm_active || has_native_caption {
+                    // SAFETY: a null region restores full DWM composition without GDI clipping.
                     unsafe { SetWindowRgn(hwnd, std::ptr::null_mut(), 1) };
                 } else {
+                    // SAFETY: GetDpiForWindow queries the window's DPI on Windows 10+.
                     let radius = (8 * unsafe { GetDpiForWindow(hwnd) }.max(96) / 96) as i32;
                     // SAFETY: positive bounded window dimensions; this creates a new owned GDI region.
                     let region = unsafe {

@@ -11,8 +11,8 @@ license = "MIT"
 anyhow = "1"
 ureq = "3.5.1"
 sha2 = "0.10"
-nsh-core = "=0.5.1"
-nsh-base = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", features = ["svg"] }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false, features = ["rich-editor", "editor", "highlight"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "6"
@@ -48,7 +48,7 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "a3e0b5a9
 arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 [target.'cfg(windows)'.dependencies]
-nsh-platform-windows = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false, features = ["rich-editor", "editor", "highlight", "svg"] }
 clipboard-win = { version = "5.4", features = ["std"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -84,12 +84,12 @@ windows-sys = { version = "0.61", features = [
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false, features = ["rich-editor", "editor", "highlight", "svg"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "=0.5.1", default-features = false, features = ["rich-editor", "editor", "highlight"] }
+nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false, features = ["rich-editor", "editor", "highlight", "svg"] }
 wl-clipboard-rs = "0.9"
 x11rb = "0.13"
 
@@ -103,8 +103,8 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [dev-dependencies]
 ttf-parser = "0.25"
-nsh-engine = { version = "=0.5.1", default-features = false }
-nsh-testing = { version = "=0.5.1", default-features = false }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba", default-features = false }
 box-format = { path = "vendor/box-format", default-features = false, features = ["writer"] }
 
 [build-dependencies]

@@ -8,7 +8,9 @@ use crate::{
         TextEncoding,
     },
     editing::LineAction,
-    editor::{Alignment, Case, EditCommand, Editor, FormatState, ListKind, PageSettings},
+    editor::{
+        Alignment, BlockStyle, Case, EditCommand, Editor, FormatState, ListKind, PageSettings,
+    },
     preferences::{Appearance, Preferences, WindowControls},
     services::{self, Speech},
     session::{self, BufferLease, RestoredBuffer},
@@ -39,6 +41,7 @@ pub enum MenuKind {
     Substitutions,
     Transformations,
     Format,
+    ParagraphStyles,
     Font,
     Alignment,
     Lists,
@@ -476,6 +479,7 @@ impl AppContext {
                 .collect(),
         );
         if self.workspace.entries.borrow().is_empty() {
+            ui::close_all_panels();
             desktop::quit();
         } else if window.is_main() {
             window.hide();
@@ -1086,6 +1090,9 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                 .size(px(15.6))
                 .rounded_full()
                 .bg(ui::rgb(color))
+                .hover(|s| s.opacity(0.86))
+                .active(|s| s.opacity(0.72))
+                .focus_visible(move |s| s.outline(px(2.)).outline_color(ui::rgb(colors.accent)))
                 .on_press(move || match command {
                     0 => enqueue(&queue, Command::CloseWindow),
                     1 => window.minimize(),
@@ -1151,10 +1158,11 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
         }
     };
     let mut menu = view()
+        .w_full()
         .flex_row()
         .h(px(24.))
         .items_center()
-        .px(px(8.))
+        .px(px(6.))
         .gap(px(2.))
         .bg(ui::rgb(colors.chrome))
         .border_b_1()
@@ -1170,21 +1178,14 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
     ] {
         let queue = queue.clone();
         menu = menu.child(
-            ui::control(
-                label,
-                label,
-                if label == "ExEditor" { 76. } else { 55. },
-                false,
-                colors,
-            )
-            .h(px(22.))
-            .on_press(move || enqueue(&queue, Command::Menu(kind.clone()))),
+            ui::menu_bar_item(label, if label == "ExEditor" { 72. } else { 50. }, colors)
+                .on_press(move || enqueue(&queue, Command::Menu(kind.clone()))),
         );
     }
-    let mut chrome = view().flex_shrink_0().child(title).child(menu);
+    let mut chrome = view().w_full().flex_shrink_0().child(title).child(menu);
     if current.show_tabs || current.tabs.len() > 1 {
         let active = current.active_tab;
-        let mut strip = view().flex_row();
+        let mut strip = view().flex_row().items_center().gap(px(3.));
         for (index, tab) in current.tabs.iter().enumerate() {
             let name = tab
                 .as_ref()
@@ -1193,7 +1194,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             let queue = queue.clone();
             strip = strip.child(
                 ui::control(format!("tab-{index}"), name, 160., index == active, colors)
-                    .h(px(28.))
+                    .h(px(24.))
                     .flex_shrink_0()
                     .on_press(move || enqueue(&queue, Command::SwitchTab(index))),
             );
@@ -1201,168 +1202,194 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
         let add_queue = queue.clone();
         chrome = chrome.child(
             view()
+                .w_full()
                 .flex_row()
+                .items_center()
                 .h(px(29.))
+                .px(px(4.))
+                .gap(px(4.))
                 .bg(ui::rgb(colors.toolbar))
+                .border_b_1()
+                .border_color(ui::rgb(colors.border))
                 .child(scroll().horizontal().flex_1().min_w(px(0.)).child(strip))
                 .child(
-                    ui::control("new-tab", "+", 28., false, colors)
-                        .h(px(28.))
+                    ui::control("new-tab", "+", 26., false, colors)
+                        .h(px(24.))
                         .on_press(move || enqueue(&add_queue, Command::NewTab)),
                 ),
         );
     }
     if rich {
         let format = current.doc.formatting.clone();
+        let weight_label = if format.bold && format.italic {
+            "Bold Italic"
+        } else if format.bold {
+            "Bold"
+        } else if format.italic {
+            "Italic"
+        } else {
+            "Regular"
+        };
         let mut toolbar = view()
+            .min_w_full()
             .flex_row()
             .items_center()
             .h(px(29.))
-            .px(px(6.))
+            .px(px(8.))
             .gap(px(3.))
             .bg(ui::rgb(colors.toolbar));
-        let controls = vec![
-            (
-                "Paragraph",
-                "¶".to_string(),
-                28.,
-                false,
-                Command::Menu(MenuKind::Format),
-            ),
-            (
-                "Font family",
-                format.font.clone(),
-                130.,
-                false,
-                Command::Menu(MenuKind::Fonts),
-            ),
-            (
-                "Font weight",
-                if format.bold { "Bold" } else { "Regular" }.into(),
-                80.,
-                false,
-                Command::Menu(MenuKind::Weights),
-            ),
-            (
-                "Font size",
-                format!("{:.0}", format.size),
-                42.,
-                false,
-                Command::Menu(MenuKind::Sizes),
-            ),
-            ("Text color", "A".into(), 25., false, Command::Foreground),
-            (
-                "Text background",
-                "▣".into(),
-                25.,
-                false,
-                Command::Background,
-            ),
-            (
-                "Bold",
-                "B".into(),
-                23.,
-                format.bold,
-                Command::Edit(EditCommand::Bold),
-            ),
+        {
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::dropdown_control(
+                    "Paragraph style",
+                    format.block_style.short_label(),
+                    46.,
+                    colors,
+                )
+                .on_press(move || enqueue(&q, Command::Menu(MenuKind::ParagraphStyles))),
+            );
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::dropdown_control("Font family", format.font.clone(), 136., colors)
+                    .on_press(move || enqueue(&q, Command::Menu(MenuKind::Fonts))),
+            );
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::dropdown_control("Font weight", weight_label, 88., colors)
+                    .on_press(move || enqueue(&q, Command::Menu(MenuKind::Weights))),
+            );
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::dropdown_control("Font size", format!("{:.0}", format.size), 50., colors)
+                    .on_press(move || enqueue(&q, Command::Menu(MenuKind::Sizes))),
+            );
+            toolbar = toolbar.child(ui::toolbar_divider(colors));
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::color_control("Text color", "A", format.foreground, false, colors)
+                    .on_press(move || enqueue(&q, Command::Foreground)),
+            );
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::color_control("Text background", "", format.background, true, colors)
+                    .on_press(move || enqueue(&q, Command::Background)),
+            );
+            toolbar = toolbar.child(ui::toolbar_divider(colors));
+        }
+        for (label, value, selected, command) in [
+            ("Bold", "B", format.bold, Command::Edit(EditCommand::Bold)),
             (
                 "Italic",
-                "I".into(),
-                23.,
+                "I",
                 format.italic,
                 Command::Edit(EditCommand::Italic),
             ),
             (
                 "Underline",
-                "U".into(),
-                23.,
+                "U̲",
                 format.underline,
                 Command::Edit(EditCommand::Underline),
             ),
             (
                 "Strikethrough",
-                "S".into(),
-                23.,
+                "S",
                 format.strikethrough,
                 Command::Edit(EditCommand::Strikethrough),
             ),
+        ] {
+            let q = queue.clone();
+            toolbar = toolbar.child(
+                ui::control(label, value, 24., selected, colors)
+                    .accessibility_label(label)
+                    .on_press(move || enqueue(&q, command.clone())),
+            );
+        }
+        toolbar = toolbar.child(ui::toolbar_divider(colors));
+        for (label, path, width, selected, command) in [
             (
                 "Align left",
-                "≡".into(),
-                23.,
+                r#"<path d="M2 3h12M2 6h8M2 9h12M2 12h8"/>"#,
+                24.,
                 format.alignment == Alignment::Left,
                 Command::Edit(EditCommand::Align(Alignment::Left)),
             ),
             (
                 "Align center",
-                "≡".into(),
-                23.,
+                r#"<path d="M2 3h12M4 6h8M2 9h12M4 12h8"/>"#,
+                24.,
                 format.alignment == Alignment::Center,
                 Command::Edit(EditCommand::Align(Alignment::Center)),
             ),
             (
                 "Align right",
-                "≡".into(),
-                23.,
+                r#"<path d="M2 3h12M6 6h8M2 9h12M6 12h8"/>"#,
+                24.,
                 format.alignment == Alignment::Right,
                 Command::Edit(EditCommand::Align(Alignment::Right)),
             ),
             (
                 "Justify",
-                "☰".into(),
-                23.,
+                r#"<path d="M2 3h12M2 6h12M2 9h12M2 12h12"/>"#,
+                24.,
                 format.alignment == Alignment::Justify,
                 Command::Edit(EditCommand::Align(Alignment::Justify)),
             ),
+        ] {
+            let q = queue.clone();
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">{path}</svg>"#
+            );
+            toolbar = toolbar.child(
+                ui::icon_control(label, &svg, width, selected, colors)
+                    .on_press(move || enqueue(&q, command.clone())),
+            );
+        }
+        toolbar = toolbar.child(ui::toolbar_divider(colors));
+        for (label, path, command) in [
             (
                 "Line spacing",
-                "↕".into(),
-                29.,
-                false,
+                r#"<path d="M3 2v12M1 4l2-2 2 2M1 12l2 2 2-2M8 3h7M8 8h7M8 13h7"/>"#,
                 Command::Menu(MenuKind::Spacing),
             ),
             (
                 "Lists",
-                "•".into(),
-                29.,
-                false,
+                r#"<circle cx="2.5" cy="3.5" r=".9"/><circle cx="2.5" cy="8" r=".9"/><circle cx="2.5" cy="12.5" r=".9"/><path d="M6 3.5h8.5M6 8h8.5M6 12.5h8.5"/>"#,
                 Command::Menu(MenuKind::Lists),
             ),
-        ];
-        for (label, value, width, selected, command) in controls {
-            let queue = queue.clone();
-            let path = match label {
-                "Align left" => Some(r#"<path d="M2 3h12M2 6h8M2 9h12M2 12h8"/>"#),
-                "Align center" => Some(r#"<path d="M2 3h12M4 6h8M2 9h12M4 12h8"/>"#),
-                "Align right" => Some(r#"<path d="M2 3h12M6 6h8M2 9h12M6 12h8"/>"#),
-                "Justify" => Some(r#"<path d="M2 3h12M2 6h12M2 9h12M2 12h12"/>"#),
-                "Line spacing" => {
-                    Some(r#"<path d="M3 2v12M1 4l2-2 2 2M1 12l2 2 2-2M8 3h7M8 8h7M8 13h7"/>"#)
-                }
-                "Lists" => Some(
-                    r#"<circle cx="2" cy="3" r=".7"/><circle cx="2" cy="8" r=".7"/><circle cx="2" cy="13" r=".7"/><path d="M6 3h9M6 8h9M6 13h9"/>"#,
-                ),
-                _ => None,
-            };
-            let button = if let Some(path) = path {
-                let svg = format!(
-                    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round">{path}</svg>"#
-                );
-                ui::icon_control(label, &svg, width, selected, colors)
-            } else {
-                ui::control(label, value, width, selected, colors).accessibility_label(label)
-            };
-            toolbar = toolbar.child(button.on_press(move || enqueue(&queue, command.clone())));
+        ] {
+            let q = queue.clone();
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">{path}</svg>"#
+            );
+            toolbar = toolbar.child(
+                ui::icon_control(label, &svg, 26., false, colors)
+                    .on_press(move || enqueue(&q, command)),
+            );
         }
         chrome = chrome.child(
-            scroll()
-                .horizontal()
-                .h(px(29.))
-                .scrollbar(false)
-                .child(toolbar),
+            view()
+                .w_full()
+                .h(px(30.))
+                .bg(ui::rgb(colors.toolbar))
+                .border_b_1()
+                .border_color(ui::rgb(colors.border))
+                .child(
+                    scroll()
+                        .horizontal()
+                        .w_full()
+                        .h_full()
+                        .scrollbar(false)
+                        .child(toolbar),
+                ),
         );
         if current.doc.ruler {
-            chrome = chrome.child(ui::ruler(colors, current.doc.zoom));
+            let gutter_inset = if current.prefs.show_line_numbers {
+                current.prefs.line_number_width
+            } else {
+                0.
+            };
+            chrome = chrome.child(ui::ruler(colors, current.doc.zoom, gutter_inset));
         }
     }
     // macOS keeps the system menu usable; other desktops use the compact in-window bar.
@@ -1478,6 +1505,11 @@ impl EditorWindow {
             Preferences::default()
         });
         ui::set_scale_percent(prefs.interface_scale);
+        ui::sync_chrome_preferences(
+            prefs.appearance,
+            prefs.window_controls,
+            prefs.window_controls_percent,
+        );
         let doc = DocumentTab::new(&prefs);
         let this = Self {
             doc,
@@ -1964,6 +1996,11 @@ impl EditorWindow {
             self.prefs = prefs;
         }
         if activated {
+            ui::sync_chrome_preferences(
+                self.prefs.appearance,
+                self.prefs.window_controls,
+                self.prefs.window_controls_percent,
+            );
             set_color_scheme(match self.prefs.appearance {
                 Appearance::Light => nsh_core::platform::Appearance::Light,
                 Appearance::Dark => nsh_core::platform::Appearance::Dark,
@@ -2838,9 +2875,16 @@ impl EditorWindow {
                     MenuKind::File,
                     MenuKind::Edit,
                     MenuKind::Find,
+                    MenuKind::Spelling,
+                    MenuKind::Substitutions,
+                    MenuKind::Transformations,
+                    MenuKind::ParagraphStyles,
                     MenuKind::Font,
+                    MenuKind::Alignment,
+                    MenuKind::Lists,
                     MenuKind::Format,
                     MenuKind::View,
+                    MenuKind::SplitView,
                     MenuKind::Window,
                 ] {
                     entries.extend(self.menu_entries(menu, cx)?.into_iter().filter(|entry| {
@@ -3082,6 +3126,7 @@ impl EditorWindow {
                     }
                 }
                 if prepare_instance_exit(cx) {
+                    ui::close_all_panels();
                     desktop::quit();
                 }
             }
@@ -3277,7 +3322,12 @@ impl EditorWindow {
             Command::GoToLine => self.show_form(
                 FormKind::GoToLine,
                 "Go to Line",
-                vec![Field::text("Line number", 1)],
+                vec![Field::text(
+                    "Line number",
+                    self.editor()
+                        .map(|editor| editor.line_at_selection())
+                        .unwrap_or(1),
+                )],
                 window,
                 cx,
             ),
@@ -3425,11 +3475,13 @@ impl EditorWindow {
                 Rgba::from_rgb(self.editor()?.formatting().foreground),
                 ColorTarget::Foreground,
                 self.queue.clone(),
+                self.colors(window),
             ),
             Command::Background => color_picker::open(
                 Rgba::from_rgb(self.editor()?.formatting().background),
                 ColorTarget::Background,
                 self.queue.clone(),
+                self.colors(window),
             ),
             Command::InsertColorCode => {
                 let selected = self.editor()?.selected_text()?;
@@ -3438,6 +3490,7 @@ impl EditorWindow {
                     ColorTarget::InsertCode,
                     self.queue.clone(),
                     Some(selected),
+                    self.colors(window),
                 );
             }
             Command::ApplyColor(target, color, code) => {
@@ -3600,10 +3653,12 @@ impl EditorWindow {
                             | EditCommand::Foreground(_)
                             | EditCommand::Background(_)
                             | EditCommand::Align(_)
+                            | EditCommand::BlockStyle(_)
                             | EditCommand::LineSpacing(_)
                             | EditCommand::Indent(_)
                             | EditCommand::FirstLineIndent(_)
                             | EditCommand::List(_)
+                            | EditCommand::HorizontalRule
                             | EditCommand::PasteStyle
                     )
                 {
@@ -3869,7 +3924,7 @@ impl EditorWindow {
                 }
                 prefs.validate_line_numbers()?;
                 prefs.save()?;
-                // Apply the same persisted appearance and title-bar layout to existing windows.
+                // Apply the same persisted defaults, appearance, and title-bar layout to existing windows.
                 for entry in cx
                     .workspace
                     .entries
@@ -3878,18 +3933,19 @@ impl EditorWindow {
                     .filter(|entry| entry.id != cx.id)
                 {
                     let mut other = entry.model.borrow_mut();
-                    other.prefs.show_line_numbers = prefs.show_line_numbers;
-                    other.prefs.line_number_font = prefs.line_number_font.clone();
-                    other.prefs.line_number_size = prefs.line_number_size;
-                    other.prefs.line_number_width = prefs.line_number_width;
-                    other.prefs.appearance = prefs.appearance;
-                    other.prefs.window_controls = prefs.window_controls;
-                    other.prefs.window_controls_percent = prefs.window_controls_percent;
+                    let recent = other.prefs.recent_files.clone();
+                    other.prefs = prefs.clone();
+                    other.prefs.recent_files = recent;
                     other.ui_stamp.clear();
                     entry.revision.update(|value| *value += 1);
                 }
                 self.ui_stamp.clear();
                 self.prefs = prefs;
+                ui::sync_chrome_preferences(
+                    self.prefs.appearance,
+                    self.prefs.window_controls,
+                    self.prefs.window_controls_percent,
+                );
                 set_color_scheme(match self.prefs.appearance {
                     Appearance::Light => nsh_core::platform::Appearance::Light,
                     Appearance::Dark => nsh_core::platform::Appearance::Dark,
@@ -3925,6 +3981,32 @@ impl EditorWindow {
                 ensure!(!self.doc.find_text.is_empty(), "Enter the text to find");
                 self.command(Command::FindNext, window, cx);
             }
+            FormKind::ReplaceFind => {
+                self.doc.find_text = value(0)?.into();
+                self.doc.replace_text = value(1)?.into();
+                self.doc.find_case = value(2)? == "true";
+                self.doc.find_whole = value(3)? == "true";
+                ensure!(!self.doc.find_text.is_empty(), "Enter the text to find");
+                self.command(Command::FindNext, window, cx);
+            }
+            FormKind::ReplaceOne => {
+                self.doc.find_text = value(0)?.into();
+                self.doc.replace_text = value(1)?.into();
+                self.doc.find_case = value(2)? == "true";
+                self.doc.find_whole = value(3)? == "true";
+                ensure!(!self.doc.find_text.is_empty(), "Enter the text to find");
+                if !self.editor()?.replace_one(
+                    &self.doc.find_text,
+                    &self.doc.replace_text,
+                    self.doc.find_case,
+                    self.doc.find_whole,
+                )? {
+                    MessageDialog::new()
+                        .set_title("Find and Replace")
+                        .set_description("No matches found.")
+                        .show();
+                }
+            }
             FormKind::Replace => {
                 self.doc.find_text = value(0)?.into();
                 self.doc.replace_text = value(1)?.into();
@@ -3945,18 +4027,20 @@ impl EditorWindow {
             FormKind::GoToLine => {
                 let line = value(0)?.parse::<usize>()?;
                 ensure!(line > 0, "Line numbers start at 1");
-                let text = self.editor()?.text()?;
+                let editor = self.editor()?;
+                let text = editor.text()?;
                 let mut offset = 0;
                 let mut found = false;
-                for (index, part) in text.split_inclusive('\n').enumerate() {
+                for (index, part) in text.split('\n').enumerate() {
                     if index + 1 == line {
                         found = true;
                         break;
                     }
-                    offset += part.encode_utf16().count();
+                    offset += part.encode_utf16().count() + 1;
                 }
                 ensure!(found, "That line does not exist");
-                self.editor()?.select_range(offset..offset)?;
+                editor.select_range(offset..offset)?;
+                editor.scroll_to_selection();
             }
         }
         self.editor()?.focus();
@@ -4145,12 +4229,16 @@ impl EditorWindow {
                 e("Capitalize", "", EditCommand::ConvertCase(Case::Title)),
             ],
             M::Format => vec![
+                item("Paragraph Styles", "›", C::Menu(M::ParagraphStyles)),
                 item("Font", "›", C::Menu(M::Font)),
                 item("Text Alignment", "›", C::Menu(M::Alignment)),
                 item("Lists…", "›", C::Menu(M::Lists)),
+                sep(),
                 item("Table…", "", C::Table),
                 item("Link…", "", C::Link),
                 item("Insert Image…", "", C::Image),
+                e("Insert Line Break", "", EditCommand::LineBreak),
+                e("Insert Horizontal Line", "", EditCommand::HorizontalRule),
                 sep(),
                 item(
                     if self.doc.rich {
@@ -4180,6 +4268,36 @@ impl EditorWindow {
                     C::ToggleReadOnly,
                 ),
             ],
+            M::ParagraphStyles => [
+                BlockStyle::Body,
+                BlockStyle::Heading(1),
+                BlockStyle::Heading(2),
+                BlockStyle::Heading(3),
+                BlockStyle::Heading(4),
+                BlockStyle::Heading(5),
+                BlockStyle::Heading(6),
+            ]
+            .into_iter()
+            .map(|style| {
+                e(style.label(), "", EditCommand::BlockStyle(style))
+                    .checked(self.doc.formatting.block_style == style)
+            })
+            .chain([
+                sep(),
+                e(
+                    BlockStyle::Blockquote.label(),
+                    "",
+                    EditCommand::BlockStyle(BlockStyle::Blockquote),
+                )
+                .checked(self.doc.formatting.block_style == BlockStyle::Blockquote),
+                e(
+                    BlockStyle::CodeBlock.label(),
+                    "",
+                    EditCommand::BlockStyle(BlockStyle::CodeBlock),
+                )
+                .checked(self.doc.formatting.block_style == BlockStyle::CodeBlock),
+            ])
+            .collect(),
             M::Font => vec![
                 item("Show Fonts", crate::keyboard::label("font"), C::Font),
                 item("Bigger", crate::keyboard::label("bigger"), C::FontStep(1.)),

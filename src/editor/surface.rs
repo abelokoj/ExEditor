@@ -113,6 +113,90 @@ fn styles(editor: &Editor) -> RichEditorStyles {
         } else {
             0
         })));
+    let cache_key = (
+        editor.document_revision(),
+        display.zoom,
+        display.text_override,
+        display.background,
+    );
+    let dark_paper = color(display.background).luminance() < 0.18;
+    let (nodes, marks, max_line_chars) = editor.cached_part_styles(cache_key, |doc| {
+        let mut nodes = BTreeMap::new();
+        let mut marks = BTreeMap::new();
+        nodes.insert(
+            "paragraph".into(),
+            number_style(StyleKey::MarginBottom, 4. * zoom),
+        );
+        nodes.insert(
+            "blockquote".into(),
+            number_style(StyleKey::MarginTop, 6. * zoom)
+                .then(&number_style(StyleKey::MarginBottom, 6. * zoom))
+                .then(&string_style(
+                    StyleKey::BorderColor,
+                    if dark_paper { "#6b7280" } else { "#cbd5e1" },
+                )),
+        );
+        nodes.insert(
+            "codeBlock".into(),
+            string_style(StyleKey::FontFamily, crate::fonts::default_plain_font())
+                .then(&number_style(StyleKey::FontSize, 11.5 * zoom))
+                .then(&number_style(StyleKey::BorderRadius, 6. * zoom))
+                .then(&number_style(StyleKey::MarginTop, 6. * zoom))
+                .then(&number_style(StyleKey::MarginBottom, 6. * zoom))
+                .then(&string_style(
+                    StyleKey::BackgroundColor,
+                    if dark_paper { "#2a2a2e" } else { "#f4f4f5" },
+                )),
+        );
+        for (level, size) in [(1, 28.), (2, 23.), (3, 19.), (4, 16.), (5, 14.), (6, 13.)] {
+            nodes.insert(
+                format!("heading[level={level}]"),
+                number_style(StyleKey::FontSize, size * zoom)
+                    .then(&number_style(StyleKey::FontWeight, 700.))
+                    .then(&number_style(StyleKey::MarginTop, 12. * zoom))
+                    .then(&number_style(StyleKey::MarginBottom, 5. * zoom)),
+            );
+        }
+        marks.insert("bold".into(), number_style(StyleKey::FontWeight, 700.));
+        marks.insert("italic".into(), string_style(StyleKey::FontStyle, "italic"));
+        marks.insert(
+            "underline".into(),
+            string_style(StyleKey::TextDecorationLine, "underline"),
+        );
+        marks.insert(
+            "strike".into(),
+            string_style(StyleKey::TextDecorationLine, "line-through"),
+        );
+        marks.insert(
+            "code".into(),
+            string_style(StyleKey::FontFamily, crate::fonts::default_plain_font()),
+        );
+        marks.insert(
+            "link".into(),
+            string_style(StyleKey::TextDecorationLine, "underline").then(&string_style(
+                StyleKey::Color,
+                if dark_paper { "#8fc7ff" } else { "#2259bd" },
+            )),
+        );
+        marks.insert(
+            "subscript".into(),
+            number_style(StyleKey::FontSize, 10. * zoom)
+                .then(&string_style(StyleKey::VerticalAlign, "text-bottom")),
+        );
+        marks.insert(
+            "superscript".into(),
+            number_style(StyleKey::FontSize, 10. * zoom)
+                .then(&string_style(StyleKey::VerticalAlign, "text-top")),
+        );
+        doc.descendants(&mut |node, _, _, _| {
+            node_styles(node, &mut nodes);
+            for mark in node.marks() {
+                mark_styles(mark, &mut marks, zoom, display.text_override);
+            }
+            true
+        });
+        (PartStyles(nodes), PartStyles(marks))
+    });
     if display.plain {
         content = content.text_size(px(format.size * zoom));
     }
@@ -122,15 +206,7 @@ fn styles(editor: &Editor) -> RichEditorStyles {
             .mx(auto());
     } else if !display.wrap {
         // shortcut: cap the no-wrap workaround at 64,000 px; upgrade when NSH supports native no-wrap.
-        let width = editor
-            .plain_text_snapshot()
-            .lines()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0) as f32
-            * format.size
-            * zoom
-            + 40.;
+        let width = max_line_chars as f32 * format.size * zoom + 40.;
         content = content.min_w(px(width.clamp(600., 64_000.)));
     }
     styles.content = Some(part(content));
@@ -151,66 +227,8 @@ fn styles(editor: &Editor) -> RichEditorStyles {
             .outline(px(2.))
             .outline_color(color(0x087ef5)),
     ));
-    let mut nodes = BTreeMap::new();
-    let mut marks = BTreeMap::new();
-    nodes.insert(
-        "paragraph".into(),
-        number_style(StyleKey::MarginBottom, 4. * zoom),
-    );
-    for (level, size) in [(1, 28.), (2, 23.), (3, 19.), (4, 16.), (5, 14.), (6, 13.)] {
-        nodes.insert(
-            format!("heading[level={level}]"),
-            number_style(StyleKey::FontSize, size * zoom)
-                .then(&number_style(StyleKey::FontWeight, 700.))
-                .then(&number_style(StyleKey::MarginTop, 12. * zoom))
-                .then(&number_style(StyleKey::MarginBottom, 5. * zoom)),
-        );
-    }
-    marks.insert("bold".into(), number_style(StyleKey::FontWeight, 700.));
-    marks.insert("italic".into(), string_style(StyleKey::FontStyle, "italic"));
-    marks.insert(
-        "underline".into(),
-        string_style(StyleKey::TextDecorationLine, "underline"),
-    );
-    marks.insert(
-        "strike".into(),
-        string_style(StyleKey::TextDecorationLine, "line-through"),
-    );
-    marks.insert(
-        "code".into(),
-        string_style(StyleKey::FontFamily, crate::fonts::default_plain_font()),
-    );
-    marks.insert(
-        "link".into(),
-        string_style(StyleKey::TextDecorationLine, "underline").then(&string_style(
-            StyleKey::Color,
-            if color(display.background).luminance() < 0.18 {
-                "#8fc7ff"
-            } else {
-                "#2259bd"
-            },
-        )),
-    );
-    marks.insert(
-        "subscript".into(),
-        number_style(StyleKey::FontSize, 10. * zoom)
-            .then(&string_style(StyleKey::VerticalAlign, "text-bottom")),
-    );
-    marks.insert(
-        "superscript".into(),
-        number_style(StyleKey::FontSize, 10. * zoom)
-            .then(&string_style(StyleKey::VerticalAlign, "text-top")),
-    );
-    let state = editor.native_session().state();
-    state.doc().descendants(&mut |node, _, _, _| {
-        node_styles(node, &mut nodes);
-        for mark in node.marks() {
-            mark_styles(mark, &mut marks, zoom, display.text_override);
-        }
-        true
-    });
-    styles.nodes = Some(PartStyles(nodes));
-    styles.marks = Some(PartStyles(marks));
+    styles.nodes = Some(nodes);
+    styles.marks = Some(marks);
     styles
 }
 fn completion_popup(editor: Rc<Editor>, revision: Signal<u64>) -> impl IntoElement {

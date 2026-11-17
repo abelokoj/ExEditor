@@ -147,12 +147,13 @@ struct LanguageTools {
     colors: Palette,
 }
 pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
-    ui::show_panel(
+    ui::show_panel_with_colors(
         "language-tools",
         "Spelling and Grammar | ExEditor",
         580.,
-        340.,
+        380.,
         WindowKind::Dialog,
+        colors,
         move || {
             let state = Rc::new(LanguageTools {
                 language: signal(options.language.clone()),
@@ -194,8 +195,8 @@ pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
             let apply = state.clone();
             let shortcut = state.clone();
             on_key("mod+enter", move |_| shortcut.submit());
-            ui::surface(colors).child(ui::heading("Spelling and Grammar"))
-            .child(scroll().flex_1().min_h(px(0.)).child(view().gap(px(13.))
+            ui::surface(colors)
+            .child(scroll().flex_1().min_h(px(0.)).child(view().gap(px(13.)).pr(px(14.)).pb(px(6.))
                 .child(ui::checkbox("harper-grammar", "Check English grammar with Harper",
                     move || draft.with(|options| options.grammar), colors,
                     move |grammar| { draft.update(|options| options.grammar = grammar); error.set(String::new()); }))
@@ -213,10 +214,12 @@ pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
                 .child(ui::row("Spelling language:", ui::input("Spelling language, for example en-US", state.language, colors)))
                 .child(dynamic(move || content.dictionary_controls()))
                 .child(ui::error(state.error, colors))))
-            .child(view().flex_row().justify_end().gap(px(8.))
+            .child(view().flex_row().items_center().justify_end().pt(px(8.)).border_t_1().border_color(ui::rgb(colors.border)).gap(px(8.))
                 .child(ui::control("cancel-language-tools", "Cancel", 80., false, colors)
+                    .h(px(28.))
                     .on_press(|| ui::close_panel("language-tools")))
                 .child(ui::control("apply-language-tools", "Apply", 80., true, colors)
+                    .h(px(28.))
                     .on_press(move || apply.submit())))
             .into_element()
         },
@@ -250,7 +253,7 @@ impl LanguageTools {
                             .flex_1(),
                     )
                     .child(
-                        ui::button("browse-dictionary", "Browse…", 12.)
+                        ui::button_styled("browse-dictionary", "Browse…", 12., self.colors)
                             .on_press(move || state.browse()),
                     ),
             );
@@ -336,16 +339,21 @@ impl LanguageTools {
                     .items_center()
                     .gap(px(12.))
                     .child(
-                        ui::button(format!("dictionary-{}", pack.id), label, 12.)
-                            .accessibility_label(format!("{label} {} dictionary", pack.name))
-                            .disabled(disabled)
-                            .on_press(move || {
-                                if let Some(path) = &path {
-                                    state.use_dictionary(pack, path);
-                                } else {
-                                    state.download_dictionary(index, pack);
-                                }
-                            }),
+                        ui::button_styled(
+                            format!("dictionary-{}", pack.id),
+                            label,
+                            12.,
+                            self.colors,
+                        )
+                        .accessibility_label(format!("{label} {} dictionary", pack.name))
+                        .disabled(disabled)
+                        .on_press(move || {
+                            if let Some(path) = &path {
+                                state.use_dictionary(pack, path);
+                            } else {
+                                state.download_dictionary(index, pack);
+                            }
+                        }),
                     )
                     .child(
                         nsh_base::link()

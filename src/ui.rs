@@ -1,31 +1,58 @@
 //! TextEdit's compact native controls, shared panel windows and measured ruler.
 use nsh_base::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
-use nsh_core::desktop::{WindowKind, WindowPosition};
+use nsh_core::desktop::{
+    TitleBarOptions, TitleBarStyle, WindowAttributes, WindowFrameStyle, WindowKind, WindowPosition,
+};
 use nsh_core::element::{IntoReactive, desktop};
 use nsh_core::prelude::*;
 use std::{
     rc::Rc,
-    sync::atomic::{AtomicU16, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering},
 };
 
 static SCALE_PERCENT: AtomicU16 = AtomicU16::new(100);
+static ACTIVE_APPEARANCE: AtomicU8 = AtomicU8::new(0);
+static CONTROLS_LEFT: AtomicBool = AtomicBool::new(cfg!(target_os = "macos"));
 pub const SCALE_RANGE: std::ops::RangeInclusive<u16> = 50..=300;
 pub const CONTROL_MOTION_MS: f32 = 120.;
 
+pub fn sync_chrome_preferences(
+    appearance: crate::preferences::Appearance,
+    controls: crate::preferences::WindowControls,
+    controls_percent: u16,
+) {
+    let mode = match appearance {
+        crate::preferences::Appearance::System => 0,
+        crate::preferences::Appearance::Light => 1,
+        crate::preferences::Appearance::Dark => 2,
+    };
+    ACTIVE_APPEARANCE.store(mode, Ordering::Relaxed);
+    let left = matches!(controls, crate::preferences::WindowControls::Left)
+        || (matches!(controls, crate::preferences::WindowControls::Custom)
+            && controls_percent < 50);
+    CONTROLS_LEFT.store(left, Ordering::Relaxed);
+}
+
 pub fn configure_scrollbars() {
     let mut vertical = ScrollbarLook::default();
-    vertical.class = Some("absolute top-0 right-0 bottom-0 w-[10px]".into());
-    vertical.thumb_class = Some("w-full rounded bg-neutral-400".into());
+    vertical.class = Some("absolute top-0 right-0 bottom-0 w-[12px] p-[2px]".into());
+    vertical.thumb_class = Some(
+        "w-full rounded-full bg-neutral-500/55 hover:bg-neutral-500/80 active:bg-neutral-500/95"
+            .into(),
+    );
     vertical.accessibility_label = Some("Document scrollbar".into());
 
     let mut horizontal = ScrollbarLook::default();
-    horizontal.class = Some("absolute left-0 right-0 bottom-0 h-[10px]".into());
-    horizontal.thumb_class = Some("h-full rounded bg-neutral-400".into());
+    horizontal.class = Some("absolute left-0 right-0 bottom-0 h-[12px] p-[2px]".into());
+    horizontal.thumb_class = Some(
+        "h-full rounded-full bg-neutral-500/55 hover:bg-neutral-500/80 active:bg-neutral-500/95"
+            .into(),
+    );
     horizontal.accessibility_label = Some("Horizontal scrollbar".into());
 
     let mut theme = ScrollbarTheme::default();
     theme.mode = ScrollbarMode::Always;
-    theme.min_thumb_length = nsh_core::geometry::px(32.0);
+    theme.min_thumb_length = nsh_core::geometry::px(36.0);
     theme.vertical = Some(vertical);
     theme.horizontal = Some(horizontal);
 
@@ -92,7 +119,12 @@ impl Palette {
         }
     }
     pub fn current() -> Self {
-        Self::new(dark())
+        let dark_mode = match ACTIVE_APPEARANCE.load(Ordering::Relaxed) {
+            1 => false,
+            2 => true,
+            _ => dark(),
+        };
+        Self::new(dark_mode)
     }
 }
 
@@ -197,7 +229,15 @@ pub fn button(
     label: impl Into<SharedString>,
     font_size: f32,
 ) -> nsh_base::ButtonElement {
-    let colors = Palette::current();
+    button_styled(id, label, font_size, Palette::current())
+}
+
+pub fn button_styled(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    font_size: f32,
+    colors: Palette,
+) -> nsh_base::ButtonElement {
     let label: SharedString = label.into();
     nsh_base::button()
         .key(Into::<SharedString>::into(id))
@@ -208,7 +248,7 @@ pub fn button(
         .flex_row()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(px(5.))
         .border_1()
         .border_color(rgb(colors.border))
         .bg(rgb(colors.field))
@@ -247,14 +287,222 @@ pub fn control(
         _ => label.as_ref(),
     }
     .to_owned();
-    button(id, label, 11.)
+    button_styled(id, label, 11., colors)
         .accessibility_label(description)
         .w(px(width))
-        .h(px(24.))
-        .px(px(2.))
+        .h(px(23.))
+        .px(px(4.))
         .selected(active)
+        .border_color(rgb(if active { colors.accent } else { colors.border }))
         .bg(rgb(if active { colors.accent } else { colors.field }))
         .text_color(rgb(if active { colors.on_accent } else { colors.ink }))
+        .hover(move |s| {
+            s.bg(rgb(if active {
+                colors.accent
+            } else {
+                colors.toolbar
+            }))
+        })
+}
+
+pub fn menu_bar_item(label: &'static str, width: f32, colors: Palette) -> nsh_base::ButtonElement {
+    let is_app = label == "ExEditor";
+    nsh_base::button()
+        .key(label)
+        .accessibility_label(label)
+        .w(px(width))
+        .h(px(22.))
+        .px(px(6.))
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(rgb(colors.ink))
+        .transition_colors()
+        .duration(move || {
+            if reduce_motion() {
+                0.
+            } else {
+                CONTROL_MOTION_MS
+            }
+        })
+        .hover(move |s| s.bg(rgb(colors.field)))
+        .active(move |s| s.bg(rgb(colors.accent)).text_color(rgb(colors.on_accent)))
+        .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
+        .child(
+            text(label)
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .font_weight(if is_app {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                }),
+        )
+}
+
+pub fn dropdown_control(
+    id: &'static str,
+    value: impl Into<SharedString>,
+    width: f32,
+    colors: Palette,
+) -> nsh_base::ButtonElement {
+    let value: SharedString = value.into();
+    nsh_base::button()
+        .key(id)
+        .accessibility_label(id)
+        .w(px(width))
+        .h(px(23.))
+        .px(px(6.))
+        .gap(px(4.))
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(rgb(colors.border))
+        .bg(rgb(colors.field))
+        .text_color(rgb(colors.ink))
+        .hover(move |s| s.bg(rgb(colors.toolbar)))
+        .active(|s| s.opacity(0.8))
+        .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
+        .child(
+            text(value)
+                .text_size(px(11.))
+                .line_height(px(15.))
+                .truncate()
+                .flex_1()
+                .min_w(px(0.)),
+        )
+        .child(
+            text("▾")
+                .text_size(px(9.))
+                .text_color(rgb(colors.muted))
+                .flex_shrink_0(),
+        )
+}
+
+pub fn color_control(
+    id: &'static str,
+    glyph: &'static str,
+    swatch: u32,
+    background_swatch: bool,
+    colors: Palette,
+) -> nsh_base::ButtonElement {
+    let button = nsh_base::button()
+        .key(id)
+        .accessibility_label(id)
+        .w(px(26.))
+        .h(px(23.))
+        .px(px(3.))
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(1.))
+        .rounded(px(5.))
+        .border_1()
+        .border_color(rgb(colors.border))
+        .bg(rgb(colors.field))
+        .text_color(rgb(colors.ink))
+        .hover(move |s| s.bg(rgb(colors.toolbar)))
+        .active(|s| s.opacity(0.8))
+        .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)));
+    if background_swatch {
+        button.child(
+            view()
+                .size(px(14.))
+                .rounded(px(2.5))
+                .border_1()
+                .border_color(rgb(colors.border))
+                .bg(rgb(swatch & 0xffffff)),
+        )
+    } else {
+        button
+            .child(
+                text(glyph)
+                    .text_size(px(11.))
+                    .line_height(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD),
+            )
+            .child(
+                view()
+                    .w(px(14.))
+                    .h(px(3.))
+                    .rounded_full()
+                    .bg(rgb(swatch & 0xffffff)),
+            )
+    }
+}
+
+pub fn toolbar_divider(colors: Palette) -> impl IntoElement {
+    view()
+        .w(px(1.))
+        .h(px(16.))
+        .mx(px(2.))
+        .flex_shrink_0()
+        .bg(rgb(colors.border))
+}
+
+pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
+    group_label: &'static str,
+    tabs: &[(T, &'static str)],
+    selected: Signal<T>,
+    colors: Palette,
+) -> impl IntoElement {
+    view()
+        .key(group_label)
+        .role(AccessibilityRole::TabList)
+        .label(group_label)
+        .flex_row()
+        .items_center()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(colors.border))
+        .bg(rgb(colors.toolbar))
+        .children(tabs.iter().enumerate().map(|(index, &(tab, title))| {
+            nsh_base::button()
+                .key(format!("segment-tab-{index}"))
+                .role(AccessibilityRole::Tab)
+                .accessibility_label(title)
+                .selected(move || selected.get() == tab)
+                .flex_1()
+                .h(px(26.))
+                .px(px(10.))
+                .rounded(px(4.))
+                .items_center()
+                .justify_center()
+                .bg(move || {
+                    rgb(if selected.get() == tab {
+                        colors.accent
+                    } else {
+                        colors.toolbar
+                    })
+                })
+                .text_color(move || {
+                    rgb(if selected.get() == tab {
+                        colors.on_accent
+                    } else {
+                        colors.ink
+                    })
+                })
+                .hover(move |s| {
+                    s.bg(rgb(if selected.get() == tab {
+                        colors.accent
+                    } else {
+                        colors.field
+                    }))
+                })
+                .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
+                .child(
+                    text(title)
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM),
+                )
+                .on_press(move || selected.set(tab))
+                .into_element()
+        }))
 }
 
 pub fn input(
@@ -332,8 +580,17 @@ pub fn select(
                             .map(|item| item.title.clone())
                             .unwrap_or_default()
                     })
+                    .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
                     .text_color(rgb(colors.ink))
                     .text_size(px(12.)),
+                )
+                .child(
+                    text("▾")
+                        .text_size(px(10.))
+                        .text_color(rgb(colors.muted))
+                        .flex_shrink_0(),
                 ),
         )
 }
@@ -453,6 +710,7 @@ struct Panel {
     width: f32,
     height: f32,
     kind: WindowKind,
+    colors: Palette,
     content: Rc<dyn Fn() -> AnyElement>,
 }
 impl PartialEq for Panel {
@@ -466,6 +724,78 @@ struct Panels {
     windows: Vec<Panel>,
 }
 
+fn panel_window_attributes(kind: WindowKind, title: &str) -> WindowAttributes {
+    let mut attributes = WindowAttributes::default();
+    attributes.title = Some(title.to_owned());
+    let mut bar = TitleBarOptions::default();
+    bar.style = TitleBarStyle::Hidden;
+    bar.height = Some(px(if kind == WindowKind::Popup { 0. } else { 32. }));
+    attributes.title_bar = Some(bar);
+    attributes.frame = Some(WindowFrameStyle::None);
+    attributes.close_on_escape = Some(true);
+    attributes.minimizable = Some(false);
+    attributes.maximizable = Some(false);
+    if kind == WindowKind::Popup {
+        attributes.resizable = Some(false);
+    }
+    attributes
+}
+
+fn panel_title_bar(name: &'static str, title: &str, colors: Palette) -> AnyElement {
+    let display_title = title
+        .strip_suffix(" | ExEditor")
+        .or_else(|| title.strip_prefix("ExEditor "))
+        .filter(|trimmed| !trimmed.is_empty())
+        .unwrap_or(title)
+        .to_owned();
+    let close = nsh_base::button()
+        .key(format!("close-panel-{name}"))
+        .accessibility_label("Close")
+        .size(px(15.))
+        .rounded_full()
+        .bg(rgb(0xff5f57))
+        .hover(|s| s.opacity(0.85))
+        .active(|s| s.opacity(0.7))
+        .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
+        .on_press(move || close_panel(name));
+    let controls_left = CONTROLS_LEFT.load(Ordering::Relaxed);
+    let mut header = view()
+        .flex_row()
+        .items_center()
+        .h(px(32.))
+        .px(px(12.))
+        .flex_shrink_0()
+        .bg(rgb(colors.chrome))
+        .border_b_1()
+        .border_color(rgb(colors.border))
+        .window_drag(true);
+    let caption = view()
+        .flex_1()
+        .min_w(px(0.))
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .child(
+            text(display_title)
+                .text_size(px(12.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(colors.ink))
+                .truncate(),
+        );
+    header = if controls_left {
+        header
+            .child(view().w(px(24.)).items_start().child(close))
+            .child(caption)
+            .child(view().w(px(24.)))
+    } else {
+        header
+            .child(view().w(px(24.)))
+            .child(caption)
+            .child(view().w(px(24.)).items_end().child(close))
+    };
+    header.into_element()
+}
+
 /// Requests are made on the UI thread; content is created under its native window owner.
 pub fn show_panel(
     name: &'static str,
@@ -473,6 +803,26 @@ pub fn show_panel(
     width: f32,
     height: f32,
     kind: WindowKind,
+    content: impl Fn() -> AnyElement + 'static,
+) {
+    show_panel_with_colors(
+        name,
+        title,
+        width,
+        height,
+        kind,
+        Palette::current(),
+        content,
+    );
+}
+
+pub fn show_panel_with_colors(
+    name: &'static str,
+    title: &str,
+    width: f32,
+    height: f32,
+    kind: WindowKind,
+    colors: Palette,
     content: impl Fn() -> AnyElement + 'static,
 ) {
     global::<Panels>().update(|panels| {
@@ -485,12 +835,16 @@ pub fn show_panel(
             width,
             height,
             kind,
+            colors,
             content: Rc::new(content),
         });
     });
 }
 pub fn close_panel(name: &str) {
     global::<Panels>().update(|panels| panels.windows.retain(|panel| panel.name != name));
+}
+pub fn close_all_panels() {
+    global::<Panels>().update(|panels| panels.windows.clear());
 }
 /// Mount once under the application root, beside the document windows.
 pub fn panel_host() -> impl IntoElement {
@@ -502,10 +856,15 @@ pub fn panel_host() -> impl IntoElement {
             let panel = item.get_untracked();
             let name = panel.name;
             let serial = panel.serial;
+            let kind = panel.kind;
+            let colors = panel.colors;
+            let title = panel.title.clone();
+            let attributes = panel_window_attributes(kind, &title);
             desktop::window()
                 .id(format!("exeditor-{name}-{}", panel.serial))
-                .kind(panel.kind)
+                .kind(kind)
                 .title(panel.title)
+                .attributes(attributes.clone())
                 .default_position(WindowPosition::ParentCenter)
                 .default_size(size(px(panel.width), px(panel.height)))
                 .on_open_change(move |change| {
@@ -515,24 +874,39 @@ pub fn panel_host() -> impl IntoElement {
                     }
                 })
                 .content(move || {
+                    desktop::current_window().set(attributes.clone());
                     crate::window_style::after_open();
-                    view()
+                    if kind != WindowKind::Popup {
+                        on_key("escape", move |_| close_panel(name));
+                    }
+                    let mut frame = view()
                         .flex_1()
                         .min_w(px(0.))
                         .min_h(px(0.))
                         .rounded(px(8.))
                         .overflow_hidden()
-                        .on_layout(|_: &Bounds<Points>| crate::window_style::refresh())
-                        .child((panel.content)())
+                        .border_1()
+                        .border_color(rgb(colors.border))
+                        .bg(rgb(if kind == WindowKind::Popup {
+                            colors.field
+                        } else {
+                            colors.chrome
+                        }))
+                        .font_family(crate::fonts::INTER_FONT)
+                        .on_layout(|_: &Bounds<Points>| crate::window_style::refresh());
+                    if kind != WindowKind::Popup {
+                        frame = frame.child(panel_title_bar(name, &title, colors));
+                    }
+                    frame.child((panel.content)())
                 })
         },
     )
 }
 
-pub fn ruler(colors: Palette, zoom: u16) -> AnyElement {
+pub fn ruler(colors: Palette, zoom: u16, left_inset: f32) -> AnyElement {
     let width = signal(0_f32);
     view()
-        .h(px(28.))
+        .h(px(26.))
         .w_full()
         .flex_shrink(0.)
         .bg(rgb(colors.toolbar))
@@ -542,29 +916,34 @@ pub fn ruler(colors: Palette, zoom: u16) -> AnyElement {
         .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
         .child(
             canvas(move || {
-                let step = 72. * f32::from(zoom) / 100.;
+                let scale = f32::from(zoom) / 100.;
+                let step = 72. * scale;
+                let origin = left_inset + 20. * scale;
                 let mut painter = Painter::new()
                     .stroke_style(rgb(colors.muted))
                     .fill_style(rgb(colors.muted))
-                    .line_width(0.65)
+                    .line_width(0.75)
                     .font("9px Inter");
-                for tick in 0..((width.get() / (step / 8.)).ceil() as usize) {
-                    let x = 12. + tick as f32 * step / 8.;
+                let available = (width.get() - origin).max(0.);
+                let ticks = ((available / (step / 8.)).ceil() as usize).min(2048);
+                let bottom = px(25.).0;
+                for tick in 0..=ticks {
+                    let x = origin + tick as f32 * step / 8.;
                     let height = if tick % 8 == 0 {
                         10.
                     } else if tick % 4 == 0 {
-                        7.
+                        6.5
                     } else {
-                        4.
+                        3.5
                     };
                     painter = painter
                         .begin_path()
-                        .move_to(x, px(11.).0)
-                        .line_to(x, px(11. - height).0)
+                        .move_to(x, bottom)
+                        .line_to(x, bottom - px(height).0)
                         .stroke();
                     if tick % 8 == 0 {
                         painter =
-                            painter.fill_text(&(tick / 8).to_string(), x + px(2.).0, px(24.).0);
+                            painter.fill_text(&(tick / 8).to_string(), x + px(3.).0, px(11.).0);
                     }
                 }
                 painter
@@ -582,7 +961,7 @@ pub fn icon_control(
     colors: Palette,
 ) -> nsh_base::ButtonElement {
     control(id.to_owned(), "", width, selected, colors)
-        .h(px(24.))
+        .h(px(23.))
         .accessibility_label(id.to_owned())
         .child(
             svg(nsh_core::element::ImageSrc::svg_markup(markup))
