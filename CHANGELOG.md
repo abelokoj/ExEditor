@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-17T16:29:30-05:00 - Deliver validated release v26-11-17.20-v0.3.0 (GitHub-built, downloaded, and visually verified)
+
+- **Validated Multi-Platform CI Run:** Source commit `1d04c22f99b952f3b7de04f38f04bcec54b8fe9b`, [GitHub Actions run 44174479862](https://github.com/abelokoj/ExEditor/actions/runs/44174479862) passed formatting, release numbering, `cargo clippy --locked --all-targets --all-features -- -D warnings`, Rust unit tests (including `block_styles_line_numbers_replace_one_and_pt_indents_roundtrip_cleanly`), optional font/dictionary download checks, pre-release and release Light/Dark Windows native UI checks, and Windows/macOS/Linux native packaging.
+- **Downloaded & Verified Artifacts (`dist/ExEditor-v26-11-17.20-v0.3.0`):**
+  - Windows x64 Installer `ExEditor-v26-11-17.20-v0.3.0-win-x64.exe`: `24,944,351` bytes, SHA-256 `526e4555bab2b5c84383a9918aba224f35512c5a95d7495dd122634eccecb17f`.
+  - Windows x64 Portable Archive `ExEditor-v26-11-17.20-v0.3.0-win-x64-port.zip`: `30,192,489` bytes, SHA-256 `62fedb2e66e32d7bb1922ad6b7516364959cf7b43f68fc5104f71af36c59642b`.
+  - Visually verified newly captured Light and Dark screenshots confirming full-width toolbar chrome, crisp SVG alignment/spacing/list icons, aligned ruler origin, pill scrollbars, and cohesive frameless `Settings` window with segmented tabs.
+
 ## 2026-11-17T15:05:30-05:00 - Upgrade NSH to 6442c86be, enable SVG toolbar rendering, unify frameless panel chrome, and complete editor UX & performance overhaul
 
 - **NSH Upstream Upgrade & SVG Rendering (`Cargo.toml`, `scripts/package.ps1`, `scripts/package-desktop.py`, `AGENTS.md`):**
