@@ -1,5 +1,5 @@
 //! TextEdit's compact native controls, shared panel windows and measured ruler.
-use nsh_base::scrollbar::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
+use nsh_base::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
 use nsh_core::desktop::{WindowKind, WindowPosition};
 use nsh_core::element::{IntoReactive, desktop};
 use nsh_core::prelude::*;
