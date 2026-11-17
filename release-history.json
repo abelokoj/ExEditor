@@ -112,6 +112,14 @@
       "release_tag": "v26-11-16.18-v0.3.0",
       "release_date": "2026-11-16",
       "desktop_source_commit": "d3e8b4f6358bf7b24cffdac8ac5bc61416220218"
+    },
+    {
+      "number": 19,
+      "workflow_run": 44012241114,
+      "source_commit": "94600a76784163bbe8534b601d3fe6adbaf9435f",
+      "release_tag": "v26-11-16.19-v0.3.0",
+      "release_date": "2026-11-16",
+      "desktop_source_commit": "94600a76784163bbe8534b601d3fe6adbaf9435f"
     }
   ]
 }
