@@ -3351,7 +3351,15 @@ impl EditorWindow {
                 } else {
                     (i32::from(self.doc.zoom) + i32::from(delta)).clamp(25, 400) as u16
                 };
-                self.editor()?.set_zoom(self.doc.zoom);
+                if let Ok(editor) = self.editor() {
+                    editor.set_zoom(self.doc.zoom);
+                }
+                if let Some(editor) = &self.doc.editor {
+                    editor.set_zoom(self.doc.zoom);
+                }
+                if let Some(source) = &self.doc.markdown_source {
+                    source.set_zoom(self.doc.zoom);
+                }
             }
             Command::FontStep(delta) => {
                 let editor = self.editor()?;

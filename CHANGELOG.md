@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-16T22:43:00-05:00 - Align release native check fixture size and synchronize editor zoom state
+
+- **Release Native Document Controls Check (`.github/workflows/build.yml`):**
+  - Added `-Sections 6` to the release native Windows startup and memory verification step, matching the pre-compilation native controls test and ensuring reliable, timely execution on Windows runners.
+- **Synchronized Editor Zoom (`src/app.rs`):**
+  - Updated `Command::Zoom` to propagate zoom level across all representations of the document (`self.editor()`, `self.doc.editor`, and `self.doc.markdown_source`), ensuring consistent font scaling across mode transitions.
+- **Windows Test Window Activation (`scripts/test-windows-native.ps1`):**
+  - Explicitly reactivated the native test window following full-window screenshot captures before dispatching synthetic `ZoomKey` inputs.
+
 ## 2026-11-16T21:47:00-05:00 - Stabilize Windows native startup test zoom presentation polling
 
 - **DirectX Front-Buffer Render Polling (`scripts/test-windows-native.ps1`):**

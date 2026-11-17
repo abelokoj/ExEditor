@@ -217,8 +217,8 @@ jobs:
       - name: Check native Windows startup and Markdown memory
         timeout-minutes: 5
         run: |
-          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe
-          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Appearance Dark -LogDirectory logs/dark
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Sections 6
+          ./scripts/test-windows-native.ps1 -ExecutablePath artifacts/ExEditor/ExEditor.exe -Sections 6 -Appearance Dark -LogDirectory logs/dark
 
       - name: Build the per-user installer
         run: |

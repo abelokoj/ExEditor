@@ -297,6 +297,8 @@ try {
     $shell.SendKeys('^a')
     Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-selection.png'
+    $shell.AppActivate($primary.Id) | Out-Null
+    Start-Sleep -Milliseconds 150
     [ExEditorStartupCapture]::ZoomKey(0xbb)
     $selectionHash = (Get-FileHash (Join-Path $logs 'native-selection.png')).Hash
     $zoomed = $false
