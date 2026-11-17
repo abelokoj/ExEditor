@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-16T21:26:00-05:00 - Defer scrollbar theme configuration to reactive engine thread
+
+- **Reactive Engine Initialization Guard (`src/lib.rs`, `src/ui.rs`):**
+  - Removed `ui::configure_scrollbars()` from `exeditor::run()` outside the reactive runtime on thread `main`, eliminating the startup panic (`no reactive runtime: signals are used on the engine thread, while components run`).
+  - Retained scrollbar theme application inside `App()` root component execution on the engine thread where `Runtime::enter()` is active.
+  - Simplified `ScrollbarLook` styling classes in `src/ui.rs` to clean, tested standard utilities (`absolute top-0 right-0 bottom-0 w-[10px]` with `w-full rounded bg-neutral-400`).
+
 ## 2026-11-16T20:48:14-05:00 - Optimize large-selection formatting and activate native right scrollbar
 
 - **Instantaneous Large-Text Selection (`src/editor/mod.rs`):**

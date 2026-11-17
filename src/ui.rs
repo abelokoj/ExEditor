@@ -14,21 +14,13 @@ pub const CONTROL_MOTION_MS: f32 = 120.;
 
 pub fn configure_scrollbars() {
     let mut vertical = ScrollbarLook::default();
-    vertical.class =
-        Some("absolute top-0 right-0 bottom-0 w-[12px] py-1 pointer-events-auto".into());
-    vertical.thumb_class = Some(
-        "w-[8px] mx-auto rounded-full bg-neutral-400/50 hover:bg-neutral-500/80 active:bg-neutral-600 transition-colors"
-            .into(),
-    );
+    vertical.class = Some("absolute top-0 right-0 bottom-0 w-[10px]".into());
+    vertical.thumb_class = Some("w-full rounded bg-neutral-400".into());
     vertical.accessibility_label = Some("Document scrollbar".into());
 
     let mut horizontal = ScrollbarLook::default();
-    horizontal.class =
-        Some("absolute left-0 right-0 bottom-0 h-[12px] px-1 pointer-events-auto".into());
-    horizontal.thumb_class = Some(
-        "h-[8px] my-auto rounded-full bg-neutral-400/50 hover:bg-neutral-500/80 active:bg-neutral-600 transition-colors"
-            .into(),
-    );
+    horizontal.class = Some("absolute left-0 right-0 bottom-0 h-[10px]".into());
+    horizontal.thumb_class = Some("h-full rounded bg-neutral-400".into());
     horizontal.accessibility_label = Some("Horizontal scrollbar".into());
 
     let mut theme = ScrollbarTheme::default();
