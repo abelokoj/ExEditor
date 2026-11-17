@@ -797,25 +797,6 @@ fn panel_title_bar(name: &'static str, title: &str, colors: Palette) -> AnyEleme
 }
 
 /// Requests are made on the UI thread; content is created under its native window owner.
-pub fn show_panel(
-    name: &'static str,
-    title: &str,
-    width: f32,
-    height: f32,
-    kind: WindowKind,
-    content: impl Fn() -> AnyElement + 'static,
-) {
-    show_panel_with_colors(
-        name,
-        title,
-        width,
-        height,
-        kind,
-        Palette::current(),
-        content,
-    );
-}
-
 pub fn show_panel_with_colors(
     name: &'static str,
     title: &str,
