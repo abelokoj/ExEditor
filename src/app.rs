@@ -587,6 +587,7 @@ fn prepare_instance_exit(cx: &AppContext) -> bool {
 /// Native Rust root; every secondary document window shares this one workspace.
 #[component]
 pub fn App() -> impl IntoElement {
+    crate::ui::configure_scrollbars();
     let (paths, instance) = BOOT
         .lock()
         .expect("startup transfer lock poisoned")

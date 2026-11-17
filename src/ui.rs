@@ -1,4 +1,5 @@
 //! TextEdit's compact native controls, shared panel windows and measured ruler.
+use nsh_base::scrollbar::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
 use nsh_core::desktop::{WindowKind, WindowPosition};
 use nsh_core::element::{IntoReactive, desktop};
 use nsh_core::prelude::*;
@@ -10,6 +11,34 @@ use std::{
 static SCALE_PERCENT: AtomicU16 = AtomicU16::new(100);
 pub const SCALE_RANGE: std::ops::RangeInclusive<u16> = 50..=300;
 pub const CONTROL_MOTION_MS: f32 = 120.;
+
+pub fn configure_scrollbars() {
+    let mut vertical = ScrollbarLook::default();
+    vertical.class =
+        Some("absolute top-0 right-0 bottom-0 w-[12px] py-1 pointer-events-auto".into());
+    vertical.thumb_class = Some(
+        "w-[8px] mx-auto rounded-full bg-neutral-400/50 hover:bg-neutral-500/80 active:bg-neutral-600 transition-colors"
+            .into(),
+    );
+    vertical.accessibility_label = Some("Document scrollbar".into());
+
+    let mut horizontal = ScrollbarLook::default();
+    horizontal.class =
+        Some("absolute left-0 right-0 bottom-0 h-[12px] px-1 pointer-events-auto".into());
+    horizontal.thumb_class = Some(
+        "h-[8px] my-auto rounded-full bg-neutral-400/50 hover:bg-neutral-500/80 active:bg-neutral-600 transition-colors"
+            .into(),
+    );
+    horizontal.accessibility_label = Some("Horizontal scrollbar".into());
+
+    let mut theme = ScrollbarTheme::default();
+    theme.mode = ScrollbarMode::Always;
+    theme.min_thumb_length = nsh_core::geometry::px(32.0);
+    theme.vertical = Some(vertical);
+    theme.horizontal = Some(horizontal);
+
+    set_scrollbar_theme(Some(theme));
+}
 
 pub fn set_scale_percent(percent: u16) {
     SCALE_PERCENT.store(

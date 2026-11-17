@@ -1024,7 +1024,18 @@ impl Editor {
             .schema()
             .mark_type("textStyle")
             .context("the native schema has no text styles")?;
-        let mut attrs = self.session.get_attributes("textStyle");
+        let mut attrs = if self.session.state().selection().empty() {
+            self.session.get_attributes("textStyle")
+        } else {
+            let state = self.session.state();
+            let resolved = state.selection().resolved_from();
+            resolved
+                .marks()
+                .into_iter()
+                .find(|m| m.ty().name() == "textStyle")
+                .map(|m| m.attrs().clone())
+                .unwrap_or_default()
+        };
         attrs.insert(key.into(), value);
         self.run(&tiptap::set_mark(ty, attrs))
     }
@@ -1043,11 +1054,17 @@ impl Editor {
         if self.is_plain() {
             return self.plain_style.borrow().clone();
         }
-        let attrs = self.session.get_attributes("textStyle");
-        let para = self.session.get_attributes("paragraph");
+        let state = self.session.state();
+        let selection = state.selection();
+        let resolved = selection.resolved_from();
+        let marks = match state.stored_marks() {
+            Some(stored) => stored.to_vec(),
+            None => resolved.marks(),
+        };
+        let text_style = marks.iter().find(|m| m.ty().name() == "textStyle");
         let color = |key: &str, fallback: u32| {
-            attrs
-                .get(key)
+            text_style
+                .and_then(|m| m.attrs().get(key))
                 .and_then(Value::as_str)
                 .and_then(|v| v.parse::<csscolorparser::Color>().ok())
                 .map(|c| {
@@ -1056,26 +1073,40 @@ impl Editor {
                 })
                 .unwrap_or(fallback)
         };
+        let alignment = (0..=resolved.depth)
+            .rev()
+            .find_map(|d| {
+                resolved
+                    .node(d)
+                    .attrs()
+                    .get("textAlign")
+                    .and_then(Value::as_str)
+            })
+            .map(|align| match align {
+                "center" => Alignment::Center,
+                "right" => Alignment::Right,
+                "justify" => Alignment::Justify,
+                _ => Alignment::Left,
+            })
+            .unwrap_or(Alignment::Left);
         FormatState {
-            font: attrs
-                .get("fontFamily")
+            font: text_style
+                .and_then(|m| m.attrs().get("fontFamily"))
                 .and_then(Value::as_str)
                 .map(font_family)
                 .unwrap_or(crate::fonts::default_rich_font())
                 .into(),
-            size: attrs.get("fontSize").and_then(font_size).unwrap_or(12.),
-            bold: self.session.is_active(Some("bold"), None),
-            italic: self.session.is_active(Some("italic"), None),
-            underline: self.session.is_active(Some("underline"), None),
-            strikethrough: self.session.is_active(Some("strike"), None),
+            size: text_style
+                .and_then(|m| m.attrs().get("fontSize"))
+                .and_then(font_size)
+                .unwrap_or(12.),
+            bold: marks.iter().any(|m| m.ty().name() == "bold"),
+            italic: marks.iter().any(|m| m.ty().name() == "italic"),
+            underline: marks.iter().any(|m| m.ty().name() == "underline"),
+            strikethrough: marks.iter().any(|m| m.ty().name() == "strike"),
             foreground: color("color", 0),
             background: color("backgroundColor", 0xffffff),
-            alignment: match para.get("textAlign").and_then(Value::as_str) {
-                Some("center") => Alignment::Center,
-                Some("right") => Alignment::Right,
-                Some("justify") => Alignment::Justify,
-                _ => Alignment::Left,
-            },
+            alignment,
         }
     }
     pub fn insert_table(&self, rows: u16, columns: u16) -> Result<()> {

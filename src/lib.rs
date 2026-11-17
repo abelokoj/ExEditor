@@ -50,6 +50,7 @@ pub fn run() -> std::process::ExitCode {
         }
     };
     app::configure(paths, instance);
+    ui::configure_scrollbars();
     #[cfg(target_os = "linux")]
     use nsh_platform_linux as platform;
     #[cfg(target_os = "macos")]

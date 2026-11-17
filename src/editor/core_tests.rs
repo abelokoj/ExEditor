@@ -400,3 +400,21 @@ fn rejected_recovery_preserves_document_and_page_geometry() {
     );
     assert_eq!(before, editor.snapshot());
 }
+
+#[test]
+fn formatting_across_large_selection_is_fast_and_accurate() {
+    let editor = Editor::new().unwrap();
+    let text = "Paragraph line with text content to test selection performance.\n".repeat(500);
+    editor.set_text(&text).unwrap();
+    editor.select_range(0..text.len()).unwrap();
+    let start = std::time::Instant::now();
+    let format = editor.formatting();
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(50),
+        "formatting took {elapsed:?}, expected < 50ms"
+    );
+    assert_eq!(format.size, 12.);
+    assert!(!format.bold);
+    assert!(!format.italic);
+}

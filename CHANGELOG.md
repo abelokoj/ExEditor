@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-16T20:48:14-05:00 - Optimize large-selection formatting and activate native right scrollbar
+
+- **Instantaneous Large-Text Selection (`src/editor/mod.rs`):**
+  - Optimized `Editor::read_formatting` from an $O(N)$ multi-thousand-node traversal to an $O(1)$ mark lookup. Previously, `session.is_active` and `get_attributes` scanned all nodes between `from` and `to` across four formatting marks and two attribute categories, cloning hundreds of thousands of `MarkRange` structs whenever a large text range was selected.
+  - Resolved formatting marks directly from `state.stored_marks()` or `selection.resolved_from().marks()`, and paragraph alignment from the resolved ancestor chain in $O(\text{depth})$.
+  - Similarly optimized `Editor::set_text_style` to look up existing `textStyle` marks in $O(1)$ when applying style changes to non-empty selections.
+  - Added unit regression test `formatting_across_large_selection_is_fast_and_accurate` in `core_tests.rs`.
+- **Active Interactive Scrollbars (`src/ui.rs`, `src/app.rs`, `src/lib.rs`):**
+  - Configured global NSH scrollbar theme via `nsh_base::scrollbar::set_scrollbar_theme`.
+  - Defined `ScrollbarLook` with desktop thumb styling (`bg-neutral-400/50 hover:bg-neutral-500/80 active:bg-neutral-600 transition-colors`), track padding, and `ScrollbarMode::Always` with minimum thumb height `32px`.
+  - Activated theme in `App()` root component and `exeditor::run()` startup, providing an interactive, draggable vertical scrollbar on the right edge of the editor whenever content overflows.
+
 ## 2026-11-16T14:35:00-05:00 - Systematic codebase audit: memory reduction, reactive signal stabilization, panic guards, and dialog validation
 
 - **Memory and Performance Optimization (`src/editor/mod.rs`):**
