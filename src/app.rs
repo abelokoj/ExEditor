@@ -1364,7 +1364,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             );
             toolbar = toolbar.child(
                 ui::icon_control(label, &svg, 26., false, colors)
-                    .on_press(move || enqueue(&q, command)),
+                    .on_press(move || enqueue(&q, command.clone())),
             );
         }
         chrome = chrome.child(
