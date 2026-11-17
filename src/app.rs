@@ -805,6 +805,7 @@ fn bind_shortcuts(
                 when: When::Always,
                 repeat: true,
                 pass_through: false,
+                ..Default::default()
             },
             move |_| {
                 batch(|| {
@@ -1231,7 +1232,6 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             "Regular"
         };
         let mut toolbar = view()
-            .min_w_full()
             .flex_row()
             .items_center()
             .h(px(29.))

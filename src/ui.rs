@@ -451,7 +451,7 @@ pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
 ) -> impl IntoElement {
     view()
         .key(group_label)
-        .role(AccessibilityRole::TabList)
+        .role(AccessibilityRole::Tablist)
         .label(group_label)
         .flex_row()
         .items_center()
