@@ -459,7 +459,10 @@ fn block_styles_line_numbers_replace_one_and_pt_indents_roundtrip_cleanly() {
     assert!(!editor.replace_one("alpha", "none", true, true).unwrap());
 
     editor
-        .set_html("<p style=\"margin-left:18pt\">Indented</p>")
+        .set_document(Document {
+            html: "<p style=\"margin-left:18pt\">Indented</p>".into(),
+            page: PageSettings::default(),
+        })
         .unwrap();
     editor.select_range(0..0).unwrap();
     editor.execute(EditCommand::Indent(360)).unwrap();
