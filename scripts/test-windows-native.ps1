@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ExecutablePath,
     [string]$LogDirectory = 'logs',
@@ -298,9 +298,17 @@ try {
     Start-Sleep -Milliseconds 1500
     Save-NativeScreenshot $primary 'native-selection.png'
     [ExEditorStartupCapture]::ZoomKey(0xbb)
-    Start-Sleep -Milliseconds 400
-    Save-NativeScreenshot $primary 'native-main-key-zoom.png'
-    if ((Get-FileHash (Join-Path $logs 'native-selection.png')).Hash -eq (Get-FileHash (Join-Path $logs 'native-main-key-zoom.png')).Hash) {
+    $selectionHash = (Get-FileHash (Join-Path $logs 'native-selection.png')).Hash
+    $zoomed = $false
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Milliseconds 200
+        Save-NativeScreenshot $primary 'native-main-key-zoom.png'
+        if ((Get-FileHash (Join-Path $logs 'native-main-key-zoom.png')).Hash -ne $selectionHash) {
+            $zoomed = $true
+            break
+        }
+    }
+    if (-not $zoomed) {
         throw 'Ctrl+plus did not visibly zoom the selected document.'
     }
     [ExEditorStartupCapture]::ZoomKey(0x6b)

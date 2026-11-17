@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-16T21:47:00-05:00 - Stabilize Windows native startup test zoom presentation polling
+
+- **DirectX Front-Buffer Render Polling (`scripts/test-windows-native.ps1`):**
+  - Replaced fixed 400 ms sleep after `ZoomKey(0xbb)` with adaptive render polling up to 3000 ms. On 185 KB test fixtures containing 120 sections and hundreds of styled text nodes, GPUI re-measures and re-shapes font runs across the full tree; adaptive polling eliminates race conditions where screenshot capture occurs before the DirectX front buffer flips.
+
 ## 2026-11-16T21:26:00-05:00 - Defer scrollbar theme configuration to reactive engine thread
 
 - **Reactive Engine Initialization Guard (`src/lib.rs`, `src/ui.rs`):**
