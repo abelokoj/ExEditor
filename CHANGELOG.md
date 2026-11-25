@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-25T11:29:00-05:00 - Deliver validated release v26-11-25.21-v0.3.0 (GitHub-built, downloaded, and visually verified)
+
+- **Validated Multi-Platform CI Run:** Source commit `445cecd9791cf390bfa3a84816db5582ce63c037`, [GitHub Actions run 45649634486](https://github.com/abelokoj/ExEditor/actions/runs/45649634486) passed formatting, release numbering, `cargo clippy --locked --all-targets --all-features -- -D warnings`, all 213 Rust unit tests, optional font/dictionary download checks, pre-release and release Light/Dark Windows native UI checks, installer shell integration verification, and Windows/macOS/Linux native packaging.
+- **Downloaded & Verified Artifacts (`dist/ExEditor-v26-11-25.21-v0.3.0`):**
+  - Windows x64 Installer `ExEditor-v26-11-25.21-v0.3.0-win-x64.exe`: `24,964,500` bytes, SHA-256 `88da28aaf98ed7bc5cd56d00d8e74b169fba92eb424c8884839d4b39a948fda7`.
+  - Windows x64 Portable Archive `ExEditor-v26-11-25.21-v0.3.0-win-x64-port.zip`: `30,223,066` bytes, SHA-256 `13a8a71f83c8a2ee2ac36705b47fe2271cefe9f5479ad0595f44a6f26a8cd59a`.
+  - Visually verified Light and Dark Windows screenshots (`native-startup-initial.png`, `native-settings.png`, `native-split-columns.png`) confirming crisp inline SVG chevrons and icons, frameless rounded Settings chrome with segmented tabs, and Light/Dark split-pane rendering.
+
 ## 2026-11-25T10:48:00-05:00 - Comprehensive audit fixes: editor core, menus, dialogs, performance, and NSH UI accessibility
 
 - **Editor Core & Formatting (`src/editor/types.rs`, `src/editor/mod.rs`, `src/editor/session_group.rs`, `src/editor/core_tests.rs`):**
