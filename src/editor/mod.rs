@@ -331,7 +331,6 @@ impl Editor {
         self.session.clone()
     }
     /// JSON of the native document, never a WordCraft recovery payload.
-    #[cfg(test)]
     pub fn snapshot(&self) -> Option<Vec<u8>> {
         serde_json::to_vec(
             &json!({"doc":self.session.state().doc().to_json(),"page":self.page_settings()}),
@@ -757,13 +756,14 @@ impl Editor {
         }
         let text = self.text()?;
         let needle = normalize_newlines(needle);
-        let wanted = if !match_case {
-            needle.to_lowercase()
+        let wanted_chars: Vec<char> = if !match_case {
+            needle.to_lowercase().chars().collect()
         } else {
-            String::new()
+            Vec::new()
         };
         let mut ranges = Vec::new();
         let mut byte = 0;
+        let mut utf16 = 0;
         while byte < text.len() {
             let candidate = &text[byte..];
             let end = if match_case {
@@ -771,15 +771,17 @@ impl Editor {
                     .starts_with(&needle)
                     .then_some(byte + needle.len())
             } else {
-                let mut matched = String::new();
+                let mut matched = 0usize;
                 let mut end = None;
-                for (offset, ch) in candidate.char_indices() {
-                    matched.extend(ch.to_lowercase());
-                    if matched == wanted {
-                        end = Some(byte + offset + ch.len_utf8());
-                        break;
+                'scan: for (offset, ch) in candidate.char_indices() {
+                    for lower in ch.to_lowercase() {
+                        if matched >= wanted_chars.len() || wanted_chars[matched] != lower {
+                            break 'scan;
+                        }
+                        matched += 1;
                     }
-                    if !wanted.starts_with(&matched) {
+                    if matched == wanted_chars.len() {
+                        end = Some(byte + offset + ch.len_utf8());
                         break;
                     }
                 }
@@ -791,18 +793,19 @@ impl Editor {
                     || (!text[..byte].chars().next_back().is_some_and(word)
                         && !text[end..].chars().next().is_some_and(word))
                 {
-                    ranges.push(
-                        text[..byte].encode_utf16().count()..text[..end].encode_utf16().count(),
-                    );
+                    let match_utf16 = text[byte..end].encode_utf16().count();
+                    ranges.push(utf16..utf16 + match_utf16);
+                    utf16 += match_utf16;
                     byte = end;
                     continue;
                 }
             }
-            byte += candidate
+            let ch = candidate
                 .chars()
                 .next()
-                .expect("the remaining text is nonempty")
-                .len_utf8();
+                .expect("the remaining text is nonempty");
+            byte += ch.len_utf8();
+            utf16 += ch.len_utf16();
         }
         Ok(ranges)
     }
@@ -951,6 +954,8 @@ impl Editor {
                     ("italic", current.italic, s.italic),
                     ("underline", current.underline, s.underline),
                     ("strike", current.strikethrough, s.strikethrough),
+                    ("superscript", current.superscript, s.superscript),
+                    ("subscript", current.subscript, s.subscript),
                 ] {
                     if actual != on {
                         self.toggle_mark(mark)?;
@@ -962,6 +967,21 @@ impl Editor {
             E::Redo => ("redo", json!({})),
             E::Bold => return self.toggle_mark("bold"),
             E::Italic => return self.toggle_mark("italic"),
+            E::FontWeight { bold, italic } => {
+                self.editable()?;
+                ensure!(
+                    !self.is_plain(),
+                    "font weight requires a rich-text document"
+                );
+                let current = self.formatting();
+                if current.bold != bold {
+                    self.toggle_mark("bold")?;
+                }
+                if current.italic != italic {
+                    self.toggle_mark("italic")?;
+                }
+                return Ok(());
+            }
             E::Underline => return self.toggle_mark("underline"),
             E::Strikethrough => return self.toggle_mark("strike"),
             E::Subscript => return self.toggle_mark("subscript"),
@@ -1059,6 +1079,9 @@ impl Editor {
             }
             E::ConvertCase(case) => {
                 let selected = self.selected_text()?;
+                if selected.is_empty() {
+                    return Ok(());
+                }
                 let text = match case {
                     Case::Upper => selected.to_uppercase(),
                     Case::Lower => selected.to_lowercase(),
@@ -1256,6 +1279,21 @@ impl Editor {
                 }
             })
             .unwrap_or(BlockStyle::Body);
+        let line_spacing = (0..=resolved.depth)
+            .rev()
+            .find_map(|d| {
+                let node = resolved.node(d);
+                node.is_textblock()
+                    .then(|| node.attrs().get("lineHeight"))
+                    .flatten()
+            })
+            .and_then(|v| {
+                v.as_f64()
+                    .map(|n| n as f32)
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()))
+            })
+            .filter(|n| n.is_finite() && (0.5..=10.).contains(n))
+            .unwrap_or(1.0);
         FormatState {
             font: text_style
                 .and_then(|m| m.attrs().get("fontFamily"))
@@ -1271,10 +1309,13 @@ impl Editor {
             italic: marks.iter().any(|m| m.ty().name() == "italic"),
             underline: marks.iter().any(|m| m.ty().name() == "underline"),
             strikethrough: marks.iter().any(|m| m.ty().name() == "strike"),
+            superscript: marks.iter().any(|m| m.ty().name() == "superscript"),
+            subscript: marks.iter().any(|m| m.ty().name() == "subscript"),
             foreground: color("color", 0),
             background: color("backgroundColor", 0xffffff),
             alignment,
             block_style,
+            line_spacing,
         }
     }
     pub fn insert_table(&self, rows: u16, columns: u16) -> Result<()> {
@@ -1591,7 +1632,7 @@ impl Editor {
             overlays.syntax = spans.to_vec();
             overlays.cache = None;
             drop(overlays);
-            self.session.update_state(self.session.state());
+            self.group.refresh_overlays();
             self.invalidate_display();
         }
         Ok(())
@@ -1619,7 +1660,7 @@ impl Editor {
             overlays.proofing = ranges.to_vec();
             overlays.cache = None;
             drop(overlays);
-            self.session.update_state(self.session.state());
+            self.group.refresh_overlays();
             self.invalidate_display();
         }
         Ok(())

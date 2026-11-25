@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-11-25T10:48:00-05:00 - Comprehensive audit fixes: editor core, menus, dialogs, performance, and NSH UI accessibility
+
+- **Editor Core & Formatting (`src/editor/types.rs`, `src/editor/mod.rs`, `src/editor/session_group.rs`, `src/editor/core_tests.rs`):**
+  - Added `EditCommand::FontWeight { bold, italic }` and tracked `superscript`, `subscript`, and `line_spacing` in `FormatState::read_formatting()` so the toolbar Font Weight dropdown sets exact `Regular`/`Bold`/`Italic`/`Bold Italic` states instead of toggling `Bold` on `Regular`, and `Format > Font` / `Line Spacing` show accurate checkmarks.
+  - Optimized `Editor::matches()` from $O(M \times N)$ (recomputing UTF-16 offsets from byte 0 per match and allocating per character in case-insensitive mode) to single-pass $O(N)$ running UTF-16 tracking with allocation-free Unicode case-folding.
+  - Guarded `EditCommand::ConvertCase` on empty selections to avoid dirtying the document or pushing no-op undo entries.
+  - Added `SessionGroup::refresh_overlays()` so `apply_spans()` and `set_proofing_marks()` synchronize syntax and proofing overlays across all split-view peer panes.
+  - Exposed `Editor::snapshot()` outside test builds for lossless rich-document duplication.
+- **Document Lifecycle, Shortcuts, & Validation (`src/app.rs`, `src/dialogs.rs`, `src/settings.rs`, `docs/KEYBOARD_SHORTCUTS.txt`, `Cargo.lock`):**
+  - Fixed failing `keyboard::tests::help_includes_every_primary_binding` by documenting `Shift+Alt+W`, `Ctrl+D`, and alignment shortcuts in `docs/KEYBOARD_SHORTCUTS.txt`, and synced `Cargo.lock` with `Cargo.toml`'s `6442c86be` NSH pin.
+  - Fixed `Find > Select Line…` to display `Ctrl+G` (`go-to-line`) instead of `Ctrl+L` (`select-line`) and exposed `Edit > Select Line` (`Ctrl+L`).
+  - Changed `Enter` in `Find and Replace` (`FormKind::Replace`) to execute `Find Next` without closing the dialog instead of triggering `Replace All`; `Mod+Enter` and the primary button remain `Replace All`.
+  - Unified font-size (`1.0..=1638.0`) and font-family (`1..=256` bytes, no control characters) validation across Settings, dialogs, and `app.rs`.
+  - Protected syntax-highlighted source files from smart quotes and smart dashes during typing (`self.doc.highlighter.is_none()`).
+  - Upgraded `Command::Duplicate` to copy native rich snapshots and document metadata (`page`, `encoding`, `line_ending`, `wrap_page`, `word_wrap`, `ruler`, `zoom`, `last_text`); upgraded `Command::Restore` to prefer `loaded.editor_snapshot` and refresh `page`, `last_text`, and proofing state.
+  - Fixed `Command::SaveAll` to skip clean already-saved tabs; updated `Command::Rename`/`Move` to refresh document format and syntax highlighting and fall back safely to copy+remove across volumes.
+  - Updated `ui_stamp` to include line-number gutter, window-control placement, and read-only state for multi-window synchronization; composited `ColorTarget::Background` against `self.doc.paper`; disabled rich-only / mutating menu items in plain-text and read-only modes; fixed empty `Open Recent` and `Browse All Versions` menus; and formatted `1.15` line spacing accurately without truncating to `1.1`.
+- **NSH Design Guides, Vector Icons, & Accessibility (`src/ui.rs`, `src/dialogs.rs`, `src/panes.rs`, `src/palette.rs`, `src/settings.rs`, `src/language_tools.rs`, `src/color_picker.rs`, `src/app.rs`):**
+  - Replaced typed icon glyphs (`✓`, `▾`, `+`, `›`) with inline SVG vector icons (`ui::icon`) across checkboxes, dropdowns, selects, menus, pane headers, and the New Tab button (`accessibility_label("New tab")`), and added `MenuEntry::submenu` so macOS native menus do not receive `"›"` as a shortcut.
+  - Fixed `ui::segmented_tabs` reactive hover state and added Left/Right keyboard navigation; fixed `ui::select` popup/focus colors for explicit Light/Dark overrides; added `AccessibilityRole::Header` to `ui::heading`; added `Tablist`/`Tab` roles and label truncation to the titlebar and tab bar.
+  - Kept informational scroll shortcuts visible in `Keyboard Shortcuts` (`palette.rs`) with truncated labels and monospace shortcut hints; memoized `matching_colors` in `color_picker::palette_view`, improved wheel thumb contrast with a double ring, and refreshed the Colors panel on theme changes; rendered Settings and Language Tools failures in `danger` with `AccessibilityRole::Alert`, omitted empty status rows, raised Language Tools height to `520px`, added accent focus outlines on source links, and added `.active(...)` feedback on pane headers.
+
+## 2026-11-18T10:59:36-05:00 - Use NSH Design Guides in agent instructions
+
+- Replaced the UI UX Pro Max and Impeccable skill requirements with the NSH Design Guides skill for NSH interface work.
+- Validation: Verified the instruction and the referenced skill. Build and visual checks were omitted because only agent documentation changed. Changes remain local and uncommitted.
+
+## 2026-11-18T10:43:19-05:00 - Update local agent and toolchain guidance
+
+- Added root-cause, data safety, accessibility and platform validation guidance; direct local builds to the installed Cargo fork and NSH tool, and consult NSH source examples.
+- Validation: inspected the instruction changes and confirmed installed Cargo and NSH versions. ExEditor build and platform checks were not run for this documentation-only change; its pinned NSH revision differs from the installed 0.6.0 release. Changes are local and uncommitted.
+
+## 2026-11-18T07:42:30-05:00 - Expand TextEdit keyboard shortcuts, line selection with relative jumps, and idle reactive ticks
+
+- **TextEdit Shortcut Expansion & Alignment Commands (`src/keyboard.rs`, `src/app.rs`):**
+  - Bound `Ctrl+D` to `duplicate` in `BINDINGS` and wired it into `M::File` ("Duplicate") and `shortcut_command`.
+  - Added dedicated keyboard shortcuts for text alignments: `Ctrl+Shift+[` (`align-left`), `Ctrl+Shift+E` (`align-center`), `Ctrl+Shift+]` (`align-right`), and `Ctrl+Shift+J` (`align-justify`).
+  - Standardized the Format menu item from "Justified" to "Justify" to match the toolbar and TextEdit menu conventions, and connected keyboard labels across `M::Alignment`.
+  - Bound `Shift+Alt+W` to `wrap` ("Wrap to window / page") in `BINDINGS` and wired its canonical label into `M::Format` ("Wrap to Page" / "Wrap to Window").
+- **Select Line with Relative Jumps & Range Selection (`src/app.rs`, `src/dialogs.rs`, `src/editor/core_tests.rs`):**
+  - Updated "Go to Line…" to "Select Line…" in the Find menu and shortcut catalog, pre-filling with the active caret line.
+  - Enabled relative line jumps using `+N` (forward) and `-N` (backward) prefixes alongside absolute line numbers.
+  - Selecting a line now highlights its full character range (`start_offset..end_offset`) and scrolls the viewport to bring the selection into view.
+- **Idle Reactive Tick Optimization (`src/editor/surface.rs`, `src/editor/gutter.rs`):**
+  - Verified `get_untracked()` before updating signals in the 16 ms editor surface ticker and gutter layout effect, preventing redundant dirtying and re-renders when the document and gutter settings are idle.
+  - Added unit test `alignment_commands_and_relative_line_selection_run_cleanly` covering alignment execution and multi-line selection ranges with Unicode/surrogates.
+
 ## 2026-11-17T16:29:30-05:00 - Deliver validated release v26-11-17.20-v0.3.0 (GitHub-built, downloaded, and visually verified)
 
 - **Validated Multi-Platform CI Run:** Source commit `1d04c22f99b952f3b7de04f38f04bcec54b8fe9b`, [GitHub Actions run 44174479862](https://github.com/abelokoj/ExEditor/actions/runs/44174479862) passed formatting, release numbering, `cargo clippy --locked --all-targets --all-features -- -D warnings`, Rust unit tests (including `block_styles_line_numbers_replace_one_and_pt_indents_roundtrip_cleanly`), optional font/dictionary download checks, pre-release and release Light/Dark Windows native UI checks, and Windows/macOS/Linux native packaging.

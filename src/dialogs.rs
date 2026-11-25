@@ -35,6 +35,7 @@ pub struct MenuEntry {
     pub command: Option<Command>,
     pub checked: bool,
     pub enabled: bool,
+    pub submenu: bool,
     checkable: bool,
     preview: Option<Command>,
 }
@@ -46,6 +47,7 @@ impl MenuEntry {
             command: Some(command),
             checked: false,
             enabled: true,
+            submenu: false,
             checkable: false,
             preview: None,
         }
@@ -57,6 +59,7 @@ impl MenuEntry {
             command: None,
             checked: false,
             enabled: false,
+            submenu: false,
             checkable: false,
             preview: None,
         }
@@ -64,6 +67,10 @@ impl MenuEntry {
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
         self.checkable = true;
+        self
+    }
+    pub fn submenu(mut self) -> Self {
+        self.submenu = true;
         self
     }
     pub fn previewing(mut self, command: Command) -> Self {
@@ -79,7 +86,7 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
         .map(|e| {
             text_metrics("12px Inter", &e.label).width.0
                 + text_metrics("11px Inter", &e.shortcut).width.0
-                + 64.
+                + if e.submenu { 82. } else { 64. }
         })
         .fold(112_f32, f32::max)
         .min(480.);
@@ -153,9 +160,36 @@ pub fn menu(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
                         .active(|s| s.opacity(0.8))
                         .disabled_style(|s| s.opacity(0.5))
                         .indicator_style(|s| s.w(px(18.)).items_center().justify_center())
-                        .indicator(text(if entry.checked { "✓" } else { "" }))
-                        .child(text(entry.label.clone()).flex_1().text_size(px(12.)))
-                        .child(text(entry.shortcut.clone()).text_size(px(11.)))
+                        .indicator(if entry.checked {
+                            ui::icon(ui::ICON_CHECK, 11.).into_element()
+                        } else {
+                            view().into_element()
+                        })
+                        .child(
+                            text(entry.label.clone())
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(px(12.)),
+                        )
+                        .child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(6.))
+                                .flex_shrink_0()
+                                .children((!entry.shortcut.is_empty()).then(|| {
+                                    text(entry.shortcut.clone())
+                                        .text_size(px(11.))
+                                        .opacity(0.75)
+                                        .into_element()
+                                }))
+                                .children(
+                                    entry.submenu.then(|| {
+                                        ui::icon(ui::ICON_CHEVRON_RIGHT, 11.).into_element()
+                                    }),
+                                ),
+                        )
                         .on_select(move || {
                             queue.borrow_mut().push_back(command.clone());
                             ui::close_panel("menu");
@@ -266,6 +300,20 @@ pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands,
                 let submit_kind = submit_kind.clone();
                 Rc::new(move || run_action(submit_kind.clone(), default_close))
             };
+            let enter_action = {
+                let run_action = run_action.clone();
+                let enter_kind = if matches!(kind, FormKind::Replace) {
+                    FormKind::ReplaceFind
+                } else {
+                    submit_kind.clone()
+                };
+                let enter_close = if matches!(kind, FormKind::Replace) {
+                    false
+                } else {
+                    default_close
+                };
+                Rc::new(move || run_action(enter_kind.clone(), enter_close))
+            };
             let key_submit = submit.clone();
             on_key("mod+enter", move |_| key_submit());
             let fields: Vec<_> = fields
@@ -283,7 +331,7 @@ pub fn form(kind: FormKind, title: &str, fields: Vec<Field>, commands: Commands,
                         )
                         .into_element()
                     } else {
-                        let enter_submit = submit.clone();
+                        let enter_submit = enter_action.clone();
                         ui::row(
                             field.label.clone(),
                             ui::input(field.label.clone(), value, colors)
@@ -365,11 +413,13 @@ fn valid_form(kind: &FormKind, values: &[String]) -> bool {
             values.first().is_some_and(|s| !s.is_empty())
         }
         FormKind::Font => {
-            values.first().is_some_and(|s| !s.trim().is_empty())
-                && number(values.get(1)).is_some_and(|n| n.is_finite() && n > 0. && n <= 1000.)
+            values.first().is_some_and(|s| {
+                let s = s.trim();
+                !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)
+            }) && number(values.get(1)).is_some_and(|n| n.is_finite() && (1. ..=1638.).contains(&n))
         }
         FormKind::FontSize => {
-            number(values.first()).is_some_and(|n| n.is_finite() && (1. ..=1000.).contains(&n))
+            number(values.first()).is_some_and(|n| n.is_finite() && (1. ..=1638.).contains(&n))
         }
         FormKind::InterfaceScale => values
             .first()
@@ -388,10 +438,13 @@ fn valid_form(kind: &FormKind, values: &[String]) -> bool {
         FormKind::Spacing => {
             number(values.first()).is_some_and(|n| n.is_finite() && (0.5..=10.).contains(&n))
         }
-        FormKind::GoToLine => values
-            .first()
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .is_some_and(|n| n > 0),
+        FormKind::GoToLine => values.first().map(|s| s.trim()).is_some_and(|s| {
+            let s = s
+                .strip_prefix('+')
+                .or_else(|| s.strip_prefix('-'))
+                .unwrap_or(s);
+            s.parse::<usize>().is_ok_and(|n| n > 0)
+        }),
         FormKind::PageSetup => {
             let width = number(values.first());
             let height = number(values.get(1));
@@ -420,9 +473,13 @@ fn valid_form(kind: &FormKind, values: &[String]) -> bool {
             let pf = values.get(3).map(|s| s.trim()).unwrap_or("");
             let ps = number(values.get(4));
             !rf.is_empty()
+                && rf.len() <= 256
+                && !rf.chars().any(char::is_control)
                 && !pf.is_empty()
-                && rs.is_some_and(|s| s.is_finite() && s > 0.)
-                && ps.is_some_and(|s| s.is_finite() && s > 0.)
+                && pf.len() <= 256
+                && !pf.chars().any(char::is_control)
+                && rs.is_some_and(|s| s.is_finite() && (1. ..=1638.).contains(&s))
+                && ps.is_some_and(|s| s.is_finite() && (1. ..=1638.).contains(&s))
         }
         _ => true,
     }
@@ -435,7 +492,17 @@ mod tests {
     fn form_validation_rejects_empty_search_non_finite_fonts_and_out_of_range_scale() {
         assert!(!valid_form(&FormKind::Find, &[String::new()]));
         assert!(valid_form(&FormKind::FontSize, &["12.5".into()]));
+        assert!(valid_form(&FormKind::FontSize, &["1638".into()]));
+        assert!(!valid_form(&FormKind::FontSize, &["1638.1".into()]));
         assert!(!valid_form(&FormKind::FontSize, &["NaN".into()]));
+        assert!(valid_form(
+            &FormKind::Font,
+            &["Source Code Pro ExtraLight Semibold".into(), "1638".into()]
+        ));
+        assert!(!valid_form(
+            &FormKind::Font,
+            &["Bad\nFont".into(), "12".into()]
+        ));
         assert!(valid_form(&FormKind::InterfaceScale, &["150 %".into()]));
         assert!(!valid_form(&FormKind::InterfaceScale, &["301".into()]));
         assert!(!valid_form(&FormKind::Table, &[]));
@@ -447,6 +514,8 @@ mod tests {
         ));
         assert!(!valid_form(&FormKind::Link, &["ftp://example.com".into()]));
         assert!(valid_form(&FormKind::GoToLine, &["42".into()]));
+        assert!(valid_form(&FormKind::GoToLine, &["+5".into()]));
+        assert!(valid_form(&FormKind::GoToLine, &["-2".into()]));
         assert!(!valid_form(&FormKind::GoToLine, &["0".into()]));
         assert!(!valid_form(&FormKind::GoToLine, &["abc".into()]));
         assert!(valid_form(&FormKind::Spacing, &["1.5".into()]));

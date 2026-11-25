@@ -21,6 +21,7 @@ Ctrl+P                    Quick Open: search open and recent files
 Ctrl+R                    Open the Recent Files menu
 Ctrl+S                    Save
 Ctrl+Shift+S              Save As
+Ctrl+D                    Duplicate document
 Ctrl+K S                  Save all documents
 Ctrl+W / Ctrl+F4          Close the current document tab
 Ctrl+Shift+W              Close the current window
@@ -87,6 +88,7 @@ extend the selection. Backspace/Delete and Ctrl+Backspace/Delete stay native.
 View and formatting
 -------------------
 Alt+Z                     Toggle word wrap
+Shift+Alt+W               Wrap to page / window
 F11                       Toggle full screen
 Ctrl+=                    Zoom in
 Ctrl+-                    Zoom out
@@ -95,6 +97,10 @@ Ctrl+Shift+R              Toggle the ruler
 Ctrl+B                    Bold
 Ctrl+I                    Italic
 Ctrl+U                    Underline
+Ctrl+Shift+[              Align left
+Ctrl+Shift+E              Align center
+Ctrl+Shift+]              Align right
+Ctrl+Shift+J              Justify
 Ctrl+T                    Font dialog
 Ctrl+Shift+C              Text colors
 Ctrl+Shift+M              Switch rich/plain text format

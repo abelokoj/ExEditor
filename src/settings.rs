@@ -380,6 +380,20 @@ impl Settings {
                             "Download"
                         };
                         let state = state.clone();
+                        let status_line: Option<AnyElement> = match current {
+                            DownloadStatus::Available => Some(
+                                ui::hint("Ready to use, including offline.", colors).into_element(),
+                            ),
+                            DownloadStatus::Failed(error) => Some(
+                                text(error)
+                                    .text_size(px(11.))
+                                    .line_height(px(16.))
+                                    .text_color(ui::rgb(colors.danger))
+                                    .role(AccessibilityRole::Alert)
+                                    .into_element(),
+                            ),
+                            _ => None,
+                        };
                         view()
                             .gap(px(5.))
                             .child(
@@ -392,16 +406,7 @@ impl Settings {
                                 .disabled(available || downloading)
                                 .on_press(move || state.download(index)),
                             )
-                            .child(ui::hint(
-                                match current {
-                                    DownloadStatus::Available => {
-                                        "Ready to use, including offline.".to_owned()
-                                    }
-                                    DownloadStatus::Failed(error) => error,
-                                    _ => String::new(),
-                                },
-                                colors,
-                            ))
+                            .children(status_line)
                     })),
             );
         }
@@ -498,8 +503,9 @@ fn settings_values(
         .validate_line_numbers()
         .map_err(|error| error.to_string())?;
     for font in [rich_font, plain_font] {
-        if font.trim().is_empty() || font.contains('\0') || font.encode_utf16().count() >= 32 {
-            return Err("Choose a font name containing 1–31 characters.".into());
+        let trimmed = font.trim();
+        if trimmed.is_empty() || trimmed.len() > 256 || trimmed.chars().any(char::is_control) {
+            return Err("Choose a valid font family name (1–256 characters).".into());
         }
     }
     let rich_size = font_size(rich_size)?;
@@ -647,8 +653,32 @@ mod serialization_tests {
         assert_eq!(values[15], preferences.autocomplete.to_string());
         assert_eq!(values[17], "50");
         assert_eq!(&values[18..22], ["true", "JetBrains Mono", "14", "64"]);
-        let mut invalid = preferences;
+        let mut invalid = preferences.clone();
         invalid.line_number_font = " ".into();
         assert!(settings_values(&invalid, "Notes", "Inter", "12", "Consolas", "11", "30").is_err());
+        assert!(
+            settings_values(
+                &preferences,
+                "Notes",
+                "Source Code Pro ExtraLight Semibold",
+                "1638",
+                "Maple Mono NF Regular ExtraLongName",
+                "12",
+                "30"
+            )
+            .is_ok()
+        );
+        assert!(
+            settings_values(
+                &preferences,
+                "Notes",
+                "Bad\tFont",
+                "12",
+                "Consolas",
+                "11",
+                "30"
+            )
+            .is_err()
+        );
     }
 }

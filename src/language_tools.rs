@@ -151,7 +151,7 @@ pub fn open(options: ProofingOptions, commands: Commands, colors: Palette) {
         "language-tools",
         "Spelling and Grammar | ExEditor",
         580.,
-        380.,
+        520.,
         WindowKind::Dialog,
         colors,
         move || {
@@ -360,20 +360,27 @@ impl LanguageTools {
                             .href(pack.source_url.clone())
                             .accessibility_label(format!("{} source and license", pack.name))
                             .text_color(ui::rgb(self.colors.accent))
-                            .focus_visible(move |s| s.outline(px(2.)))
+                            .focus_visible({
+                                let accent = self.colors.accent;
+                                move |s| s.outline(px(2.)).outline_color(ui::rgb(accent))
+                            })
                             .child(text("Source and license").text_size(px(11.))),
                     ),
             )
-            .child(
-                text(message)
+            .children((!message.is_empty()).then(|| {
+                let mut line = text(message)
                     .text_size(px(11.))
                     .line_height(px(16.))
                     .text_color(ui::rgb(if failure {
                         self.colors.danger
                     } else {
                         self.colors.muted
-                    })),
-            )
+                    }));
+                if failure {
+                    line = line.role(AccessibilityRole::Alert);
+                }
+                line.into_element()
+            }))
             .into_element()
     }
     fn download_dictionary(

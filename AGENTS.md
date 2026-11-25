@@ -10,12 +10,12 @@ ExEditor is a macOS TextEdit-style desktop document editor written in Rust with 
 
 | What | Where |
 | --- | --- |
-| NSH tool and runtime (`nsh` nightly `00cfb08` / 2026-11-17) | `C:\dev\nsh` (`C:\dev\nsh\bin\nsh.exe`) |
-| NSH source and docs (`main` `6442c86be`) | `C:\dev\nsh-src` (`AGENTS.md`, `website/docs/`, `docs/dev/`) and <https://nsh.dev> |
+| NSH tool and runtime (verify version against project pin) | `C:\dev\nsh` (`C:\dev\nsh\bin\nsh.exe`) |
+| NSH source, documentation and examples (checkout may differ from project pin) | `C:\dev\nsh-src` (`AGENTS.md`, `website/docs/`, `docs/dev/`) and <https://nsh.dev> |
 
-- Use the NSH tool and runtime in `C:\dev\nsh` and the source/documentation in `C:\dev\nsh-src`.
+- Use `C:\dev\nsh\bin\nsh.exe` for NSH compilation and packaging; check its version against the pinned project dependencies before use and report mismatches. Consult relevant documentation and examples in `C:\dev\nsh-src` when implementing NSH features.
 - Use only NSH APIs and components that exist in `C:\dev\nsh-src`. Always inspect `C:\dev\nsh-src` before calling or citing NSH APIs.
-- UI dependencies pin to `rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba"` in `longbridge/nsh`, matching `C:\dev\nsh-src`.
+- UI dependencies pin to `rev = "6442c86be0a46f64dc1a11d8672fb746f64d96ba"` in `longbridge/nsh`; consult that revision in `C:\dev\nsh-src` when the current checkout differs. Report version mismatches before NSH packaging.
 
 ---
 
@@ -24,10 +24,13 @@ ExEditor is a macOS TextEdit-style desktop document editor written in Rust with 
 **Always build code cleanly, modularly, and with proper architecture and separation of concerns. Never simply bolt on a feature because I asked for it. If you can't find an easy way, check online on GitHub for similar works that have been built with either exactly the same idea or something very close, and follow the same procedure to build it naturally.**
 
 - When you write, review or refactor Rust, use the **`rust-best-practices`** skill (`/rust-best-practices`).
-- Whenever anything related to a UI or interface is to be built or designed, use both the **`ui-ux-pro-max`** (`/ui-ux-pro-max`) and **`impeccable`** (`/impeccable`) skills, to keep the design consistent and the aesthetics high.
+- **UI design:** For NSH interface design, implementation, changes, or review, follow `C:\dev\nsh-src\skills\nsh-design-guides\SKILL.md` and its referenced guides. Preserve established project visual language and accessibility requirements.
 - A feature is a self-contained module: model, view, tests. No OS types in models; features don't reach into each other's internals.
 - Every `unsafe` block has a `// SAFETY:` comment.
 - Retain the MIT notice for the historical clipboard-adapter source.
+- Reproduce defects and trace root causes; do not mask them with retries or swallowed errors. Preserve user data with atomic writes.
+- Give controls accessible names and keyboard access; keep long operations off the UI thread and report offline or network failures clearly.
+- Validate changed platform code on its actual target, including native interaction and visual checks where relevant; report gaps rather than inferring rendering from compilation.
 
 ---
 
@@ -45,7 +48,7 @@ cargo test
 
 Local builds use [huacnlee/cargo](https://github.com/huacnlee/cargo), a drop-in fork of Cargo that shares one self-cleaning build directory between projects and worktrees, so the disk doesn't fill up. Follow its rules:
 
-- Check it is the active cargo before building: `cargo -V` ends with `(huacnlee/cargo …)`. If it doesn't (for example after `rustup self update`, which restores the stock cargo), report it to the maintainer; don't install it yourself.
+- Follow [huacnlee/cargo](https://github.com/huacnlee/cargo) and use the already installed `cargo` on PATH for local builds, checks, tests, Clippy and documentation. Before building, check `Get-Command cargo` and `cargo -V`; the version identifies `(huacnlee/cargo …)`. If it doesn't (for example after `rustup self update`, which restores the stock cargo), report it to the maintainer; don't install it yourself.
 - Don't run `cargo clean` and don't delete `target/` or `~/.cargo/targets/`. The fork removes what is unused on its own, and cleaning only forces a full rebuild.
 - Don't set a build directory: `--target-dir`, `CARGO_TARGET_DIR`, `build.target-dir` and `build.build-dir` are ignored with a warning. Build output lives in `~/.cargo/targets/<name>-<hash>/`, registry dependencies in `~/.cargo/targets/shared-deps/`; built binaries still appear in `./target`.
 - Its size limits and switches (`[build.gc]` in `~/.cargo/config.toml`, `CARGO_SHARED_DEPS`, `CARGO_SHARE_WORKSPACE_UNITS` and the like) are the maintainer's machine settings: leave them at their defaults unless asked.

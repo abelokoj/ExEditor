@@ -86,6 +86,7 @@ pub fn open_with_code(
 ) {
     if let Some((panel, window)) = global::<ActiveColors>()
         .with_untracked(|active| active.panel.upgrade().zip(active.window.clone()))
+        && panel.colors.chrome == colors.chrome
     {
         panel.target.set(target);
         panel.commands.replace(commands);
@@ -472,10 +473,36 @@ impl ColorsPanel {
                     if event.pressed_button==Some(MouseButton::Left) {dragging.choose_wheel(event.position,size.get());}
                 })
                 .child(image(move ||wheel.get()).size_full().pointer_events(PointerEvents::None))
-                .child(view().absolute().size(px(12.)).rounded_full().border_2().border_color(rgb(c.ink))
-                    .left(move ||px((1.+(thumb_hue.get()/360.*TAU).cos()*thumb_saturation.get())*WHEEL_SIZE/2.-6.))
-                    .top(move ||px((1.-(thumb_hue.get()/360.*TAU).sin()*thumb_saturation.get())*WHEEL_SIZE/2.-6.))
-                    .pointer_events(PointerEvents::None))
+                .child(
+                    view()
+                        .absolute()
+                        .size(px(14.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(rgb(0xffffff))
+                        .items_center()
+                        .justify_center()
+                        .left(move || {
+                            px((1. + (thumb_hue.get() / 360. * TAU).cos() * thumb_saturation.get())
+                                * WHEEL_SIZE
+                                / 2.
+                                - 7.)
+                        })
+                        .top(move || {
+                            px((1. - (thumb_hue.get() / 360. * TAU).sin() * thumb_saturation.get())
+                                * WHEEL_SIZE
+                                / 2.
+                                - 7.)
+                        })
+                        .pointer_events(PointerEvents::None)
+                        .child(
+                            view()
+                                .size(px(10.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(rgb(0x111111)),
+                        ),
+                )
                 .child(when(focused,move || {
                     for (key,dh,ds) in [("left",-1.,0.),("right",1.,0.),("up",0.,0.01),("down",0.,-0.01),
                         ("shift+left",-10.,0.),("shift+right",10.,0.),("shift+up",0.,0.1),("shift+down",0.,-0.1)]
@@ -628,6 +655,7 @@ impl ColorsPanel {
     }
     fn palette_view(self: &Rc<Self>) -> AnyElement {
         let query = self.query;
+        let matches = computed(move || matching_colors(&query.get()));
         let state = self.clone();
         let colors = self.colors;
         view()
@@ -635,41 +663,41 @@ impl ColorsPanel {
             .child(ui::input("Search stylesheet colors", self.query, colors))
             .child(
                 virtual_list(
-                    move || matching_colors(&query.get()).len(),
+                    move || matches.with(Vec::len),
                     move |at| {
-                        let state = state.clone();
                         let select = state.clone();
-                        let query = state.query;
                         ui::button_styled("named-color", "", 12., colors)
                             .h(px(28.))
                             .justify_start()
                             .accessibility_label(move || {
-                                matching_colors(&query.get()).get(at.index()).map(
-                                    |(name, value)| {
+                                matches.with(|list| {
+                                    list.get(at.index()).map(|(name, value)| {
                                         SharedString::from(format!("{name}, #{value:06x}"))
-                                    },
-                                )
+                                    })
+                                })
                             })
                             .child(view().size(px(16.)).rounded(px(2.)).bg(move || {
-                                rgb(matching_colors(&query.get())
-                                    .get(at.index())
-                                    .map(|(_, value)| *value)
-                                    .unwrap_or(colors.field))
+                                rgb(matches.with(|list| {
+                                    list.get(at.index())
+                                        .map(|(_, value)| *value)
+                                        .unwrap_or(colors.field)
+                                }))
                             }))
                             .child(
                                 text(move || {
-                                    matching_colors(&query.get())
-                                        .get(at.index())
-                                        .map(|(name, _)| *name)
-                                        .unwrap_or_default()
+                                    matches.with(|list| {
+                                        list.get(at.index())
+                                            .map(|(name, _)| *name)
+                                            .unwrap_or_default()
+                                    })
                                 })
                                 .text_size(px(12.)),
                             )
                             .on_press(move || {
                                 if let Some((_, value)) =
-                                    matching_colors(&query.get_untracked()).get(at.index())
+                                    matches.with_untracked(|list| list.get(at.index()).copied())
                                 {
-                                    let mut color = Rgba::from_rgb(*value);
+                                    let mut color = Rgba::from_rgb(value);
                                     color.a = select.color.get_untracked().a;
                                     select.set_color(color);
                                 }

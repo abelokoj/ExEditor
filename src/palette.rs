@@ -13,6 +13,7 @@ pub fn open(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
         colors,
         "Command Palette",
         "Type a command…",
+        false,
     );
 }
 pub fn open_files(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
@@ -22,6 +23,7 @@ pub fn open_files(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) 
         colors,
         "Quick Open",
         "Search open and recent files…",
+        false,
     );
 }
 pub fn open_shortcuts(entries: Vec<MenuEntry>, commands: Commands, colors: Palette) {
@@ -31,6 +33,7 @@ pub fn open_shortcuts(entries: Vec<MenuEntry>, commands: Commands, colors: Palet
         colors,
         "Keyboard Shortcuts",
         "Search commands or keybindings…",
+        true,
     );
 }
 fn open_with_title(
@@ -39,6 +42,7 @@ fn open_with_title(
     colors: Palette,
     title: &'static str,
     placeholder: &'static str,
+    allow_disabled: bool,
 ) {
     let entries = Rc::new(entries);
     ui::show_panel_with_colors(
@@ -60,7 +64,7 @@ fn open_with_title(
                 .child(
                     ui::command_list(
                         move || {
-                            filtered(&filter_entries, &query.get())
+                            filtered_with(&filter_entries, &query.get(), allow_disabled)
                                 .into_iter()
                                 .map(|index| {
                                     let entry = &filter_entries[index];
@@ -94,8 +98,21 @@ fn open_with_title(
                                 .flex_row()
                                 .items_center()
                                 .gap(px(10.))
-                                .child(text(item.label.clone()).flex_1().text_size(px(12.)))
-                                .child(text(shortcut).text_size(px(11.)))
+                                .min_w(px(0.))
+                                .child(
+                                    text(item.label.clone())
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .text_size(px(12.)),
+                                )
+                                .child(
+                                    text(shortcut)
+                                        .text_size(px(11.))
+                                        .font_family(crate::fonts::default_plain_font())
+                                        .opacity(0.75)
+                                        .flex_shrink_0(),
+                                )
                         }
                     })
                     .on_select(move |id: &SharedString| {
@@ -120,12 +137,16 @@ fn open_with_title(
         },
     );
 }
+#[cfg_attr(not(test), allow(dead_code))]
 fn filtered(entries: &[MenuEntry], query: &str) -> Vec<usize> {
+    filtered_with(entries, query, false)
+}
+fn filtered_with(entries: &[MenuEntry], query: &str, allow_disabled: bool) -> Vec<usize> {
     entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            (entry.enabled
+            ((allow_disabled || entry.enabled)
                 && entry.command.is_some()
                 && matches_query(&format!("{} {}", entry.label, entry.shortcut), query))
             .then_some(index)
@@ -142,16 +163,25 @@ fn matches_query(label: &str, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{filtered, matches_query};
+    use super::{filtered, filtered_with, matches_query};
     #[test]
     fn palette_search_matches_command_names_and_keybindings_together() {
         use crate::{app::Command, dialogs::MenuEntry};
+        let mut disabled = MenuEntry::item(
+            "Scroll line up",
+            "Ctrl+Up",
+            Command::ScrollEditor(-1, false),
+        );
+        disabled.enabled = false;
         let entries = [
             MenuEntry::item("New window", "Ctrl+Shift+N", Command::New),
             MenuEntry::item("New tab", "Ctrl+N", Command::NewTab),
+            disabled,
         ];
         assert_eq!(filtered(&entries, "ctrl+shift+n"), [0]);
         assert_eq!(filtered(&entries, "new ctrl+n"), [1]);
+        assert!(filtered(&entries, "ctrl+up").is_empty());
+        assert_eq!(filtered_with(&entries, "ctrl+up", true), [2]);
         assert!(filtered(&entries, "missing").is_empty());
     }
     #[test]

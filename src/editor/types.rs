@@ -68,6 +68,7 @@ pub enum EditCommand {
     Delete,
     Bold,
     Italic,
+    FontWeight { bold: bool, italic: bool },
     Underline,
     Strikethrough,
     Superscript,
@@ -89,7 +90,7 @@ pub enum EditCommand {
     CopyStyle,
     PasteStyle,
 }
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FormatState {
     pub font: String,
     pub size: f32,
@@ -97,10 +98,32 @@ pub struct FormatState {
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub superscript: bool,
+    pub subscript: bool,
     pub foreground: u32,
     pub background: u32,
     pub alignment: Alignment,
     pub block_style: BlockStyle,
+    pub line_spacing: f32,
+}
+impl Default for FormatState {
+    fn default() -> Self {
+        Self {
+            font: String::new(),
+            size: 0.,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            superscript: false,
+            subscript: false,
+            foreground: 0,
+            background: 0,
+            alignment: Alignment::Left,
+            block_style: BlockStyle::Body,
+            line_spacing: 1.0,
+        }
+    }
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageSettings {

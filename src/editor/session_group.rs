@@ -152,6 +152,12 @@ impl SessionGroup {
         member
     }
 
+    pub(super) fn refresh_overlays(&self) {
+        for member in self.live_members() {
+            member.session.update_state(member.session.state());
+        }
+    }
+
     pub(super) fn reconfigure(&self, plugins: Vec<Plugin>) -> Result<(), StateError> {
         let plugins = self.wrap_plugins(plugins);
         let prepared = self

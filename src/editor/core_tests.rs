@@ -472,3 +472,159 @@ fn block_styles_line_numbers_replace_one_and_pt_indents_roundtrip_cleanly() {
         "unexpected html after pt+twip indent: {html}"
     );
 }
+
+#[test]
+fn alignment_commands_and_relative_line_selection_run_cleanly() {
+    let editor = Editor::new().unwrap();
+    editor
+        .set_text("Line 1\nSecond line with 😀 emoji\nThird line\nFourth line")
+        .unwrap();
+
+    // Verify line_at_selection for multiple positions
+    editor.select_range(0..6).unwrap();
+    assert_eq!(editor.line_at_selection(), 1);
+
+    // Test text alignments
+    for alignment in [
+        Alignment::Left,
+        Alignment::Center,
+        Alignment::Right,
+        Alignment::Justify,
+    ] {
+        editor.execute(EditCommand::Align(alignment)).unwrap();
+    }
+
+    // Test line range calculation matching Select Line behavior
+    let text = editor.text().unwrap();
+    let lines: Vec<&str> = text.split('\n').collect();
+    assert_eq!(lines.len(), 4);
+
+    let mut start_offset = 0;
+    let mut ranges = Vec::new();
+    for part in &lines {
+        let part_len = part.encode_utf16().count();
+        ranges.push(start_offset..start_offset + part_len);
+        start_offset += part_len + 1;
+    }
+
+    // Select line 2 (with emoji)
+    editor.select_range(ranges[1].clone()).unwrap();
+    assert_eq!(editor.selected_text().unwrap(), "Second line with 😀 emoji");
+    assert_eq!(editor.line_at_selection(), 2);
+
+    // Select line 4
+    editor.select_range(ranges[3].clone()).unwrap();
+    assert_eq!(editor.selected_text().unwrap(), "Fourth line");
+    assert_eq!(editor.line_at_selection(), 4);
+}
+
+#[test]
+fn font_weight_sets_exact_bold_and_italic_states_and_line_spacing_reads_back() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("hello world").unwrap();
+    editor.select_range(0..5).unwrap();
+
+    editor
+        .execute(EditCommand::FontWeight {
+            bold: false,
+            italic: false,
+        })
+        .unwrap();
+    let f = editor.formatting();
+    assert!(!f.bold && !f.italic);
+
+    editor
+        .execute(EditCommand::FontWeight {
+            bold: true,
+            italic: false,
+        })
+        .unwrap();
+    let f = editor.formatting();
+    assert!(f.bold && !f.italic);
+
+    editor
+        .execute(EditCommand::FontWeight {
+            bold: true,
+            italic: true,
+        })
+        .unwrap();
+    let f = editor.formatting();
+    assert!(f.bold && f.italic);
+
+    editor
+        .execute(EditCommand::FontWeight {
+            bold: false,
+            italic: true,
+        })
+        .unwrap();
+    let f = editor.formatting();
+    assert!(!f.bold && f.italic);
+
+    editor
+        .execute(EditCommand::FontWeight {
+            bold: false,
+            italic: false,
+        })
+        .unwrap();
+    let f = editor.formatting();
+    assert!(!f.bold && !f.italic);
+
+    editor.execute(EditCommand::LineSpacing(1.15)).unwrap();
+    assert!((editor.formatting().line_spacing - 1.15).abs() < 0.01);
+
+    editor.execute(EditCommand::Superscript).unwrap();
+    assert!(editor.formatting().superscript);
+    editor.execute(EditCommand::Superscript).unwrap();
+    assert!(!editor.formatting().superscript);
+}
+
+#[test]
+fn convert_case_on_empty_selection_leaves_document_unmodified() {
+    let editor = Editor::new().unwrap();
+    editor.set_text("hello").unwrap();
+    editor.mark_saved();
+    editor.select_range(2..2).unwrap();
+    editor
+        .execute(EditCommand::ConvertCase(Case::Upper))
+        .unwrap();
+    assert!(!editor.is_modified());
+    assert_eq!(editor.text().unwrap(), "hello");
+}
+
+#[test]
+fn matches_tracks_utf16_offsets_across_emoji_and_case_folding() {
+    let editor = Editor::new().unwrap();
+    editor
+        .set_text("😀 café CAFÉ coffee cafe_1 😀 café")
+        .unwrap();
+    let all = editor.matches("café", false, false).unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0], 3..7);
+    assert_eq!(all[1], 8..12);
+    assert_eq!(all[2], 30..34);
+    let exact = editor.matches("CAFÉ", true, false).unwrap();
+    assert_eq!(exact, vec![8..12]);
+    let whole = editor.matches("cafe", false, true).unwrap();
+    assert!(whole.is_empty());
+    let partial = editor.matches("cafe", false, false).unwrap();
+    assert_eq!(partial, vec![20..24]);
+}
+
+#[test]
+fn split_view_refreshes_proofing_and_syntax_overlays_cleanly() {
+    let primary = Editor::new().unwrap();
+    primary.set_plain_text_mode(true).unwrap();
+    primary.set_text("let x = 1;").unwrap();
+    let peer = primary.split_view().unwrap();
+    primary.set_proofing_marks(&[0..3, 4..5]).unwrap();
+    primary
+        .apply_spans(&[crate::syntax::Span {
+            start: 0,
+            len: 3,
+            color: 0x0069dc,
+            bold: true,
+            italic: false,
+        }])
+        .unwrap();
+    assert_eq!(peer.text().unwrap(), "let x = 1;");
+}

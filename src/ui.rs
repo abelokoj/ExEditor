@@ -16,6 +16,17 @@ static CONTROLS_LEFT: AtomicBool = AtomicBool::new(cfg!(target_os = "macos"));
 pub const SCALE_RANGE: std::ops::RangeInclusive<u16> = 50..=300;
 pub const CONTROL_MOTION_MS: f32 = 120.;
 
+pub const ICON_CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5L6.5 11.5L12.5 4.5"/></svg>"#;
+pub const ICON_CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.25 6.25L8 10L11.75 6.25"/></svg>"#;
+pub const ICON_CHEVRON_RIGHT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4.25L10 8L6.25 11.75"/></svg>"#;
+pub const ICON_PLUS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3.5V12.5M3.5 8H12.5"/></svg>"#;
+
+pub fn icon(markup: &'static str, size_px: f32) -> nsh_core::element::Svg {
+    svg(nsh_core::element::ImageSrc::svg_markup(markup))
+        .size(px(size_px))
+        .flex_shrink_0()
+}
+
 pub fn sync_chrome_preferences(
     appearance: crate::preferences::Appearance,
     controls: crate::preferences::WindowControls,
@@ -163,9 +174,9 @@ pub fn checkbox(
                 .bg(rgb(colors.field))
         })
         .indicator(
-            text(move || if checked.get() { "✓" } else { "" })
-                .text_size(px(12.))
-                .text_color(rgb(colors.ink)),
+            icon(ICON_CHECK, 10.)
+                .text_color(rgb(colors.ink))
+                .opacity(move || if checked.get() { 1_f32 } else { 0_f32 }),
         )
         .child(text(label).text_size(px(12.)).line_height(px(18.)))
         .on_change(move |checked: &bool| on_change(*checked))
@@ -268,7 +279,8 @@ pub fn button_styled(
         .child(
             text(label)
                 .text_size(px(font_size))
-                .line_height(px(font_size * 1.25)),
+                .line_height(px(font_size * 1.25))
+                .truncate(),
         )
 }
 
@@ -374,12 +386,7 @@ pub fn dropdown_control(
                 .flex_1()
                 .min_w(px(0.)),
         )
-        .child(
-            text("▾")
-                .text_size(px(9.))
-                .text_color(rgb(colors.muted))
-                .flex_shrink_0(),
-        )
+        .child(icon(ICON_CHEVRON_DOWN, 11.).text_color(rgb(colors.muted)))
 }
 
 pub fn color_control(
@@ -449,7 +456,15 @@ pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
     selected: Signal<T>,
     colors: Palette,
 ) -> impl IntoElement {
+    let tab_values: Rc<Vec<T>> = Rc::new(tabs.iter().map(|&(tab, _)| tab).collect());
+    let focused = signal(false);
+    let list_ref = element_ref();
+    list_ref.on_focus_in(move || focused.set(true));
+    list_ref.on_focus_out(move || focused.set(false));
+    let left_values = tab_values.clone();
+    let right_values = tab_values.clone();
     view()
+        .element_ref(&list_ref)
         .key(group_label)
         .role(AccessibilityRole::Tablist)
         .label(group_label)
@@ -462,6 +477,7 @@ pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
         .border_color(rgb(colors.border))
         .bg(rgb(colors.toolbar))
         .children(tabs.iter().enumerate().map(|(index, &(tab, title))| {
+            let hovered = signal(false);
             nsh_base::button()
                 .key(format!("segment-tab-{index}"))
                 .role(AccessibilityRole::Tab)
@@ -476,6 +492,8 @@ pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
                 .bg(move || {
                     rgb(if selected.get() == tab {
                         colors.accent
+                    } else if hovered.get() {
+                        colors.field
                     } else {
                         colors.toolbar
                     })
@@ -487,21 +505,34 @@ pub fn segmented_tabs<T: Copy + PartialEq + 'static>(
                         colors.ink
                     })
                 })
-                .hover(move |s| {
-                    s.bg(rgb(if selected.get() == tab {
-                        colors.accent
-                    } else {
-                        colors.field
-                    }))
-                })
+                .on_mouse_enter(move |_: &nsh_core::MouseEvent| hovered.set(true))
+                .on_mouse_leave(move |_: &nsh_core::MouseEvent| hovered.set(false))
                 .focus_visible(move |s| s.outline(px(2.)).outline_color(rgb(colors.accent)))
                 .child(
                     text(title)
                         .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM),
+                        .font_weight(FontWeight::MEDIUM)
+                        .truncate(),
                 )
                 .on_press(move || selected.set(tab))
                 .into_element()
+        }))
+        .child(when(focused, move || {
+            let left = left_values.clone();
+            let right = right_values.clone();
+            on_key("left", move |_| {
+                if let Some(pos) = left.iter().position(|&v| v == selected.get_untracked()) {
+                    let prev = (pos + left.len() - 1) % left.len();
+                    selected.set(left[prev]);
+                }
+            });
+            on_key("right", move |_| {
+                if let Some(pos) = right.iter().position(|&v| v == selected.get_untracked()) {
+                    let next = (pos + 1) % right.len();
+                    selected.set(right[next]);
+                }
+            });
+            view()
         }))
 }
 
@@ -554,11 +585,18 @@ pub fn select(
                 .border_1()
                 .border_color(rgb(colors.border))
                 .bg(rgb(colors.field))
+                .text_color(rgb(colors.ink))
                 .shadow_md()
         })
-        .item_class("rounded focus:bg-accent focus:text-accent-foreground disabled:opacity-50")
+        .item_class(format!(
+            "rounded focus:bg-[#{:06x}] focus:text-[#{:06x}] disabled:opacity-50",
+            colors.accent, colors.on_accent
+        ))
         .render_item(|entry: &nsh_base::SelectEntry| {
-            text(entry.title.clone()).px(px(8.)).py(px(5.))
+            text(entry.title.clone())
+                .px(px(8.))
+                .py(px(5.))
+                .text_size(px(12.))
         })
         .trigger(
             view()
@@ -567,6 +605,7 @@ pub fn select(
                 .min_w(px(0.))
                 .flex_row()
                 .items_center()
+                .gap(px(6.))
                 .rounded(px(4.))
                 .border_1()
                 .border_color(rgb(colors.border))
@@ -586,12 +625,7 @@ pub fn select(
                     .text_color(rgb(colors.ink))
                     .text_size(px(12.)),
                 )
-                .child(
-                    text("▾")
-                        .text_size(px(10.))
-                        .text_color(rgb(colors.muted))
-                        .flex_shrink_0(),
-                ),
+                .child(icon(ICON_CHEVRON_DOWN, 11.).text_color(rgb(colors.muted))),
         )
 }
 
@@ -656,6 +690,7 @@ pub fn command_list(
 
 pub fn heading(label: impl Into<SharedString>) -> impl IntoElement {
     text(Into::<SharedString>::into(label))
+        .role(AccessibilityRole::Header)
         .text_size(px(13.))
         .font_weight(FontWeight::SEMIBOLD)
 }

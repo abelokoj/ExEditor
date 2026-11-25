@@ -117,6 +117,7 @@ fn pane(
                             active_header(index).is_some_and(|(_, _, active)| active)
                         })
                         .hover(move |style| style.bg(ui::rgb(colors.get().field)))
+                        .active(|style| style.opacity(0.8))
                         .focus_visible(move |style| {
                             style
                                 .outline(px(2.))
@@ -136,8 +137,7 @@ fn pane(
                             .min_w(px(0.)),
                         )
                         .child(
-                            text("▾")
-                                .text_size(px(10.))
+                            ui::icon(ui::ICON_CHEVRON_DOWN, 11.)
                                 .text_color(move || ui::rgb(colors.get().muted)),
                         )
                         .on_press(move || {

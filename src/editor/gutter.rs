@@ -194,7 +194,10 @@ pub(super) fn wrap(
     let configured = editor.clone();
     effect(move || {
         revision.get();
-        settings.set(Settings::read(&configured));
+        let new_settings = Settings::read(&configured);
+        if settings.get_untracked() != new_settings {
+            settings.set(new_settings);
+        }
     });
     let sampled = editor.clone();
     // shortcut: poll geometry every 16 ms; replace with native scroll callbacks when NSH exposes them.

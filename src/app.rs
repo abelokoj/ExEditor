@@ -279,6 +279,8 @@ pub(crate) fn shortcut_command(name: &str) -> Option<Command> {
         "align-left" => Command::Edit(EditCommand::Align(Alignment::Left)),
         "align-center" => Command::Edit(EditCommand::Align(Alignment::Center)),
         "align-right" => Command::Edit(EditCommand::Align(Alignment::Right)),
+        "align-justify" => Command::Edit(EditCommand::Align(Alignment::Justify)),
+        "duplicate" => Command::Duplicate,
         "jump-to-selection" => Command::GoToSelection,
         "ruler" => Command::ToggleRuler,
         "wrap" => Command::ToggleWrap,
@@ -299,6 +301,8 @@ fn shortcut_entries() -> Vec<MenuEntry> {
             let mut label = match binding.action {
                 "new" => "New window".into(),
                 "paste-or-preview" => "Paste plain text / Markdown preview".into(),
+                "align-justify" => "Justify".into(),
+                "wrap" => "Wrap to window / page".into(),
                 _ => binding.action.replace('-', " "),
             };
             if let Some(first) = label.get_mut(..1) {
@@ -1128,7 +1132,8 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                     }
                 ))
                 .text_size(px(13.))
-                .text_color(ui::rgb(colors.ink)),
+                .text_color(ui::rgb(colors.ink))
+                .truncate(),
             )
     };
     title = match current.prefs.window_controls {
@@ -1186,7 +1191,12 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
     let mut chrome = view().w_full().flex_shrink_0().child(title).child(menu);
     if current.show_tabs || current.tabs.len() > 1 {
         let active = current.active_tab;
-        let mut strip = view().flex_row().items_center().gap(px(3.));
+        let mut strip = view()
+            .role(AccessibilityRole::Tablist)
+            .label("Open documents")
+            .flex_row()
+            .items_center()
+            .gap(px(3.));
         for (index, tab) in current.tabs.iter().enumerate() {
             let name = tab
                 .as_ref()
@@ -1195,6 +1205,7 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
             let queue = queue.clone();
             strip = strip.child(
                 ui::control(format!("tab-{index}"), name, 160., index == active, colors)
+                    .role(AccessibilityRole::Tab)
                     .h(px(24.))
                     .flex_shrink_0()
                     .on_press(move || enqueue(&queue, Command::SwitchTab(index))),
@@ -1214,8 +1225,10 @@ fn render_chrome(model: Rc<RefCell<EditorWindow>>, window: &Window, cx: &AppCont
                 .border_color(ui::rgb(colors.border))
                 .child(scroll().horizontal().flex_1().min_w(px(0.)).child(strip))
                 .child(
-                    ui::control("new-tab", "+", 26., false, colors)
+                    ui::control("new-tab", "", 26., false, colors)
+                        .accessibility_label("New tab")
                         .h(px(24.))
+                        .child(ui::icon(ui::ICON_PLUS, 12.).text_color(ui::rgb(colors.ink)))
                         .on_press(move || enqueue(&add_queue, Command::NewTab)),
                 ),
         );
@@ -1946,7 +1959,6 @@ impl EditorWindow {
         self.doc.discard_recovery()?;
         self.doc.buffered = false;
         self.doc.restored_buffer = false;
-        self.doc.codec_import = !loaded.format.is_plain();
         self.prefs.add_recent(loaded.path);
         self.prefs.save()?;
         self.doc.last_text = self.editor()?.text()?;
@@ -2025,6 +2037,7 @@ impl EditorWindow {
             if active
                 && !composing
                 && !self.doc.read_only
+                && self.doc.highlighter.is_none()
                 && range.start == range.end
                 && text.chars().count() == self.doc.last_text.chars().count() + 1
                 && let Some(change) = services::substitution(
@@ -2109,7 +2122,7 @@ impl EditorWindow {
             self.doc.last_external_check = Instant::now();
         }
         let stamp = format!(
-            "{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
             self.name(),
             self.doc.dirty,
             self.tabs.len(),
@@ -2119,9 +2132,14 @@ impl EditorWindow {
             self.prefs.appearance,
             self.doc.rich,
             self.doc.ruler,
-            self.doc.zoom
+            self.doc.zoom,
+            self.prefs.show_line_numbers,
+            self.prefs.line_number_width,
+            self.prefs.window_controls,
+            self.prefs.window_controls_percent,
+            self.doc.read_only,
+            self.pending_opens
         );
-        let stamp = format!("{stamp}:{}", self.pending_opens);
         if self.ui_stamp != stamp {
             let mut attributes = WindowAttributes::default();
             attributes.title = Some(format!(
@@ -2784,7 +2802,10 @@ impl EditorWindow {
                 let result = (|| -> Result<()> {
                     for index in 0..self.tabs.len() {
                         self.switch_tab(index)?;
-                        if !self.save(false)? {
+                        let needs_save = self.doc.path.is_none()
+                            || self.doc.dirty
+                            || self.editor()?.is_modified();
+                        if needs_save && !self.save(false)? {
                             break;
                         }
                     }
@@ -3052,14 +3073,38 @@ impl EditorWindow {
                 self.save(true)?;
             }
             Command::Duplicate => {
-                let content = self.content()?;
                 let rich = self.doc.rich;
                 let format = self.doc.format;
+                let snapshot = if rich {
+                    self.editor()?.snapshot()
+                } else {
+                    None
+                };
+                let fallback_content = if snapshot.is_none() {
+                    Some(self.content()?)
+                } else {
+                    None
+                };
                 let mut view = Self::new(None);
                 view.doc.rich = rich;
                 view.doc.format = format;
-                view.editor()?.set_plain_text_mode(!rich)?;
-                view.load_content(&content)?;
+                view.doc.encoding = self.doc.encoding;
+                view.doc.line_ending = self.doc.line_ending;
+                view.doc.page = self.doc.page.clone();
+                view.doc.wrap_page = self.doc.wrap_page;
+                view.doc.word_wrap = self.doc.word_wrap;
+                view.doc.ruler = self.doc.ruler;
+                view.doc.zoom = self.doc.zoom;
+                let target_editor = view.editor()?;
+                target_editor.set_plain_text_mode(!rich)?;
+                if let Some(bytes) = snapshot {
+                    target_editor.set_snapshot(&bytes)?;
+                    target_editor.mark_modified();
+                } else if let Some(content) = fallback_content {
+                    view.load_content(&content)?;
+                }
+                let _ = target_editor.set_page_settings(&view.doc.page);
+                view.doc.last_text = target_editor.text()?;
                 view.doc.dirty = true;
                 cx.workspace.add(view);
             }
@@ -3084,11 +3129,19 @@ impl EditorWindow {
                         !destination.exists(),
                         "A file already exists at that location. Choose another name."
                     );
-                    std::fs::rename(&old, &destination).context(
+                    move_file_path(&old, &destination).context(
                         "Moving the document; the original remains in place if this fails",
                     )?;
+                    if let Ok(format) = DocumentFormat::from_path(&destination)
+                        && document::supports_format(format)
+                    {
+                        self.doc.format = format;
+                    }
                     self.doc.fingerprint = Some(document::fingerprint(&destination)?);
+                    self.doc.observed_fingerprint = None;
                     self.doc.path = Some(destination.clone());
+                    self.doc.look = None;
+                    self.doc.proofing.invalidate();
                     self.prefs.add_recent(destination);
                     self.prefs.save()?;
                 }
@@ -3110,7 +3163,19 @@ impl EditorWindow {
                 ) {
                     let loaded = document::load(&path)?;
                     self.show_markdown_source()?;
-                    self.load_content(&loaded.content)?;
+                    self.editor()?
+                        .set_plain_text_mode(loaded.format.is_plain())?;
+                    if let Some(snapshot) = loaded.editor_snapshot {
+                        self.editor()?.set_document(snapshot)?;
+                        self.editor()?.mark_modified();
+                    } else {
+                        self.load_content(&loaded.content)?;
+                    }
+                    self.doc.rich = !loaded.format.is_plain();
+                    self.doc.page = self.editor()?.page_settings();
+                    self.doc.last_text = self.editor()?.text()?;
+                    self.doc.proofing.invalidate();
+                    self.doc.look = None;
                     self.doc.dirty = true;
                 }
             }
@@ -3321,9 +3386,9 @@ impl EditorWindow {
             }
             Command::GoToLine => self.show_form(
                 FormKind::GoToLine,
-                "Go to Line",
+                "Select Line",
                 vec![Field::text(
-                    "Line number",
+                    "Line number (e.g. 42, +5, -2)",
                     self.editor()
                         .map(|editor| editor.line_at_selection())
                         .unwrap_or(1),
@@ -3467,7 +3532,10 @@ impl EditorWindow {
             Command::CustomSpacing => self.show_form(
                 FormKind::Spacing,
                 "Line Spacing",
-                vec![Field::text("Line spacing", 1.0)],
+                vec![Field::text(
+                    "Line spacing",
+                    format_line_spacing(self.doc.formatting.line_spacing),
+                )],
                 window,
                 cx,
             ),
@@ -3510,7 +3578,7 @@ impl EditorWindow {
                             self.doc.rich,
                             "Text background colors require a rich-text document."
                         );
-                        editor.execute(EditCommand::Background(color.composite(0xffffff)))?;
+                        editor.execute(EditCommand::Background(color.composite(self.doc.paper)))?;
                     }
                     ColorTarget::InsertCode => editor.replace_current(&code)?,
                 }
@@ -3646,6 +3714,7 @@ impl EditorWindow {
                         edit,
                         EditCommand::Bold
                             | EditCommand::Italic
+                            | EditCommand::FontWeight { .. }
                             | EditCommand::Underline
                             | EditCommand::Strikethrough
                             | EditCommand::Superscript
@@ -3735,8 +3804,8 @@ impl EditorWindow {
                 .parse::<f32>()
                 .context("Enter a number")?;
             ensure!(
-                n.is_finite() && n > 0. && n <= 1000.,
-                "Enter a number greater than zero and at most 1000"
+                n.is_finite() && n > 0. && n <= 1638.,
+                "Enter a number greater than zero and at most 1638"
             );
             Ok(n)
         };
@@ -4025,21 +4094,34 @@ impl EditorWindow {
                     .show();
             }
             FormKind::GoToLine => {
-                let line = value(0)?.parse::<usize>()?;
-                ensure!(line > 0, "Line numbers start at 1");
                 let editor = self.editor()?;
+                let raw = value(0)?.trim().to_string();
+                let current_line = editor.line_at_selection();
+                let target_line = if let Some(rest) = raw.strip_prefix('+') {
+                    let offset: usize = rest.parse()?;
+                    current_line.saturating_add(offset)
+                } else if let Some(rest) = raw.strip_prefix('-') {
+                    let offset: usize = rest.parse()?;
+                    current_line.saturating_sub(offset).max(1)
+                } else {
+                    raw.parse::<usize>()?
+                };
+                ensure!(target_line > 0, "Line numbers start at 1");
                 let text = editor.text()?;
-                let mut offset = 0;
+                let mut start_offset = 0;
+                let mut end_offset = 0;
                 let mut found = false;
                 for (index, part) in text.split('\n').enumerate() {
-                    if index + 1 == line {
+                    let part_len = part.encode_utf16().count();
+                    if index + 1 == target_line {
                         found = true;
+                        end_offset = start_offset + part_len;
                         break;
                     }
-                    offset += part.encode_utf16().count() + 1;
+                    start_offset += part_len + 1;
                 }
                 ensure!(found, "That line does not exist");
-                editor.select_range(offset..offset)?;
+                editor.select_range(start_offset..end_offset)?;
                 editor.scroll_to_selection();
             }
         }
@@ -4085,16 +4167,21 @@ impl EditorWindow {
                     "Open Recent",
                     crate::keyboard::label("recent-files"),
                     C::Menu(M::Recent),
-                ),
+                )
+                .submenu(),
                 sep(),
                 item("Close", crate::keyboard::label("close"), C::Close),
                 item("Save…", crate::keyboard::label("save"), C::Save),
                 item("Save As…", crate::keyboard::label("save-as"), C::SaveAs),
-                item("Duplicate", "", C::Duplicate),
+                item(
+                    "Duplicate",
+                    crate::keyboard::label("duplicate"),
+                    C::Duplicate,
+                ),
                 item("Rename…", "", C::Rename),
                 item("Move To…", "", C::Move),
                 item("Revert to Saved", "", C::Revert),
-                item("Browse All Versions…", "", C::Menu(M::Versions)),
+                item("Browse All Versions…", "", C::Menu(M::Versions)).submenu(),
                 sep(),
                 item("Export as PDF…", "", C::Pdf),
                 item("Show Properties", "", C::Properties),
@@ -4107,24 +4194,32 @@ impl EditorWindow {
                 item("Print…", crate::keyboard::label("print"), C::Print),
             ],
             M::Recent => {
-                let mut items = self
-                    .prefs
-                    .recent_files
-                    .iter()
-                    .map(|p| {
-                        item(
-                            &p.file_name().unwrap_or_default().to_string_lossy(),
-                            "",
-                            C::OpenPath(p.clone()),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                items.push(sep());
-                items.push(item("Clear Menu", "", C::ClearRecent));
-                items
+                if self.prefs.recent_files.is_empty() {
+                    let mut empty = item("No recent documents", "", C::ClearRecent);
+                    empty.enabled = false;
+                    let mut clear = item("Clear Menu", "", C::ClearRecent);
+                    clear.enabled = false;
+                    vec![empty, sep(), clear]
+                } else {
+                    let mut items = self
+                        .prefs
+                        .recent_files
+                        .iter()
+                        .map(|p| {
+                            item(
+                                &p.file_name().unwrap_or_default().to_string_lossy(),
+                                "",
+                                C::OpenPath(p.clone()),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    items.push(sep());
+                    items.push(item("Clear Menu", "", C::ClearRecent));
+                    items
+                }
             }
             M::Versions => {
-                if let Some(path) = &self.doc.path {
+                let versions: Vec<_> = if let Some(path) = &self.doc.path {
                     document::list_versions(path)?
                         .into_iter()
                         .map(|p| {
@@ -4136,7 +4231,14 @@ impl EditorWindow {
                         })
                         .collect()
                 } else {
-                    vec![]
+                    Vec::new()
+                };
+                if versions.is_empty() {
+                    let mut empty = item("No saved versions", "", C::GoToSelection);
+                    empty.enabled = false;
+                    vec![empty]
+                } else {
+                    versions
                 }
             }
             M::Edit => vec![
@@ -4159,11 +4261,16 @@ impl EditorWindow {
                     crate::keyboard::label("select-all"),
                     EditCommand::SelectAll,
                 ),
+                item(
+                    "Select Line",
+                    crate::keyboard::label("select-line"),
+                    C::SelectLine,
+                ),
                 sep(),
-                item("Find", "›", C::Menu(M::Find)),
-                item("Spelling and Grammar", "›", C::Menu(M::Spelling)),
-                item("Substitutions", "›", C::Menu(M::Substitutions)),
-                item("Transformations", "›", C::Menu(M::Transformations)),
+                item("Find", "", C::Menu(M::Find)).submenu(),
+                item("Spelling and Grammar", "", C::Menu(M::Spelling)).submenu(),
+                item("Substitutions", "", C::Menu(M::Substitutions)).submenu(),
+                item("Transformations", "", C::Menu(M::Transformations)).submenu(),
                 sep(),
                 item("Start Speaking", "", C::Speak),
                 item("Stop Speaking", "", C::StopSpeaking),
@@ -4197,7 +4304,7 @@ impl EditorWindow {
                     C::GoToSelection,
                 ),
                 item(
-                    "Go to Line…",
+                    "Select Line…",
                     crate::keyboard::label("go-to-line"),
                     C::GoToLine,
                 ),
@@ -4229,10 +4336,10 @@ impl EditorWindow {
                 e("Capitalize", "", EditCommand::ConvertCase(Case::Title)),
             ],
             M::Format => vec![
-                item("Paragraph Styles", "›", C::Menu(M::ParagraphStyles)),
-                item("Font", "›", C::Menu(M::Font)),
-                item("Text Alignment", "›", C::Menu(M::Alignment)),
-                item("Lists…", "›", C::Menu(M::Lists)),
+                item("Paragraph Styles", "", C::Menu(M::ParagraphStyles)).submenu(),
+                item("Font", "", C::Menu(M::Font)).submenu(),
+                item("Text Alignment", "", C::Menu(M::Alignment)).submenu(),
+                item("Lists…", "", C::Menu(M::Lists)).submenu(),
                 sep(),
                 item("Table…", "", C::Table),
                 item("Link…", "", C::Link),
@@ -4255,7 +4362,7 @@ impl EditorWindow {
                     } else {
                         "Wrap to Page"
                     },
-                    "",
+                    crate::keyboard::label("wrap"),
                     C::ToggleWrap,
                 ),
                 item(
@@ -4324,8 +4431,9 @@ impl EditorWindow {
                 e("Strikethrough", "", EditCommand::Strikethrough)
                     .checked(self.doc.formatting.strikethrough),
                 sep(),
-                e("Superscript", "", EditCommand::Superscript),
-                e("Subscript", "", EditCommand::Subscript),
+                e("Superscript", "", EditCommand::Superscript)
+                    .checked(self.doc.formatting.superscript),
+                e("Subscript", "", EditCommand::Subscript).checked(self.doc.formatting.subscript),
                 sep(),
                 // shortcut: no keys; TextEdit's Option-Cmd-C/V would be AltGr typing on many layouts.
                 e("Copy Style", "", EditCommand::CopyStyle),
@@ -4340,10 +4448,26 @@ impl EditorWindow {
                 item("Insert Color Code…", "", C::InsertColorCode),
             ],
             M::Alignment => [
-                ("Left", "", Alignment::Left),
-                ("Center", "", Alignment::Center),
-                ("Right", "", Alignment::Right),
-                ("Justified", "", Alignment::Justify),
+                (
+                    "Left",
+                    crate::keyboard::label("align-left"),
+                    Alignment::Left,
+                ),
+                (
+                    "Center",
+                    crate::keyboard::label("align-center"),
+                    Alignment::Center,
+                ),
+                (
+                    "Right",
+                    crate::keyboard::label("align-right"),
+                    Alignment::Right,
+                ),
+                (
+                    "Justify",
+                    crate::keyboard::label("align-justify"),
+                    Alignment::Justify,
+                ),
             ]
             .into_iter()
             .map(|(name, shortcut, alignment)| {
@@ -4395,7 +4519,7 @@ impl EditorWindow {
                 sep(),
                 item("Dark Document Background", "", C::ToggleDarkDocuments)
                     .checked(self.prefs.dark_documents),
-                item("Code Theme", "›", C::Menu(M::CodeTheme)),
+                item("Code Theme", "", C::Menu(M::CodeTheme)).submenu(),
             ]
             .into_iter()
             .chain(
@@ -4425,8 +4549,8 @@ impl EditorWindow {
                 sep(),
                 item("Show Line Numbers", "", C::ToggleLineNumbers)
                     .checked(self.prefs.show_line_numbers),
-                item("Split View", "›", C::Menu(M::SplitView)),
-                item("Interface Size", "›", C::Menu(M::InterfaceSize)),
+                item("Split View", "", C::Menu(M::SplitView)).submenu(),
+                item("Interface Size", "", C::Menu(M::InterfaceSize)).submenu(),
             ])
             .collect(),
             M::SplitView => {
@@ -4527,14 +4651,16 @@ impl EditorWindow {
                 item("New Window", crate::keyboard::label("new"), C::New),
                 item(
                     "Move Tab to Window",
-                    "›",
+                    "",
                     C::Menu(M::MoveTabs(TransferScope::CurrentTab)),
-                ),
+                )
+                .submenu(),
                 item(
                     "Move All Tabs to Window",
-                    "›",
+                    "",
                     C::Menu(M::MoveTabs(TransferScope::AllTabs)),
-                ),
+                )
+                .submenu(),
                 sep(),
                 item(&self.name(), "", C::GoToSelection),
             ],
@@ -4614,32 +4740,133 @@ impl EditorWindow {
             .chain([sep(), item("Other…", "", C::CustomFontSize)])
             .collect(),
             M::Weights => vec![
-                e("Regular", "", EditCommand::Bold).checked(!self.doc.formatting.bold),
-                e("Bold", "", EditCommand::Bold).checked(self.doc.formatting.bold),
-                e("Italic", "", EditCommand::Italic).checked(self.doc.formatting.italic),
+                e(
+                    "Regular",
+                    "",
+                    EditCommand::FontWeight {
+                        bold: false,
+                        italic: false,
+                    },
+                )
+                .checked(!self.doc.formatting.bold && !self.doc.formatting.italic),
+                e(
+                    "Bold",
+                    "",
+                    EditCommand::FontWeight {
+                        bold: true,
+                        italic: false,
+                    },
+                )
+                .checked(self.doc.formatting.bold && !self.doc.formatting.italic),
+                e(
+                    "Italic",
+                    "",
+                    EditCommand::FontWeight {
+                        bold: false,
+                        italic: true,
+                    },
+                )
+                .checked(!self.doc.formatting.bold && self.doc.formatting.italic),
+                e(
+                    "Bold Italic",
+                    "",
+                    EditCommand::FontWeight {
+                        bold: true,
+                        italic: true,
+                    },
+                )
+                .checked(self.doc.formatting.bold && self.doc.formatting.italic),
             ],
             M::Spacing => [1., 1.15, 1.5, 2., 2.5, 3.]
                 .into_iter()
                 .map(|spacing| {
                     e(
-                        &format!("{spacing:.1}"),
+                        &format_line_spacing(spacing),
                         "",
                         EditCommand::LineSpacing(spacing),
                     )
+                    .checked((self.doc.formatting.line_spacing - spacing).abs() < 0.01)
                 })
-                .chain([item("Custom…", "", C::CustomSpacing)])
+                .chain([sep(), item("Custom…", "", C::CustomSpacing)])
                 .collect(),
         };
         let mut entries = entries;
+        let editable = !self.doc.read_only && self.doc.markdown_source.is_none();
+        let rich = self.doc.rich;
         for entry in &mut entries {
-            if matches!(
-                entry.command,
-                Some(Command::Edit(EditCommand::FirstLineIndent(_)))
-            ) {
+            if let Some(command) = &entry.command
+                && (!is_command_enabled_for_mode(command, rich, editable))
+            {
                 entry.enabled = false;
             }
         }
         Ok(entries)
+    }
+}
+
+fn format_line_spacing(spacing: f32) -> String {
+    if (spacing * 100. - (spacing * 10.).round() * 10.).abs() < 0.05 {
+        format!("{spacing:.1}")
+    } else {
+        format!("{spacing:.2}")
+    }
+}
+
+fn is_command_enabled_for_mode(command: &Command, rich: bool, editable: bool) -> bool {
+    match command {
+        Command::Edit(EditCommand::FirstLineIndent(_)) => false,
+        Command::Edit(EditCommand::Copy | EditCommand::SelectAll | EditCommand::CopyStyle) => true,
+        Command::Edit(
+            EditCommand::Bold
+            | EditCommand::Italic
+            | EditCommand::FontWeight { .. }
+            | EditCommand::Underline
+            | EditCommand::Strikethrough
+            | EditCommand::Superscript
+            | EditCommand::Subscript
+            | EditCommand::Foreground(_)
+            | EditCommand::Background(_)
+            | EditCommand::Align(_)
+            | EditCommand::BlockStyle(_)
+            | EditCommand::LineSpacing(_)
+            | EditCommand::Indent(_)
+            | EditCommand::List(_)
+            | EditCommand::HorizontalRule
+            | EditCommand::PasteStyle,
+        ) => rich && editable,
+        Command::Edit(_) => editable,
+        Command::Table
+        | Command::Link
+        | Command::Image
+        | Command::Foreground
+        | Command::Background
+        | Command::CustomSpacing
+        | Command::PasteHtml => rich && editable,
+        Command::Menu(MenuKind::ParagraphStyles | MenuKind::Alignment | MenuKind::Lists) => {
+            rich && editable
+        }
+        Command::InsertColorCode | Command::Complete => editable,
+        _ => true,
+    }
+}
+
+fn move_file_path(source: &Path, destination: &Path) -> Result<()> {
+    match std::fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            // Fall back to copy-then-remove across volumes or mount points while keeping
+            // the original intact if copying fails.
+            if let Err(copy_error) = std::fs::copy(source, destination) {
+                let _ = std::fs::remove_file(destination);
+                return Err(rename_error)
+                    .context(format!("cross-volume copy also failed: {copy_error}"));
+            }
+            if let Err(remove_error) = std::fs::remove_file(source) {
+                let _ = std::fs::remove_file(destination);
+                return Err(remove_error.into());
+            }
+            Ok(())
+        }
     }
 }
 
@@ -5146,5 +5373,74 @@ mod window_tests {
         );
         assert!(window.tabs[1].as_ref().expect("existing buffer").dirty);
         assert_eq!(window.tabs.len(), 2);
+    }
+
+    #[test]
+    fn line_spacing_formatting_preserves_hundredths_without_truncating() {
+        assert_eq!(super::format_line_spacing(1.0), "1.0");
+        assert_eq!(super::format_line_spacing(1.15), "1.15");
+        assert_eq!(super::format_line_spacing(1.5), "1.5");
+        assert_eq!(super::format_line_spacing(2.0), "2.0");
+    }
+
+    #[test]
+    fn mode_enablement_disables_rich_and_mutating_commands_accurately() {
+        use crate::{
+            app::{Command, MenuKind, is_command_enabled_for_mode},
+            editor::EditCommand,
+        };
+        assert!(is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::Bold),
+            true,
+            true
+        ));
+        assert!(!is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::Bold),
+            false,
+            true
+        ));
+        assert!(!is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::FontWeight {
+                bold: true,
+                italic: true,
+            }),
+            false,
+            true
+        ));
+        assert!(!is_command_enabled_for_mode(&Command::Table, false, true));
+        assert!(!is_command_enabled_for_mode(
+            &Command::Menu(MenuKind::ParagraphStyles),
+            false,
+            true
+        ));
+        assert!(!is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::Paste),
+            true,
+            false
+        ));
+        assert!(is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::Copy),
+            false,
+            false
+        ));
+        assert!(is_command_enabled_for_mode(
+            &Command::Edit(EditCommand::SelectAll),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn move_file_path_moves_and_cleans_up_source() {
+        let dir = tempfile::tempdir().expect("isolated directory");
+        let src = dir.path().join("notes.txt");
+        let dst = dir.path().join("notes.rs");
+        std::fs::write(&src, "fn main() {}\n").expect("write source");
+        super::move_file_path(&src, &dst).expect("move file");
+        assert!(!src.exists());
+        assert_eq!(
+            std::fs::read_to_string(&dst).expect("read dst"),
+            "fn main() {}\n"
+        );
     }
 }

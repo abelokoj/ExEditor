@@ -338,9 +338,18 @@ fn build_surface(
     let tick = editor.clone();
     set_interval(Duration::from_millis(16), move || {
         tick.refresh_completion();
-        revision.set(tick.revision());
-        style_revision.set(tick.style_revision());
-        gutter_revision.set(tick.gutter_revision());
+        let rev = tick.revision();
+        if revision.get_untracked() != rev {
+            revision.set(rev);
+        }
+        let s_rev = tick.style_revision();
+        if style_revision.get_untracked() != s_rev {
+            style_revision.set(s_rev);
+        }
+        let g_rev = tick.gutter_revision();
+        if gutter_revision.get_untracked() != g_rev {
+            gutter_revision.set(g_rev);
+        }
     });
     let editable = editor.clone();
     let styled = editor.clone();
